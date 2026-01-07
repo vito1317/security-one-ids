@@ -39,7 +39,14 @@ class WafSyncService
             ]);
 
             if ($response->successful()) {
-                Log::info('Successfully registered with WAF', $response->json());
+                $data = $response->json();
+                Log::info('Successfully registered with WAF', $data);
+                
+                // Store the WAF-assigned token for future use
+                if (!empty($data['token'])) {
+                    cache()->put('waf_agent_token', $data['token'], now()->addDays(30));
+                }
+                
                 return true;
             }
 
@@ -184,8 +191,15 @@ class WafSyncService
      */
     public function uploadSignatures(): int
     {
-        if (empty($this->wafUrl) || empty($this->agentToken)) {
-            Log::warning('WAF_URL or AGENT_TOKEN not configured for upload');
+        if (empty($this->wafUrl)) {
+            Log::warning('WAF_URL not configured for upload');
+            return 0;
+        }
+
+        // Use the WAF-assigned token (from registration) if available
+        $token = cache()->get('waf_agent_token', $this->agentToken);
+        if (empty($token)) {
+            Log::warning('No agent token available for upload');
             return 0;
         }
 
@@ -199,7 +213,7 @@ class WafSyncService
 
         try {
             $response = Http::timeout(60)->post("{$this->wafUrl}/api/ids/agents/sync-rules", [
-                'token' => $this->agentToken,
+                'token' => $token,
                 'signatures' => $signatures->map(fn($sig) => [
                     'name' => $sig->name,
                     'pattern' => $sig->pattern,
