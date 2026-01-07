@@ -60,25 +60,40 @@ class WafSyncService
     public function heartbeat(): bool
     {
         if (empty($this->wafUrl) || empty($this->agentToken)) {
+            Log::warning('WAF_URL or AGENT_TOKEN not configured for heartbeat');
             return false;
         }
 
         try {
             $response = Http::timeout(10)->post("{$this->wafUrl}/api/ids/agents/heartbeat", [
                 'token' => $this->agentToken,
+                'name' => $this->agentName,
                 'system_info' => $this->getSystemInfo(),
             ]);
 
             if ($response->successful()) {
                 $data = $response->json();
-                // Could update local IDS/IPS settings based on response
                 Log::debug('Heartbeat sent successfully', $data);
                 return true;
             }
 
+            // If agent not found (404), try to register
+            if ($response->status() === 404) {
+                Log::info('Agent not found, attempting registration...');
+                return $this->register();
+            }
+
+            Log::warning('Heartbeat failed', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
             return false;
         } catch (\Exception $e) {
-            Log::error('Heartbeat failed: ' . $e->getMessage());
+            Log::error('Heartbeat exception: ' . $e->getMessage());
+            // On connection error, try registration
+            if (str_contains($e->getMessage(), 'Connection') || str_contains($e->getMessage(), 'cURL')) {
+                Log::info('Connection error, will try registration on next sync');
+            }
             return false;
         }
     }
