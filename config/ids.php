@@ -56,6 +56,10 @@ return [
         'email_to' => env('IDS_ALERT_EMAIL_TO', 'admin@example.com'),
         'webhook_enabled' => env('IDS_ALERT_WEBHOOK_ENABLED', false),
         'webhook_url' => env('IDS_ALERT_WEBHOOK_URL'),
+        'slack_enabled' => env('IDS_ALERT_SLACK_ENABLED', false),
+        'slack_webhook_url' => env('IDS_ALERT_SLACK_WEBHOOK_URL'),
+        'discord_enabled' => env('IDS_ALERT_DISCORD_ENABLED', false),
+        'discord_webhook_url' => env('IDS_ALERT_DISCORD_WEBHOOK_URL'),
         'rate_limit' => env('IDS_ALERT_RATE_LIMIT', 10), // alerts per minute per IP/category
     ],
 

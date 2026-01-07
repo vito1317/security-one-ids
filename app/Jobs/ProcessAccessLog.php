@@ -65,6 +65,13 @@ class ProcessAccessLog implements ShouldQueue
             Log::warning('Anomaly detected', $anomalyResult);
         }
 
+        // Phase 2.3: Behavior Analysis
+        $behaviorEngine = app(\App\Services\Detection\BehaviorEngine::class);
+        if ($behaviorResult = $behaviorEngine->analyze($this->logData)) {
+            $detections['behavior'] = $behaviorResult;
+            Log::warning('Malicious behavior detected', $behaviorResult);
+        }
+
         // If any threats detected, trigger alert (Phase 3)
         if (!empty($detections)) {
             $this->handleThreatDetection($detections);
@@ -104,6 +111,10 @@ class ProcessAccessLog implements ShouldQueue
             if (!$alertService->shouldRateLimit($ip, $category)) {
                 $alert = $alertService->createAlert($this->logData, $detections);
                 Log::info('Alert created and synced', ['alert_id' => $alert['source_ip']]);
+                
+                // Send notifications (Phase 3.3)
+                $notificationService = app(\App\Services\NotificationService::class);
+                $notificationService->sendAlertNotification($alert);
             } else {
                 Log::info('Alert rate-limited', ['ip' => $ip, 'category' => $category]);
             }
