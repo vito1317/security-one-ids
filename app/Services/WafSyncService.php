@@ -146,6 +146,40 @@ class WafSyncService
     }
 
     /**
+     * Sync rules from WAF to local IdsSignature database
+     */
+    public function syncRulesToDatabase(array $rules): int
+    {
+        $synced = 0;
+        
+        foreach ($rules as $rule) {
+            try {
+                \App\Models\IdsSignature::updateOrCreate(
+                    ['name' => $rule['name']],
+                    [
+                        'description' => $rule['description'] ?? null,
+                        'pattern' => $rule['pattern'] ?? '',
+                        'category' => $rule['category'] ?? 'general',
+                        'severity' => $rule['severity'] ?? 'medium',
+                        'match_uri' => true,
+                        'match_user_agent' => false,
+                        'match_referer' => false,
+                        'enabled' => $rule['enabled'] ?? true,
+                    ]
+                );
+                $synced++;
+            } catch (\Exception $e) {
+                Log::error('Failed to sync rule: ' . ($rule['name'] ?? 'unknown'), [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+        
+        Log::info("Synced {$synced} rules from WAF to local database");
+        return $synced;
+    }
+
+    /**
      * Get system information
      */
     protected function getSystemInfo(): array

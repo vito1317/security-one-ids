@@ -34,14 +34,21 @@ class SyncToWaf extends Command
             $this->warn('✗ Heartbeat failed');
         }
 
-        // Fetch latest rules
+        // Fetch latest rules and sync to database
         $this->info('Fetching rules from WAF...');
         $rules = $wafSync->fetchRules();
-        if ($rules && isset($rules['rules'])) {
+        if ($rules && isset($rules['rules']) && count($rules['rules']) > 0) {
             $count = count($rules['rules']);
-            $this->info("✓ Received {$count} rules");
-            // Could store rules locally here
+            $this->info("✓ Received {$count} rules from WAF");
+            
+            // Sync rules to local database
+            $synced = $wafSync->syncRulesToDatabase($rules['rules']);
+            $this->info("✓ Synced {$synced} rules to local database");
+            
+            // Also cache for quick access
             cache()->put('ids_rules', $rules['rules'], now()->addHour());
+        } else {
+            $this->warn('No rules received from WAF');
         }
 
         $this->info('Sync completed!');
