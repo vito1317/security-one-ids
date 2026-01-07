@@ -51,6 +51,15 @@ class SyncToWaf extends Command
             $this->warn('No rules received from WAF');
         }
 
+        // Upload local signatures to WAF Hub
+        $this->info('Uploading local signatures to WAF...');
+        $uploaded = $wafSync->uploadSignatures();
+        if ($uploaded > 0) {
+            $this->info("✓ Uploaded {$uploaded} signatures to WAF");
+        } else {
+            $this->warn('No signatures uploaded to WAF');
+        }
+
         $this->info('Sync completed!');
         return 0;
     }

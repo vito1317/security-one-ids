@@ -180,6 +180,53 @@ class WafSyncService
     }
 
     /**
+     * Upload local signatures to WAF Hub
+     */
+    public function uploadSignatures(): int
+    {
+        if (empty($this->wafUrl) || empty($this->agentToken)) {
+            Log::warning('WAF_URL or AGENT_TOKEN not configured for upload');
+            return 0;
+        }
+
+        // Get all local signatures
+        $signatures = \App\Models\IdsSignature::where('enabled', true)->get();
+        
+        if ($signatures->isEmpty()) {
+            Log::info('No signatures to upload');
+            return 0;
+        }
+
+        try {
+            $response = Http::timeout(60)->post("{$this->wafUrl}/api/ids/agents/sync-rules", [
+                'token' => $this->agentToken,
+                'signatures' => $signatures->map(fn($sig) => [
+                    'name' => $sig->name,
+                    'pattern' => $sig->pattern,
+                    'category' => $sig->category,
+                    'severity' => $sig->severity,
+                    'description' => $sig->description,
+                ])->toArray(),
+            ]);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                Log::info('Successfully uploaded signatures to WAF', $data);
+                return $data['synced'] ?? 0;
+            }
+
+            Log::error('Failed to upload signatures', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+            return 0;
+        } catch (\Exception $e) {
+            Log::error('Exception during signature upload: ' . $e->getMessage());
+            return 0;
+        }
+    }
+
+    /**
      * Get system information
      */
     protected function getSystemInfo(): array
