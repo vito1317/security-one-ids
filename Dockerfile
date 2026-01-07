@@ -10,10 +10,12 @@ RUN apk add --no-cache \
     zip \
     unzip \
     git \
-    shadow
+    shadow \
+    sqlite \
+    sqlite-dev
 
 # Install PHP extensions
-RUN docker-php-ext-install pdo pdo_mysql bcmath gd xml
+RUN docker-php-ext-install pdo pdo_mysql pdo_sqlite bcmath gd xml
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -21,18 +23,31 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 # Set working directory
 WORKDIR /var/www/html
 
+# Copy composer files first for better caching
+COPY composer.json composer.lock ./
+
+# Configure git safe directory and install dependencies
+RUN git config --global --add safe.directory /var/www/html \
+    && composer install --optimize-autoloader --no-dev --no-interaction --no-scripts
+
 # Copy application files
 COPY . /var/www/html
 
-# Install composer dependencies
-RUN composer install --optimize-autoloader --no-dev --no-interaction
+# Run composer dump-autoload
+RUN composer dump-autoload --optimize --no-dev
 
 # Create directories and set permissions
 RUN mkdir -p /var/www/html/storage/logs \
+    && mkdir -p /var/www/html/storage/framework/sessions \
+    && mkdir -p /var/www/html/storage/framework/views \
+    && mkdir -p /var/www/html/storage/framework/cache \
     && mkdir -p /var/www/html/bootstrap/cache \
+    && mkdir -p /var/www/html/database \
+    && touch /var/www/html/database/database.sqlite \
     && chown -R www-data:www-data /var/www/html \
     && chmod -R 775 /var/www/html/storage \
-    && chmod -R 775 /var/www/html/bootstrap/cache
+    && chmod -R 775 /var/www/html/bootstrap/cache \
+    && chmod -R 775 /var/www/html/database
 
 # Configure Nginx
 COPY docker/nginx.conf /etc/nginx/http.d/default.conf
@@ -42,6 +57,10 @@ COPY docker/supervisord.conf /etc/supervisor.d/supervisord.ini
 
 # Expose port
 EXPOSE 80
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost/ || exit 1
 
 # Start Supervisor
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
