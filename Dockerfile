@@ -43,6 +43,7 @@ RUN mkdir -p /var/www/html/storage/logs \
     && mkdir -p /var/www/html/storage/framework/cache \
     && mkdir -p /var/www/html/bootstrap/cache \
     && mkdir -p /var/www/html/database \
+    && mkdir -p /var/log/supervisor \
     && touch /var/www/html/database/database.sqlite \
     && chown -R www-data:www-data /var/www/html \
     && chmod -R 775 /var/www/html/storage \
