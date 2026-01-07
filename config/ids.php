@@ -39,21 +39,34 @@ return [
     ],
 
     /**
-     * Blocking Settings (placeholder for Phase 4)
+     * Blocking Settings
      */
     'blocking' => [
         'enabled' => env('IDS_BLOCKING_ENABLED', false),
         'mode' => env('IDS_BLOCKING_MODE', 'hybrid'), // 'waf', 'iptables', 'hybrid'
         'auto_unblock_after' => env('IDS_AUTO_UNBLOCK_AFTER', 3600), // seconds
+        'whitelist' => array_filter(explode(',', env('IDS_IP_WHITELIST', ''))),
     ],
 
     /**
-     * Alert Settings (placeholder for Phase 3)
+     * Alert Settings
      */
     'alerts' => [
         'email_enabled' => env('IDS_ALERT_EMAIL_ENABLED', false),
         'email_to' => env('IDS_ALERT_EMAIL_TO', 'admin@example.com'),
         'webhook_enabled' => env('IDS_ALERT_WEBHOOK_ENABLED', false),
         'webhook_url' => env('IDS_ALERT_WEBHOOK_URL'),
+        'rate_limit' => env('IDS_ALERT_RATE_LIMIT', 10), // alerts per minute per IP/category
+    ],
+
+    /**
+     * Anomaly Detection Thresholds
+     */
+    'anomaly' => [
+        'rate_threshold' => env('IDS_RATE_THRESHOLD', 100), // requests per minute
+        'max_request_size' => env('IDS_MAX_REQUEST_SIZE', 1048576), // 1MB
+        'max_url_length' => env('IDS_MAX_URL_LENGTH', 2048),
+        'business_hours_start' => env('IDS_BUSINESS_HOURS_START', 8),
+        'business_hours_end' => env('IDS_BUSINESS_HOURS_END', 22),
     ],
 ];

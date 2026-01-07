@@ -190,4 +190,141 @@ class WafSyncService
             return '0.0.0.0';
         }
     }
+
+    /**
+     * Sync alert to WAF Hub
+     *
+     * @param array $alertData
+     * @return \Illuminate\Http\Client\Response|null
+     */
+    public function syncAlert(array $alertData): ?\Illuminate\Http\Client\Response
+    {
+        if (!$this->isConfigured()) {
+            Log::warning('WAF sync not configured for alerts');
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(10)
+                ->withToken($this->agentToken)
+                ->post("{$this->wafUrl}/api/ids/alerts", [
+                    'agent_id' => $this->getAgentId(),
+                    'alert' => $alertData,
+                ]);
+
+            if ($response->successful()) {
+                Log::info('Alert synced to WAF Hub', [
+                    'ip' => $alertData['source_ip'] ?? 'unknown',
+                    'severity' => $alertData['severity'] ?? 'unknown',
+                ]);
+            } else {
+                Log::error('WAF Hub rejected alert', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+            }
+
+            return $response;
+        } catch (\Exception $e) {
+            Log::error('Failed to sync alert to WAF Hub', [
+                'error' => $e->getMessage(),
+                'ip' => $alertData['source_ip'] ?? 'unknown',
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Get agent ID from config or cache
+     */
+    private function getAgentId(): ?int
+    {
+        // Try to get from environment first
+        if ($agentId = env('IDS_AGENT_ID')) {
+            return (int) $agentId;
+        }
+
+        // Or from cache (set during registration)
+        return cache('ids_agent_id');
+    }
+
+    /**
+     * Check if WAF sync is properly configured
+     */
+    private function isConfigured(): bool
+    {
+        return !empty($this->agentToken) && !empty($this->wafUrl);
+    }
+
+    /**
+     * Sync blocked IP to WAF Hub
+     *
+     * @param array $blockData
+     * @return \Illuminate\Http\Client\Response|null
+     */
+    public function syncBlockedIP(array $blockData): ?\Illuminate\Http\Client\Response
+    {
+        if (!$this->isConfigured()) {
+            Log::warning('WAF sync not configured for blocking');
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(10)
+                ->withToken($this->agentToken)
+                ->post("{$this->wafUrl}/api/ids/block-ip", [
+                    'agent_id' => $this->getAgentId(),
+                    'block' => $blockData,
+                ]);
+
+            if ($response->successful()) {
+                Log::info('Blocked IP synced to WAF Hub', [
+                    'ip' => $blockData['ip'] ?? 'unknown',
+                ]);
+            }
+
+            return $response;
+        } catch (\Exception $e) {
+            Log::error('Failed to sync blocked IP', [
+                'error' => $e->getMessage(),
+                'ip' => $blockData['ip'] ?? 'unknown',
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Sync IP unblock to WAF Hub
+     *
+     * @param string $ip
+     * @return \Illuminate\Http\Client\Response|null
+     */
+    public function syncUnblockIP(string $ip): ?\Illuminate\Http\Client\Response
+    {
+        if (!$this->isConfigured()) {
+            Log::warning('WAF sync not configured for unblocking');
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(10)
+                ->withToken($this->agentToken)
+                ->post("{$this->wafUrl}/api/ids/unblock-ip", [
+                    'agent_id' => $this->getAgentId(),
+                    'ip' => $ip,
+                ]);
+
+            if ($response->successful()) {
+                Log::info('Unblocked IP synced to WAF Hub', ['ip' => $ip]);
+            }
+
+            return $response;
+        } catch (\Exception $e) {
+            Log::error('Failed to sync IP unblock', [
+                'error' => $e->getMessage(),
+                'ip' => $ip,
+            ]);
+            return null;
+        }
+    }
 }
