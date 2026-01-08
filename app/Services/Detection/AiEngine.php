@@ -21,11 +21,20 @@ class AiEngine
 
     public function __construct()
     {
-        $this->enabled = filter_var(env('AI_DETECTION_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
+        // First load from environment
         $this->ollamaUrl = env('OLLAMA_URL', 'https://ollama.futron-life.com');
         $this->ollamaModel = env('OLLAMA_MODEL', 'sentinel-security');
         $this->sensitivity = env('AI_SENSITIVITY', 'medium');
-        $this->timeout = (int) env('AI_TIMEOUT', 5);
+        $this->timeout = (int) env('AI_TIMEOUT', 15);
+        
+        // Override with synced settings from WAF Hub if available
+        $settingsPath = storage_path('app/ids_settings.json');
+        if (file_exists($settingsPath)) {
+            $settings = json_decode(file_get_contents($settingsPath), true) ?: [];
+            $this->enabled = filter_var($settings['ai_detection_enabled'] ?? env('AI_DETECTION_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
+        } else {
+            $this->enabled = filter_var(env('AI_DETECTION_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
+        }
     }
 
     /**
