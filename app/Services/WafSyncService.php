@@ -47,6 +47,11 @@ class WafSyncService
                     cache()->put('waf_agent_token', $data['token'], now()->addDays(30));
                 }
                 
+                // Store the agent ID for alert syncing
+                if (!empty($data['agent_id'])) {
+                    cache()->put('ids_agent_id', $data['agent_id'], now()->addDays(30));
+                }
+                
                 return true;
             }
 
