@@ -31,6 +31,16 @@ class AlertService
         $severity = $this->determineSeverity($detections);
         $category = $this->determineCategory($detections);
         
+        // Format detections before creating alert
+        $formattedDetections = $this->formatDetections($detections);
+        
+        // Debug log to trace what we're sending  
+        Log::debug('Creating alert with detections', [
+            'source_ip' => $logData['ip'] ?? 'unknown',
+            'raw_detections' => array_keys($detections),
+            'formatted_detections' => substr($formattedDetections, 0, 200),
+        ]);
+        
         $alert = [
             'source_ip' => $logData['ip'] ?? 'unknown',
             'uri' => $logData['uri']['full'] ?? '',
@@ -39,7 +49,7 @@ class AlertService
             'severity' => $severity,
             'category' => $category,
             'timestamp' => $logData['timestamp'] ?? now()->toDateTimeString(),
-            'detections' => $this->formatDetections($detections),
+            'detections' => $formattedDetections,
             'raw_log' => $this->formatRawLog($logData),
         ];
 
