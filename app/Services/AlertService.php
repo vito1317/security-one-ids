@@ -154,6 +154,18 @@ class AlertService
             );
         }
 
+        // AI Detection results
+        if (isset($detections['ai'])) {
+            $ai = $detections['ai'];
+            $formatted[] = sprintf(
+                "[AI] %s - %s (Score: %d, Severity: %s)",
+                strtoupper($ai['threat_type'] ?? 'ai_detected'),
+                $ai['reason'] ?? 'AI detected potential threat',
+                $ai['score'] ?? 0,
+                $ai['severity'] ?? 'medium'
+            );
+        }
+
         // If no formatted content, provide a default
         if (empty($formatted)) {
             $formatted[] = "[DETECTION] Security event detected";

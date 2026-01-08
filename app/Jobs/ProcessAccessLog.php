@@ -74,6 +74,15 @@ class ProcessAccessLog implements ShouldQueue
             Log::warning('Malicious behavior detected', $behaviorResult);
         }
 
+        // Phase 2.4: AI Detection (if enabled)
+        $aiEngine = app(\App\Services\Detection\AiEngine::class);
+        if ($aiEngine->isEnabled()) {
+            if ($aiResult = $aiEngine->analyze($this->logData)) {
+                $detections['ai'] = $aiResult;
+                Log::warning('AI detected threat', $aiResult);
+            }
+        }
+
         // If any threats detected, trigger alert (Phase 3)
         if (!empty($detections)) {
             $this->handleThreatDetection($detections);
