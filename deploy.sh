@@ -219,20 +219,15 @@ EOF
 create_docker_compose() {
     print_info "正在建立 Docker Compose 設定..."
     
-    # 如果已存在 docker-compose.yml 且埠口是預設的，就不覆蓋
-    if [[ -f "$INSTALL_DIR/docker-compose.yml" && "$AGENT_PORT" == "8003" ]]; then
-        print_step "使用現有的 docker-compose.yml"
-        return
-    fi
-    
-    # Build volume mounts for log directories
+    # Build volume mounts for log directories (always regenerate to include all paths)
     VOLUME_MOUNTS="      - ./database:/var/www/html/database
       - ./storage:/var/www/html/storage
       # Host log directories (read-only)
       - /var/log/nginx:/var/log/host-nginx:ro
-      - /var/log/apache2:/var/log/host-apache2:ro"
+      - /var/log/apache2:/var/log/host-apache2:ro
+      - /var/log/httpd:/var/log/host-httpd:ro"
     
-    # Add custom log paths
+    # Add custom log paths from user input
     LOG_INDEX=1
     for path in "${LOG_PATHS[@]}"; do
         VOLUME_MOUNTS="$VOLUME_MOUNTS
