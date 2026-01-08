@@ -104,28 +104,49 @@ class AlertService
         if (isset($detections['signature'])) {
             $sig = $detections['signature'];
             $formatted[] = sprintf(
-                "[SIGNATURE] %s - %s (Severity: %s)",
+                "[SIGNATURE] %s - %s (Severity: %s, Category: %s)",
                 $sig['signature_name'] ?? 'Unknown',
-                $sig['description'] ?? '',
-                $sig['severity'] ?? 'unknown'
+                $sig['description'] ?? 'Pattern match detected',
+                $sig['severity'] ?? 'unknown',
+                $sig['category'] ?? 'unknown'
             );
+            
+            if (!empty($sig['matched_value'])) {
+                $formatted[] = "  Matched: " . substr($sig['matched_value'], 0, 200);
+            }
         }
 
         if (isset($detections['anomaly'])) {
             $anom = $detections['anomaly'];
-            if (isset($anom['anomalies'])) {
+            if (isset($anom['anomalies']) && is_array($anom['anomalies'])) {
                 foreach ($anom['anomalies'] as $anomaly) {
                     $formatted[] = sprintf(
-                        "[ANOMALY] %s (Severity: %s)",
-                        $anomaly['type'] ?? 'Unknown',
-                        $anomaly['severity'] ?? 'unknown'
+                        "[ANOMALY] %s - %s (Severity: %s)",
+                        $anomaly['type'] ?? 'Unknown type',
+                        $anomaly['details'] ?? 'Anomalous behavior detected',
+                        $anomaly['severity'] ?? 'medium'
                     );
                 }
+            } else {
+                $formatted[] = "[ANOMALY] Anomalous request pattern detected (Severity: " . ($anom['severity'] ?? 'medium') . ")";
             }
         }
 
         if (isset($detections['behavior'])) {
-            $formatted[] = "[BEHAVIOR] " . ($detections['behavior']['type'] ?? 'Unknown');
+            $behav = $detections['behavior'];
+            $behavType = $behav['type'] ?? 'suspicious_activity';
+            $behavDesc = $behav['description'] ?? 'Suspicious request behavior detected';
+            $formatted[] = sprintf(
+                "[BEHAVIOR] %s - %s (Severity: %s)",
+                ucfirst(str_replace('_', ' ', $behavType)),
+                $behavDesc,
+                $behav['severity'] ?? 'medium'
+            );
+        }
+
+        // If no formatted content, provide a default
+        if (empty($formatted)) {
+            $formatted[] = "[DETECTION] Security event detected";
         }
 
         return implode("\n", $formatted);
