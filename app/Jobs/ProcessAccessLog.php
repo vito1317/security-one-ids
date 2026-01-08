@@ -20,11 +20,6 @@ class ProcessAccessLog implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     /**
-     * The queue to use for this job
-     */
-    public string $queue = 'ids-processing';
-
-    /**
      * The number of times the job may be attempted.
      */
     public int $tries = 3;
@@ -41,7 +36,9 @@ class ProcessAccessLog implements ShouldQueue
      */
     public function __construct(
         public array $logData
-    ) {}
+    ) {
+        $this->onQueue('ids-processing');
+    }
 
     /**
      * Execute the job.
