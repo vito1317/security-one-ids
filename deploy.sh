@@ -248,6 +248,20 @@ start_containers() {
     print_info "正在執行資料庫遷移..."
     docker compose exec -T app php artisan migrate --force || true
     print_step "資料庫已就緒"
+    
+    # 種子預設簽章
+    print_info "正在安裝預設 IDS 簽章..."
+    docker compose exec -T app php artisan ids:seed-signatures || true
+    print_step "預設簽章已安裝"
+    
+    # 與 WAF Hub 進行初始同步
+    print_info "正在與 WAF Hub 同步..."
+    docker compose exec -T app php artisan waf:sync --register
+    if [ $? -eq 0 ]; then
+        print_step "WAF 同步完成"
+    else
+        print_warning "WAF 同步失敗，請稍後手動執行: docker compose exec app php artisan waf:sync --register"
+    fi
 }
 
 # 驗證安裝
@@ -285,9 +299,13 @@ show_completion() {
     echo ""
     echo -e "  ${YELLOW}常用指令:${NC}"
     echo "    cd $INSTALL_DIR"
-    echo "    docker compose logs -f    # 查看日誌"
-    echo "    docker compose restart    # 重啟服務"
-    echo "    docker compose down       # 停止服務"
+    echo "    docker compose logs -f          # 查看日誌"
+    echo "    docker compose restart          # 重啟服務"
+    echo "    docker compose down             # 停止服務"
+    echo ""
+    echo -e "  ${YELLOW}WAF 同步指令:${NC}"
+    echo "    docker compose exec app php artisan waf:sync          # 手動同步"
+    echo "    docker compose exec app php artisan waf:sync --register  # 重新註冊"
     echo ""
     echo -e "  ${CYAN}下一步:${NC}"
     echo "    1. 前往 WAF 管理介面確認 Agent 已連線"
