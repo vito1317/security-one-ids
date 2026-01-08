@@ -64,34 +64,63 @@ check_requirements() {
 
 # 取得使用者輸入
 get_config() {
+    INSTALL_DIR="${INSTALL_DIR:-/opt/security-one-ids}"
+    
+    # 嘗試讀取現有設定
+    EXISTING_WAF_URL=""
+    EXISTING_AGENT_TOKEN=""
+    EXISTING_AGENT_NAME=""
+    if [[ -f "$INSTALL_DIR/.env" ]]; then
+        print_info "偵測到現有設定，留空將使用上次的值"
+        EXISTING_WAF_URL=$(grep "^WAF_URL=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2- || echo "")
+        EXISTING_AGENT_TOKEN=$(grep "^AGENT_TOKEN=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2- || echo "")
+        EXISTING_AGENT_NAME=$(grep "^AGENT_NAME=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2- || echo "")
+    fi
+    
     echo ""
     print_info "請提供以下資訊來設定 Agent："
     echo ""
     
     # WAF URL
-    read -p "請輸入 WAF 管理端 URL (例如: https://waf.example.com): " WAF_URL
-    if [[ -z "$WAF_URL" ]]; then
-        print_error "WAF URL 不能為空"
-        exit 1
+    if [[ -n "$EXISTING_WAF_URL" ]]; then
+        read -p "請輸入 WAF 管理端 URL [預設: $EXISTING_WAF_URL]: " WAF_URL
+        WAF_URL=${WAF_URL:-$EXISTING_WAF_URL}
+    else
+        read -p "請輸入 WAF 管理端 URL (例如: https://waf.example.com): " WAF_URL
+        if [[ -z "$WAF_URL" ]]; then
+            print_error "WAF URL 不能為空"
+            exit 1
+        fi
     fi
     
     # Agent Token
-    read -p "請輸入從 WAF 取得的 Agent Token: " AGENT_TOKEN
-    if [[ -z "$AGENT_TOKEN" ]]; then
-        print_error "Agent Token 不能為空"
-        exit 1
+    if [[ -n "$EXISTING_AGENT_TOKEN" ]]; then
+        read -p "請輸入 Agent Token [留空使用上次設定]: " AGENT_TOKEN
+        AGENT_TOKEN=${AGENT_TOKEN:-$EXISTING_AGENT_TOKEN}
+    else
+        read -p "請輸入從 WAF 取得的 Agent Token: " AGENT_TOKEN
+        if [[ -z "$AGENT_TOKEN" ]]; then
+            print_error "Agent Token 不能為空"
+            exit 1
+        fi
     fi
     
     # Agent Name
-    read -p "請輸入此 Agent 的名稱 (例如: Web-Server-01): " AGENT_NAME
-    if [[ -z "$AGENT_NAME" ]]; then
-        AGENT_NAME="ids-agent-$(hostname)"
-        print_warning "使用預設名稱: $AGENT_NAME"
+    if [[ -n "$EXISTING_AGENT_NAME" ]]; then
+        read -p "請輸入 Agent 名稱 [預設: $EXISTING_AGENT_NAME]: " AGENT_NAME
+        AGENT_NAME=${AGENT_NAME:-$EXISTING_AGENT_NAME}
+    else
+        read -p "請輸入此 Agent 的名稱 (例如: Web-Server-01): " AGENT_NAME
+        if [[ -z "$AGENT_NAME" ]]; then
+            AGENT_NAME="ids-agent-$(hostname)"
+            print_warning "使用預設名稱: $AGENT_NAME"
+        fi
     fi
     
     # Port
     read -p "請輸入 Agent 監聽埠口 [預設: 8003]: " AGENT_PORT
     AGENT_PORT=${AGENT_PORT:-8003}
+
     
     # Log Paths
     echo ""
