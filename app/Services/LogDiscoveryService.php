@@ -31,6 +31,12 @@ class LogDiscoveryService
         '/var/log/host-httpd/access_log',
         '/var/log/host-httpd/*/access_log',
         
+        // Custom mounted log directories (from deploy.sh)
+        '/var/log/custom-logs-*/access.log',
+        '/var/log/custom-logs-*/*.log',
+        '/var/log/custom-logs-*/access_log',
+        '/var/log/custom-logs-*/*-access.log',
+        
         // Standard Nginx paths
         '/usr/local/nginx/logs/access.log',
         

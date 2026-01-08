@@ -93,12 +93,37 @@ get_config() {
     read -p "請輸入 Agent 監聽埠口 [預設: 8003]: " AGENT_PORT
     AGENT_PORT=${AGENT_PORT:-8003}
     
+    # Log Paths
+    echo ""
+    print_info "日誌監控設定 (可監控多個目錄)"
+    echo "  預設已監控: /var/log/nginx, /var/log/apache2"
+    echo ""
+    LOG_PATHS=()
+    while true; do
+        read -p "請輸入額外的日誌目錄路徑 (留空跳過): " LOG_PATH
+        if [[ -z "$LOG_PATH" ]]; then
+            break
+        fi
+        if [[ -d "$LOG_PATH" ]]; then
+            LOG_PATHS+=("$LOG_PATH")
+            print_step "已添加: $LOG_PATH"
+        else
+            print_warning "目錄不存在: $LOG_PATH"
+        fi
+    done
+    
     echo ""
     print_info "設定摘要:"
     echo "  WAF URL:     $WAF_URL"
     echo "  Agent Token: ${AGENT_TOKEN:0:20}..."
     echo "  Agent Name:  $AGENT_NAME"
     echo "  Port:        $AGENT_PORT"
+    if [[ ${#LOG_PATHS[@]} -gt 0 ]]; then
+        echo "  額外日誌目錄:"
+        for path in "${LOG_PATHS[@]}"; do
+            echo "    - $path"
+        done
+    fi
     echo ""
     
     read -p "確認以上設定正確? [Y/n]: " CONFIRM
@@ -171,9 +196,22 @@ create_docker_compose() {
         return
     fi
     
+    # Build volume mounts for log directories
+    VOLUME_MOUNTS="      - ./database:/var/www/html/database
+      - ./storage:/var/www/html/storage
+      # Host log directories (read-only)
+      - /var/log/nginx:/var/log/host-nginx:ro
+      - /var/log/apache2:/var/log/host-apache2:ro"
+    
+    # Add custom log paths
+    LOG_INDEX=1
+    for path in "${LOG_PATHS[@]}"; do
+        VOLUME_MOUNTS="$VOLUME_MOUNTS
+      - $path:/var/log/custom-logs-$LOG_INDEX:ro"
+        LOG_INDEX=$((LOG_INDEX + 1))
+    done
+    
     cat > "$INSTALL_DIR/docker-compose.yml" << EOF
-version: '3.8'
-
 services:
   app:
     build:
@@ -189,8 +227,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./database:/var/www/html/database
-      - ./storage:/var/www/html/storage
+$VOLUME_MOUNTS
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
