@@ -14,8 +14,8 @@ class LogCollectorService
 {
     /**
      * Nginx log format pattern
-     * Default: combined format
-     * Example: 192.168.1.1 - - [07/Jan/2026:10:00:00 +0000] "GET /api/users HTTP/1.1" 200 1234 "https://example.com" "Mozilla/5.0..."
+     * Supports both combined format and extended format with X-Forwarded-For
+     * Example: 192.168.1.1 - - [07/Jan/2026:10:00:00 +0000] "GET /api HTTP/1.1" 200 1234 "https://example.com" "Mozilla/5.0" "-"
      */
     private const LOG_PATTERN = '/^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) ([^\s]+) ([^"]+)" (\d+) (\d+) "([^"]*)" "([^"]*)"/';
 

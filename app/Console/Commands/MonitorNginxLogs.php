@@ -57,6 +57,8 @@ class MonitorNginxLogs extends Command
             return;
         }
 
+        // Clear stat cache to get fresh file size
+        clearstatcache(true, $logPath);
         $currentSize = filesize($logPath);
         
         // File was rotated

@@ -19,6 +19,10 @@ services:
     volumes:
       - ./database:/var/www/html/database
       - ./storage:/var/www/html/storage
+      # Mount host log directories for monitoring (read-only)
+      - /var/log/nginx:/var/log/host-nginx:ro
+      - /var/log/apache2:/var/log/host-apache2:ro
+      - /var/log/httpd:/var/log/host-httpd:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
