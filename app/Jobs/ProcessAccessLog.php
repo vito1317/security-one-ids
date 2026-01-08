@@ -45,6 +45,15 @@ class ProcessAccessLog implements ShouldQueue
      */
     public function handle(): void
     {
+        // Skip whitelisted paths and IPs
+        if ($this->isWhitelisted()) {
+            Log::debug('Skipping whitelisted request', [
+                'ip' => $this->logData['ip'] ?? 'unknown',
+                'uri' => $this->logData['uri']['path'] ?? 'unknown',
+            ]);
+            return;
+        }
+
         Log::info('Processing access log', [
             'ip' => $this->logData['ip'],
             'uri' => $this->logData['uri']['path'] ?? 'unknown',
@@ -193,5 +202,42 @@ class ProcessAccessLog implements ShouldQueue
             'log_data' => $this->logData,
             'error' => $exception->getMessage(),
         ]);
+    }
+
+    /**
+     * Check if request should be whitelisted (skip detection)
+     */
+    private function isWhitelisted(): bool
+    {
+        $ip = $this->logData['ip'] ?? '';
+        $uri = $this->logData['uri']['path'] ?? '';
+
+        // Whitelist localhost/internal IPs
+        $whitelistedIps = [
+            '127.0.0.1',
+            '::1',
+            'localhost',
+        ];
+
+        if (in_array($ip, $whitelistedIps)) {
+            return true;
+        }
+
+        // Whitelist health check and common system paths
+        $whitelistedPaths = [
+            '/health',
+            '/ping',
+            '/favicon.ico',
+            '/robots.txt',
+            '/sitemap.xml',
+        ];
+
+        foreach ($whitelistedPaths as $path) {
+            if ($uri === $path || str_starts_with($uri, $path)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
