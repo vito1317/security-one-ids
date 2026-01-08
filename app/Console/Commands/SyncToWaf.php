@@ -20,6 +20,11 @@ class SyncToWaf extends Command
             if ($wafSync->register()) {
                 cache()->put('waf_registered', true, now()->addDays(30));
                 $this->info('✓ Successfully registered with WAF');
+                
+                // Upload signatures immediately after registration
+                $this->info('Uploading signatures after registration...');
+                $uploaded = $wafSync->uploadSignatures();
+                $this->info("✓ Uploaded {$uploaded} signatures to WAF");
             } else {
                 $this->error('✗ Failed to register with WAF');
                 return 1;
