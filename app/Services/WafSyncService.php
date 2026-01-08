@@ -267,23 +267,48 @@ class WafSyncService
     }
 
     /**
-     * Get public IP address
+     * Get public IP address (real external IP, not Docker internal)
      */
     protected function getPublicIp(): ?string
     {
-        // Try to get local IP first
+        // Check cache first
+        $cachedIp = cache()->get('agent_public_ip');
+        if ($cachedIp) {
+            return $cachedIp;
+        }
+
+        // Try multiple external IP services
+        $services = [
+            'https://api.ipify.org',
+            'https://ifconfig.me/ip',
+            'https://icanhazip.com',
+            'https://ipinfo.io/ip',
+        ];
+
+        foreach ($services as $service) {
+            try {
+                $response = Http::timeout(5)->get($service);
+                if ($response->successful()) {
+                    $ip = trim($response->body());
+                    // Validate IP format
+                    if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                        // Cache for 1 hour
+                        cache()->put('agent_public_ip', $ip, now()->addHour());
+                        return $ip;
+                    }
+                }
+            } catch (\Exception $e) {
+                continue;
+            }
+        }
+
+        // Fallback to local IP if all external services fail
         $ip = gethostbyname(gethostname());
         if ($ip && $ip !== gethostname()) {
             return $ip;
         }
 
-        // Fallback to external service
-        try {
-            $response = Http::timeout(5)->get('https://api.ipify.org');
-            return $response->body();
-        } catch (\Exception $e) {
-            return '0.0.0.0';
-        }
+        return '0.0.0.0';
     }
 
     /**
