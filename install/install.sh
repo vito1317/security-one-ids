@@ -156,6 +156,13 @@ EOF
 
 echo -e "${GREEN}✅ Configuration saved${NC}"
 
+# Create SQLite database and run migrations
+echo -e "\n${CYAN}🗄️  Setting up database...${NC}"
+touch "$INSTALL_DIR/database/database.sqlite"
+cd "$INSTALL_DIR"
+php artisan migrate --force 2>/dev/null || echo -e "${YELLOW}⚠️  Migration skipped (may already exist)${NC}"
+php artisan package:discover --ansi 2>/dev/null || true
+
 # Set permissions (macOS uses 'wheel' group, Linux uses 'root')
 if [ "$OS" = "macos" ]; then
     chown -R root:wheel "$INSTALL_DIR"
@@ -164,6 +171,7 @@ else
 fi
 chmod -R 755 "$INSTALL_DIR"
 chmod 600 "$INSTALL_DIR/.env"
+chmod 666 "$INSTALL_DIR/database/database.sqlite"
 
 # Create systemd service (Linux) or launchd plist (macOS)
 echo -e "\n${CYAN}🔧 Creating system service...${NC}"

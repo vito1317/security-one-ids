@@ -130,6 +130,17 @@ LOG_LEVEL=info
 $EnvContent | Out-File -FilePath "$InstallDir\.env" -Encoding UTF8
 Write-Host "✅ Configuration saved" -ForegroundColor Green
 
+# Create SQLite database and run migrations
+Write-Host "`n🗄️  Setting up database..." -ForegroundColor Cyan
+$DbPath = "$InstallDir\database\database.sqlite"
+if (-not (Test-Path $DbPath)) {
+    New-Item -ItemType File -Path $DbPath -Force | Out-Null
+}
+Set-Location $InstallDir
+& php artisan migrate --force 2>$null
+& php artisan package:discover --ansi 2>$null
+Write-Host "✅ Database ready" -ForegroundColor Green
+
 # Create Windows Service
 Write-Host "`n🔧 Creating Windows Service..." -ForegroundColor Cyan
 
