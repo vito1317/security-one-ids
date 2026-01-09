@@ -90,11 +90,23 @@ class DesktopLogCollector
     {
         $logs = [];
         
+        // macOS uses unified logging - use the log command
+        if ($this->platform === 'macos') {
+            Log::debug('Collecting macOS logs via unified logging');
+            return $this->collectMacOsLogs(60);
+        }
+        
         foreach ($this->logPaths['auth'] ?? [] as $path) {
             if ($this->platform === 'windows') {
-                $logs = array_merge($logs, $this->collectWindowsEventLog($path, $lines));
+                Log::debug("Collecting Windows Event Log: {$path}");
+                $windowsLogs = $this->collectWindowsEventLog($path, $lines);
+                Log::debug("Windows Event Log returned " . count($windowsLogs) . " entries");
+                $logs = array_merge($logs, $windowsLogs);
             } elseif (file_exists($path) && is_readable($path)) {
+                Log::debug("Reading log file: {$path}");
                 $logs = array_merge($logs, $this->tailFile($path, $lines));
+            } else {
+                Log::debug("Log file not accessible: {$path}");
             }
         }
         
