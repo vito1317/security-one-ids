@@ -8,15 +8,29 @@ LOG_DIR="/var/log/security-one-ids"
 # Ensure log directory exists
 mkdir -p "$LOG_DIR"
 
+# Find PHP binary (check common locations)
+PHP_BIN=""
+for path in /opt/homebrew/bin/php /usr/local/bin/php /usr/bin/php; do
+    if [ -x "$path" ]; then
+        PHP_BIN="$path"
+        break
+    fi
+done
+
+if [ -z "$PHP_BIN" ]; then
+    echo "$(date): ERROR - PHP not found!" >> "$LOG_DIR/wrapper.log"
+    exit 1
+fi
+
 cd "$INSTALL_DIR" || exit 1
 
-echo "$(date): Security One IDS wrapper started" >> "$LOG_DIR/wrapper.log"
+echo "$(date): Security One IDS wrapper started (PHP: $PHP_BIN)" >> "$LOG_DIR/wrapper.log"
 
 while true; do
     echo "$(date): Running security scan..." >> "$LOG_DIR/wrapper.log"
     
-    # Run the scan with timeout to prevent hanging
-    /usr/bin/php "$INSTALL_DIR/artisan" desktop:scan --full 2>&1 | head -50 >> "$LOG_DIR/output.log"
+    # Run the scan
+    "$PHP_BIN" "$INSTALL_DIR/artisan" desktop:scan --full 2>&1 | tail -20 >> "$LOG_DIR/output.log"
     
     exit_code=$?
     echo "$(date): Scan completed with exit code $exit_code" >> "$LOG_DIR/wrapper.log"
