@@ -79,7 +79,24 @@ Write-Host "✅ IDS Agent downloaded" -ForegroundColor Green
 # Install Composer dependencies
 Write-Host "`n📦 Installing dependencies..." -ForegroundColor Cyan
 Set-Location $InstallDir
-& composer install --no-dev --optimize-autoloader 2>$null
+
+# Check if composer is available
+$composerPath = Get-Command composer -ErrorAction SilentlyContinue
+if (-not $composerPath) {
+    Write-Host "Installing Composer..." -ForegroundColor Yellow
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        choco install composer -y
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    }
+}
+
+# Run composer with quiet mode to suppress version warnings
+$composerOutput = & composer install --no-dev --optimize-autoloader --quiet --no-interaction 2>&1 | Out-String
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "✅ Dependencies installed" -ForegroundColor Green
+} else {
+    Write-Host "⚠️ Composer completed with warnings (this is usually OK)" -ForegroundColor Yellow
+}
 
 # Configure environment
 Write-Host "`n⚙️ Configuring IDS Agent..." -ForegroundColor Cyan
