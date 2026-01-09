@@ -113,10 +113,16 @@ rm -rf security-one-ids-main security-one-ids.zip
 
 echo -e "${GREEN}✅ IDS Agent downloaded${NC}"
 
-# Install Composer dependencies
+# Install Composer dependencies (skip scripts to avoid .env loading issues)
 echo -e "\n${CYAN}📦 Installing dependencies...${NC}"
 cd "$INSTALL_DIR"
-composer install --no-dev --optimize-autoloader --no-interaction 2>/dev/null || composer install --no-dev --no-interaction
+
+# Remove any existing .env to prevent parsing errors during composer install
+rm -f "$INSTALL_DIR/.env"
+
+# Use --no-scripts to prevent artisan package:discover from running before .env is created
+export COMPOSER_ALLOW_SUPERUSER=1
+composer install --no-dev --optimize-autoloader --no-interaction --no-scripts 2>/dev/null || composer install --no-dev --no-interaction --no-scripts
 
 # Configure environment
 echo -e "\n${CYAN}⚙️  Configuring IDS Agent...${NC}"

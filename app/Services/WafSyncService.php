@@ -23,8 +23,20 @@ class WafSyncService
      */
     public function register(): bool
     {
+        // Debug logging
+        Log::debug('WafSync register() called', [
+            'wafUrl' => $this->wafUrl,
+            'agentToken' => substr($this->agentToken, 0, 10) . '...',
+            'agentName' => $this->agentName,
+        ]);
+
         if (empty($this->wafUrl) || empty($this->agentToken)) {
-            Log::warning('WAF_URL or AGENT_TOKEN not configured');
+            Log::warning('WAF_URL or AGENT_TOKEN not configured', [
+                'wafUrl_empty' => empty($this->wafUrl),
+                'agentToken_empty' => empty($this->agentToken),
+                'env_WAF_URL' => env('WAF_URL'),
+                'config_ids.waf_url' => config('ids.waf_url'),
+            ]);
             return false;
         }
 
