@@ -446,12 +446,16 @@ class DesktopLogCollector
             // macOS authentication/authorization events use specific subsystems
             // Try to find actual login events with targeted predicates
             $predicates = [
+                // SSH daemon - captures SSH login attempts
+                'process == "sshd"',
                 // opendirectoryd handles user authentication
                 'subsystem == "com.apple.opendirectoryd"',
                 // Authorization and security events  
                 'subsystem == "com.apple.authd" OR subsystem == "com.apple.Authorization"',
+                // PAM authentication module
+                'eventMessage CONTAINS "pam_" OR process == "pam"',
                 // Login/authentication process events with specific messages
-                'eventMessage CONTAINS "authentication" OR eventMessage CONTAINS "password" OR eventMessage CONTAINS "login"',
+                'eventMessage CONTAINS "authentication" OR eventMessage CONTAINS "password" OR eventMessage CONTAINS "login" OR eventMessage CONTAINS "Failed"',
                 // su and sudo processes (may need root to see these)
                 'process == "su" OR process == "sudo"',
             ];
@@ -600,6 +604,19 @@ class DesktopLogCollector
         // Security authorization events
         elseif (preg_match('/Authorization\s+(success|denied|allowed)/i', $message, $m)) {
             $entry['type'] = ($m[1] === 'success' || $m[1] === 'allowed') ? 'successful_login' : 'failed_login';
+        }
+        // SSH specific patterns
+        elseif (preg_match('/sshd.*Invalid user|sshd.*Failed password|Connection closed by authenticating user/i', $message)) {
+            $entry['type'] = 'failed_login';
+            $entry['service'] = 'ssh';
+        }
+        elseif (preg_match('/sshd.*Accepted|sshd.*session opened/i', $message)) {
+            $entry['type'] = 'successful_login';
+            $entry['service'] = 'ssh';
+        }
+        // PAM failures
+        elseif (preg_match('/pam_.*failure|pam_.*error|pam_unix.*authentication failure/i', $message)) {
+            $entry['type'] = 'failed_login';
         }
         
         // Detect sudo commands
