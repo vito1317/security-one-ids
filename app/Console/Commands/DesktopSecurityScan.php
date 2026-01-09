@@ -179,8 +179,14 @@ class DesktopSecurityScan extends Command
             // Send individual alerts for each brute force threat
             if ($bruteForceResult['threat_detected']) {
                 foreach ($bruteForceResult['threats'] ?? [] as $threat) {
+                    // Validate IP address - use 127.0.0.1 for local/unknown IPs
+                    $sourceIp = $threat['ip'] ?? null;
+                    if (!$sourceIp || $sourceIp === 'unknown' || !filter_var($sourceIp, FILTER_VALIDATE_IP)) {
+                        $sourceIp = '127.0.0.1'; // Local attack (e.g., su/sudo failures)
+                    }
+                    
                     $alertData = [
-                        'source_ip' => $threat['ip'] ?? '0.0.0.0',
+                        'source_ip' => $sourceIp,
                         'severity' => $threat['severity'] ?? 'high',
                         'category' => 'brute_force',
                         'log_type' => 'system',
@@ -210,8 +216,14 @@ class DesktopSecurityScan extends Command
             if ($networkResult['threat_detected']) {
                 foreach ($networkResult['suspicious_connections'] ?? [] as $suspicious) {
                     $conn = $suspicious['connection'] ?? [];
+                    // Validate IP address
+                    $sourceIp = $conn['remote'] ?? $conn['remote_ip'] ?? null;
+                    if (!$sourceIp || $sourceIp === 'unknown' || !filter_var($sourceIp, FILTER_VALIDATE_IP)) {
+                        $sourceIp = '127.0.0.1';
+                    }
+                    
                     $alertData = [
-                        'source_ip' => $conn['remote'] ?? $conn['remote_ip'] ?? '0.0.0.0',
+                        'source_ip' => $sourceIp,
                         'severity' => 'medium',
                         'category' => 'suspicious_network',
                         'log_type' => 'system',
