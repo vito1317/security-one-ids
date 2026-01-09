@@ -26,6 +26,18 @@ class DesktopSecurityScan extends Command
         $this->info("Platform: {$collector->getPlatform()}");
         $this->newLine();
         
+        // Debug: Test raw log collection
+        if ($this->output->isVerbose() || $this->output->isVeryVerbose()) {
+            $this->warn('🔧 DEBUG: Testing raw log collection...');
+            $authLogs = $collector->collectAuthLogs(50);
+            $this->info("  Auth logs collected: " . count($authLogs));
+            if (count($authLogs) > 0 && count($authLogs) <= 5) {
+                foreach ($authLogs as $log) {
+                    $this->line("    - " . json_encode(array_slice($log, 0, 3)));
+                }
+            }
+        }
+        
         // Collect security summary
         $this->info('📊 Collecting security data...');
         $summary = $collector->getSecuritySummary();
