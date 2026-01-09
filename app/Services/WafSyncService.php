@@ -14,7 +14,12 @@ class WafSyncService
     public function __construct()
     {
         $this->wafUrl = rtrim(config('ids.waf_url') ?? env('WAF_URL', ''), '/');
-        $this->agentToken = config('ids.agent_token') ?? env('AGENT_TOKEN', '');
+        
+        // Prefer cached WAF-assigned token over .env token (registration returns correct token)
+        $cachedToken = cache()->get('waf_agent_token');
+        $envToken = config('ids.agent_token') ?? env('AGENT_TOKEN', '');
+        $this->agentToken = !empty($cachedToken) ? $cachedToken : $envToken;
+        
         $this->agentName = config('ids.agent_name') ?? env('AGENT_NAME', gethostname());
     }
 
