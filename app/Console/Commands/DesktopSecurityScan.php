@@ -29,11 +29,30 @@ class DesktopSecurityScan extends Command
         // Debug: Test raw log collection
         if ($this->output->isVerbose() || $this->output->isVeryVerbose()) {
             $this->warn('🔧 DEBUG: Testing raw log collection...');
-            $authLogs = $collector->collectAuthLogs(50);
+            $authLogs = $collector->collectAuthLogs(200);
             $this->info("  Auth logs collected: " . count($authLogs));
-            if (count($authLogs) > 0 && count($authLogs) <= 5) {
-                foreach ($authLogs as $log) {
-                    $this->line("    - " . json_encode(array_slice($log, 0, 3)));
+            
+            // Count by type
+            $typeCounts = [];
+            $samples = ['failed_login' => [], 'successful_login' => [], 'unknown' => []];
+            foreach ($authLogs as $log) {
+                $type = $log['type'] ?? 'null';
+                $typeCounts[$type] = ($typeCounts[$type] ?? 0) + 1;
+                if (count($samples[$type] ?? []) < 2) {
+                    $samples[$type][] = substr($log['raw'] ?? '', 0, 100);
+                }
+            }
+            
+            $this->info("  Type breakdown:");
+            foreach ($typeCounts as $type => $count) {
+                $this->line("    - {$type}: {$count}");
+            }
+            
+            // Show samples of unknown logs to understand format
+            if (!empty($samples['unknown'])) {
+                $this->warn("  Sample unknown logs (to debug parsing):");
+                foreach (array_slice($samples['unknown'], 0, 3) as $sample) {
+                    $this->line("    > " . $sample);
                 }
             }
         }
