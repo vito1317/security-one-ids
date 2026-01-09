@@ -320,31 +320,51 @@ class DesktopLogCollector
             // 4634 = Logoff
             // 4648 = Explicit credentials logon
             
+            // First try: Simple PowerShell with Get-WinEvent
             if ($logName === 'Security') {
-                // Use Where-Object filter instead of FilterXPath for better compatibility
-                // Also wrap in try/catch to handle errors better
-                $psCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Get-WinEvent -LogName Security -MaxEvents ' . $count . ' -ErrorAction Stop | Where-Object { $_.Id -in @(4624,4625,4634) } | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress } catch { Write-Output \'[]\' }"';
+                $psCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-WinEvent -LogName Security -MaxEvents ' . $count . ' 2>$null | Where-Object { $_.Id -in @(4624,4625,4634) } | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress"';
             } else {
-                $psCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Get-WinEvent -LogName ' . $logName . ' -MaxEvents ' . $count . ' -ErrorAction Stop | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress } catch { Write-Output \'[]\' }"';
+                $psCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-WinEvent -LogName ' . $logName . ' -MaxEvents ' . $count . ' 2>$null | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress"';
             }
             
             Log::debug("Executing PowerShell: {$psCommand}");
             
-            $output = shell_exec($psCommand);
+            // Execute and capture both stdout and stderr
+            $descriptors = [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ];
+            
+            $process = proc_open($psCommand, $descriptors, $pipes);
+            
+            if (is_resource($process)) {
+                fclose($pipes[0]); // Close stdin
+                $output = stream_get_contents($pipes[1]);
+                $stderr = stream_get_contents($pipes[2]);
+                fclose($pipes[1]);
+                fclose($pipes[2]);
+                $exitCode = proc_close($process);
+                
+                Log::debug("PowerShell exit code: {$exitCode}");
+                if ($stderr) {
+                    Log::debug("PowerShell stderr: " . substr($stderr, 0, 200));
+                }
+            } else {
+                // Fallback to shell_exec if proc_open fails
+                $output = shell_exec($psCommand . ' 2>&1');
+            }
             
             Log::debug("PowerShell output length: " . strlen($output ?? ''));
-            Log::debug("PowerShell output preview: " . substr($output ?? '', 0, 200));
+            Log::debug("PowerShell output preview: " . substr($output ?? '', 0, 300));
             
-            if ($output && strlen($output) > 2) {
+            if ($output && strlen(trim($output)) > 2 && $output !== '[]') {
                 $events = json_decode($output, true);
                 
                 if (json_last_error() !== JSON_ERROR_NONE) {
                     Log::debug("JSON decode error: " . json_last_error_msg());
                     Log::debug("Raw output: " . substr($output, 0, 500));
-                    return $logs;
-                }
-                
-                if (is_array($events)) {
+                } else if (is_array($events)) {
                     // Handle single event (PowerShell returns object not array for single result)
                     if (isset($events['TimeCreated'])) {
                         $events = [$events];
@@ -356,9 +376,39 @@ class DesktopLogCollector
                         $logs[] = $this->parseWindowsEvent($event);
                     }
                 }
-            } else {
-                Log::debug("No output from PowerShell command");
             }
+            
+            // If first method failed, try wevtutil as fallback
+            if (empty($logs) && $logName === 'Security') {
+                Log::debug("Trying wevtutil fallback for Security log");
+                $wevtCommand = 'wevtutil qe Security /c:50 /rd:true /f:text /q:"*[System[(EventID=4624 or EventID=4625)]]" 2>&1';
+                $wevtOutput = shell_exec($wevtCommand);
+                
+                if ($wevtOutput && strlen($wevtOutput) > 10) {
+                    Log::debug("wevtutil returned " . strlen($wevtOutput) . " bytes");
+                    // Parse wevtutil text output
+                    preg_match_all('/Event\[\d+\]:\s*\n(.*?)(?=Event\[\d+\]:|$)/s', $wevtOutput, $matches);
+                    foreach ($matches[1] ?? [] as $eventText) {
+                        $eventId = 0;
+                        if (preg_match('/EventID:\s*(\d+)/', $eventText, $m)) {
+                            $eventId = (int)$m[1];
+                        }
+                        $logs[] = [
+                            'raw' => $eventText,
+                            'timestamp' => date('Y-m-d H:i:s'),
+                            'type' => $eventId === 4625 ? 'failed_login' : ($eventId === 4624 ? 'successful_login' : 'unknown'),
+                            'event_id' => $eventId,
+                            'user' => null,
+                            'ip' => null,
+                            'service' => 'windows',
+                        ];
+                    }
+                    Log::debug("wevtutil parsed " . count($logs) . " events");
+                } else {
+                    Log::debug("wevtutil returned no output");
+                }
+            }
+            
         } catch (\Exception $e) {
             Log::warning("Failed to collect Windows Event Log: " . $e->getMessage());
         }
