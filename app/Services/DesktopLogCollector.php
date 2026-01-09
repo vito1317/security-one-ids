@@ -314,13 +314,40 @@ class DesktopLogCollector
         
         try {
             // PowerShell command to get security events
+            // Use -ErrorAction SilentlyContinue instead of 2>/dev/null which doesn't work on Windows
             $psCommand = match ($logName) {
-                'Security' => "Get-WinEvent -LogName Security -MaxEvents {$count} | Select-Object TimeCreated,Id,Message | ConvertTo-Json",
-                'System' => "Get-WinEvent -LogName System -MaxEvents {$count} | Select-Object TimeCreated,Id,Message | ConvertTo-Json",
-                default => "Get-WinEvent -LogName '{$logName}' -MaxEvents {$count} | Select-Object TimeCreated,Id,Message | ConvertTo-Json",
+                'Security' => "Get-WinEvent -LogName Security -MaxEvents {$count} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress",
+                'System' => "Get-WinEvent -LogName System -MaxEvents {$count} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress",
+                default => "Get-WinEvent -LogName '{$logName}' -MaxEvents {$count} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress",
             };
             
-            $output = shell_exec("powershell -Command \"{$psCommand}\" 2>/dev/null");
+            Log::debug("Windows Event Log command: powershell -Command {$psCommand}");
+            
+            // Use proc_open for better error handling on Windows
+            $descriptorspec = [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ];
+            
+            $process = proc_open("powershell -NoProfile -Command \"{$psCommand}\"", $descriptorspec, $pipes);
+            
+            if (is_resource($process)) {
+                $output = stream_get_contents($pipes[1]);
+                $error = stream_get_contents($pipes[2]);
+                fclose($pipes[0]);
+                fclose($pipes[1]);
+                fclose($pipes[2]);
+                proc_close($process);
+                
+                if (!empty($error)) {
+                    Log::debug("Windows Event Log error: {$error}");
+                }
+                
+                Log::debug("Windows Event Log output length: " . strlen($output));
+            } else {
+                $output = null;
+            }
             
             if ($output) {
                 $events = json_decode($output, true);
@@ -329,6 +356,8 @@ class DesktopLogCollector
                     if (isset($events['TimeCreated'])) {
                         $events = [$events];
                     }
+                    
+                    Log::debug("Windows Event Log parsed " . count($events) . " events");
                     
                     foreach ($events as $event) {
                         $logs[] = $this->parseWindowsEvent($event);
@@ -450,31 +479,56 @@ class DesktopLogCollector
      */
     private function parseMacOsEvent(array $event): array
     {
+        $message = $event['eventMessage'] ?? $event['message'] ?? '';
+        
         $entry = [
-            'raw' => $event['eventMessage'] ?? '',
-            'timestamp' => $event['timestamp'] ?? null,
+            'raw' => $message,
+            'timestamp' => $event['timestamp'] ?? $event['timeCreate'] ?? date('Y-m-d H:i:s'),
             'type' => 'unknown',
             'user' => null,
             'ip' => null,
             'service' => 'macos',
-            'process' => $event['processImagePath'] ?? null,
+            'process' => $event['processImagePath'] ?? $event['process'] ?? null,
         ];
         
-        $message = $event['eventMessage'] ?? '';
-        
-        // Detect authentication events
-        if (preg_match('/authentication (succeeded|failed)/i', $message, $m)) {
-            $entry['type'] = $m[1] === 'succeeded' ? 'successful_login' : 'failed_login';
+        // Detect authentication success/failure patterns (case-insensitive)
+        if (preg_match('/authentication\s+(succeeded|failed|failure)/i', $message, $m)) {
+            $entry['type'] = ($m[1] === 'succeeded') ? 'successful_login' : 'failed_login';
         }
-        // Detect sudo
-        if (preg_match('/sudo.*user=(\S+)/i', $message, $m)) {
+        // Password checking patterns  
+        elseif (preg_match('/password\s+(accepted|failed|incorrect|invalid)/i', $message, $m)) {
+            $entry['type'] = ($m[1] === 'accepted') ? 'successful_login' : 'failed_login';
+        }
+        // Login window events
+        elseif (preg_match('/(login|logon)\s+(successful|succeeded|failed|failure)/i', $message, $m)) {
+            $entry['type'] = ($m[2] === 'successful' || $m[2] === 'succeeded') ? 'successful_login' : 'failed_login';
+        }
+        // User session events
+        elseif (preg_match('/user\s+(\S+)\s+(logged in|logged out|authentication failed)/i', $message, $m)) {
+            $entry['user'] = $m[1];
+            $entry['type'] = str_contains($m[2], 'failed') ? 'failed_login' : 
+                            (str_contains($m[2], 'logged in') ? 'successful_login' : 'logout');
+        }
+        // Security authorization events
+        elseif (preg_match('/Authorization\s+(success|denied|allowed)/i', $message, $m)) {
+            $entry['type'] = ($m[1] === 'success' || $m[1] === 'allowed') ? 'successful_login' : 'failed_login';
+        }
+        
+        // Detect sudo commands
+        if (preg_match('/sudo.*user[=:]\s*(\S+)/i', $message, $m)) {
             $entry['type'] = 'sudo_command';
             $entry['user'] = $m[1];
         }
-        // Detect SSH
-        if (preg_match('/sshd.*from (\S+)/i', $message, $m)) {
+        
+        // Detect SSH connections (extract IP)
+        if (preg_match('/sshd.*from\s+(\d+\.\d+\.\d+\.\d+)/i', $message, $m)) {
             $entry['ip'] = $m[1];
             $entry['service'] = 'ssh';
+        }
+        
+        // Extract username if present
+        if (!$entry['user'] && preg_match('/user[=:\s]+["\']?(\S+?)["\']?[\s,\]]/i', $message, $m)) {
+            $entry['user'] = trim($m[1], '"\'');
         }
         
         return $entry;
