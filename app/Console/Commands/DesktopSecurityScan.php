@@ -155,12 +155,25 @@ class DesktopSecurityScan extends Command
             }
         }
         
-        // Send report to WAF Hub
-        if ($this->option('report')) {
+        // Always send heartbeat and sync summary to WAF Hub
+        $wafSync = app(WafSyncService::class);
+        
+        // Send heartbeat to keep agent alive
+        $this->info('💓 Sending heartbeat to WAF Hub...');
+        $heartbeatOk = $wafSync->heartbeat();
+        if ($heartbeatOk) {
+            $this->info('✅ Heartbeat sent');
+        } else {
+            $this->warn('⚠️  Heartbeat failed - check WAF_URL and AGENT_TOKEN');
+        }
+        
+        // Send report to WAF Hub (always sync if threats detected, or if --report flag)
+        $shouldReport = $this->option('report') || $bruteForceResult['threat_detected'] || $networkResult['threat_detected'];
+        
+        if ($shouldReport) {
             $this->newLine();
             $this->info('📤 Sending report to WAF Hub...');
             
-            $wafSync = app(WafSyncService::class);
             $alertData = [
                 'type' => 'desktop_security_scan',
                 'platform' => $collector->getPlatform(),
@@ -170,23 +183,28 @@ class DesktopSecurityScan extends Command
                 'timestamp' => now()->toIso8601String(),
             ];
             
-            // Create alert if threats detected
+            // Determine severity
+            $severity = 'low';
             if ($bruteForceResult['threat_detected'] || $networkResult['threat_detected']) {
                 $severity = 'high';
                 if ($bruteForceResult['threat_detected']) {
-                    foreach ($bruteForceResult['threats'] as $threat) {
-                        if ($threat['severity'] === 'critical') {
+                    foreach ($bruteForceResult['threats'] ?? [] as $threat) {
+                        if (($threat['severity'] ?? '') === 'critical') {
                             $severity = 'critical';
                             break;
                         }
                     }
                 }
-                
-                $this->info("Syncing alert (severity: {$severity})...");
-                // Would sync to WAF Hub here
             }
             
-            $this->info('✅ Report sent');
+            $alertData['severity'] = $severity;
+            
+            $response = $wafSync->syncAlert($alertData);
+            if ($response && $response->successful()) {
+                $this->info('✅ Report sent');
+            } else {
+                $this->warn('⚠️  Report sync failed');
+            }
         }
         
         $this->newLine();
