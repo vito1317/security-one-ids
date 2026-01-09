@@ -449,28 +449,52 @@ class DesktopLogCollector
         }
         
         try {
-            // Query authentication events from unified log
-            $output = shell_exec("log show --predicate 'subsystem == \"com.apple.securityd\" OR category == \"authentication\"' --last {$minutes}m --style json 2>/dev/null");
+            // Use broader predicate to capture authentication events from su, sudo, login, sshd
+            // Note: macOS unified logging can be restrictive, try multiple predicates
+            $predicates = [
+                // Authentication subsystem
+                'subsystem == "com.apple.securityd" OR category == "authentication"',
+                // Process-based for su, sudo, login
+                'process == "su" OR process == "sudo" OR process == "login" OR process == "sshd" OR process == "authd"',
+            ];
             
-            if ($output) {
-                $events = json_decode($output, true);
-                if (is_array($events)) {
-                    foreach ($events as $event) {
-                        $logs[] = $this->parseMacOsEvent($event);
+            foreach ($predicates as $predicate) {
+                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null");
+                
+                if ($output && $output !== '{}' && $output !== '[]') {
+                    $events = json_decode($output, true);
+                    if (is_array($events) && !empty($events)) {
+                        Log::debug("macOS unified log matched " . count($events) . " events with predicate: {$predicate}");
+                        foreach ($events as $event) {
+                            $logs[] = $this->parseMacOsEvent($event);
+                        }
+                        break; // Found events, stop trying more predicates
                     }
                 }
             }
             
-            // Also check auth.log if available
-            if (file_exists('/var/log/authd.log')) {
-                $authLogs = $this->tailFile('/var/log/authd.log', 100);
-                $logs = array_merge($logs, $this->parseAuthLogs($authLogs));
+            // Fallback: use ASL (Apple System Log) if available (older macOS)
+            if (empty($logs) && file_exists('/var/log/asl/')) {
+                $output = shell_exec("syslog -k Facility authpriv -k Level le Error 2>/dev/null | tail -100");
+                if ($output) {
+                    $logs = array_merge($logs, $this->parseAuthLogs(explode("\n", $output)));
+                }
+            }
+            
+            // Check /var/log files
+            $logFiles = ['/var/log/authd.log', '/var/log/system.log', '/private/var/log/system.log'];
+            foreach ($logFiles as $logFile) {
+                if (file_exists($logFile) && is_readable($logFile)) {
+                    Log::debug("Reading macOS log file: {$logFile}");
+                    $fileLines = $this->tailFile($logFile, 200);
+                    $logs = array_merge($logs, $this->parseAuthLogs($fileLines));
+                }
             }
             
         } catch (\Exception $e) {
             Log::warning("Failed to collect macOS logs: " . $e->getMessage());
         }
-        
+        Log::debug("Total macOS logs collected: " . count($logs));
         return $logs;
     }
     
