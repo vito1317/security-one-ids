@@ -6,30 +6,23 @@
     <string>com.securityone.ids</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/php</string>
-        <string>/opt/security-one-ids/artisan</string>
-        <string>desktop:scan</string>
-        <string>--full</string>
+        <string>/bin/bash</string>
+        <string>/opt/security-one-ids/security-one-wrapper.sh</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/opt/security-one-ids</string>
-    <key>StartInterval</key>
-    <integer>60</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <true/>
     <key>StandardOutPath</key>
-    <string>/var/log/security-one-ids/output.log</string>
+    <string>/var/log/security-one-ids/daemon.log</string>
     <key>StandardErrorPath</key>
     <string>/var/log/security-one-ids/error.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
     </dict>
 </dict>
 </plist>
