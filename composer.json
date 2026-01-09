@@ -2,9 +2,16 @@
     "$schema": "https://getcomposer.org/schema.json",
     "name": "laravel/laravel",
     "type": "project",
-    "description": "The skeleton application for the Laravel framework.",
-    "keywords": ["laravel", "framework"],
+    "description": "Security One IDS/IPS Agent for threat detection and prevention.",
+    "keywords": [
+        "ids",
+        "ips",
+        "security",
+        "waf",
+        "agent"
+    ],
     "license": "MIT",
+    "version": "1.0.0",
     "require": {
         "php": "^8.2",
         "laravel/framework": "^12.0",
