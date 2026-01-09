@@ -29,8 +29,8 @@ echo "$(date): Security One IDS wrapper started (PHP: $PHP_BIN)" >> "$LOG_DIR/wr
 while true; do
     echo "$(date): Running security scan..." >> "$LOG_DIR/wrapper.log"
     
-    # Run the scan
-    "$PHP_BIN" "$INSTALL_DIR/artisan" desktop:scan --full 2>&1 | tail -20 >> "$LOG_DIR/output.log"
+    # Run the scan with -v for verbose output, capture ALL output
+    "$PHP_BIN" "$INSTALL_DIR/artisan" desktop:scan --full -v >> "$LOG_DIR/output.log" 2>&1
     
     exit_code=$?
     echo "$(date): Scan completed with exit code $exit_code" >> "$LOG_DIR/wrapper.log"
