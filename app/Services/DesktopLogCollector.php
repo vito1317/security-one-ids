@@ -449,55 +449,123 @@ class DesktopLogCollector
         }
         
         try {
-            // Use broader predicate to capture authentication events from su, sudo, login, sshd
-            // Note: macOS unified logging can be restrictive, try multiple predicates
+            // macOS authentication/authorization events use specific subsystems
+            // Try to find actual login events with targeted predicates
             $predicates = [
-                // Authentication subsystem
-                'subsystem == "com.apple.securityd" OR category == "authentication"',
-                // Process-based for su, sudo, login
-                'process == "su" OR process == "sudo" OR process == "login" OR process == "sshd" OR process == "authd"',
+                // opendirectoryd handles user authentication
+                'subsystem == "com.apple.opendirectoryd"',
+                // Authorization and security events  
+                'subsystem == "com.apple.authd" OR subsystem == "com.apple.Authorization"',
+                // Login/authentication process events with specific messages
+                'eventMessage CONTAINS "authentication" OR eventMessage CONTAINS "password" OR eventMessage CONTAINS "login"',
+                // su and sudo processes (may need root to see these)
+                'process == "su" OR process == "sudo"',
             ];
             
             foreach ($predicates as $predicate) {
                 $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null");
                 
-                if ($output && $output !== '{}' && $output !== '[]') {
+                if ($output && strlen($output) > 10) {
                     $events = json_decode($output, true);
                     if (is_array($events) && !empty($events)) {
                         Log::debug("macOS unified log matched " . count($events) . " events with predicate: {$predicate}");
                         foreach ($events as $event) {
-                            $logs[] = $this->parseMacOsEvent($event);
+                            $parsed = $this->parseMacOsEvent($event);
+                            // Only add if it's a recognized authentication event
+                            if ($parsed['type'] !== 'unknown') {
+                                $logs[] = $parsed;
+                            }
                         }
-                        break; // Found events, stop trying more predicates
+                        if (!empty($logs)) {
+                            break; // Found useful events, stop trying more predicates
+                        }
                     }
                 }
             }
             
-            // Fallback: use ASL (Apple System Log) if available (older macOS)
-            if (empty($logs) && file_exists('/var/log/asl/')) {
-                $output = shell_exec("syslog -k Facility authpriv -k Level le Error 2>/dev/null | tail -100");
+            // Fallback: Try to read /var/log/system.log directly for auth events
+            if (empty($logs)) {
+                Log::debug("Trying fallback: /var/log/system.log");
+                $output = shell_exec("grep -E '(authentication|password|login|su:|sudo:)' /var/log/system.log 2>/dev/null | tail -200");
                 if ($output) {
-                    $logs = array_merge($logs, $this->parseAuthLogs(explode("\n", $output)));
+                    $lines = array_filter(explode("\n", $output));
+                    foreach ($lines as $line) {
+                        $logs[] = $this->parseMacOsLogLine($line);
+                    }
                 }
             }
             
-            // Check /var/log files
-            $logFiles = ['/var/log/authd.log', '/var/log/system.log', '/private/var/log/system.log'];
-            foreach ($logFiles as $logFile) {
-                if (file_exists($logFile) && is_readable($logFile)) {
-                    Log::debug("Reading macOS log file: {$logFile}");
-                    $fileLines = $this->tailFile($logFile, 200);
-                    $logs = array_merge($logs, $this->parseAuthLogs($fileLines));
+            // Try ASL (Apple System Log) for older macOS
+            if (empty($logs) && file_exists('/var/log/asl/')) {
+                $output = shell_exec("syslog -k Facility auth -k Level le Warning 2>/dev/null | tail -100");
+                if ($output) {
+                    $lines = array_filter(explode("\n", $output));
+                    foreach ($lines as $line) {
+                        $logs[] = $this->parseMacOsLogLine($line);
+                    }
                 }
             }
             
         } catch (\Exception $e) {
             Log::warning("Failed to collect macOS logs: " . $e->getMessage());
         }
-        Log::debug("Total macOS logs collected: " . count($logs));
+        
+        Log::debug("Total macOS authentication logs collected: " . count($logs));
         return $logs;
     }
     
+    /**
+     * Parse a macOS system log line (text format)
+     */
+    private function parseMacOsLogLine(string $line): array
+    {
+        $entry = [
+            'raw' => $line,
+            'timestamp' => date('Y-m-d H:i:s'),
+            'type' => 'unknown',
+            'user' => null,
+            'ip' => null,
+            'service' => 'macos',
+        ];
+        
+        // Extract timestamp if present (macOS syslog format: "Jan  9 12:34:56")
+        if (preg_match('/^(\w+\s+\d+\s+\d+:\d+:\d+)/', $line, $m)) {
+            $entry['timestamp'] = $m[1] . ' ' . date('Y');
+        }
+        
+        // su failures
+        if (preg_match('/su:\s*(BAD SU|FAILED SU|authentication failure)/i', $line)) {
+            $entry['type'] = 'failed_login';
+            $entry['service'] = 'su';
+        }
+        // su success
+        elseif (preg_match('/su:\s*\S+\s+to\s+(\S+)/i', $line, $m)) {
+            $entry['type'] = 'successful_login';
+            $entry['user'] = $m[1];
+            $entry['service'] = 'su';
+        }
+        // sudo failures
+        elseif (preg_match('/sudo:\s*(\S+).*incorrect password/i', $line, $m)) {
+            $entry['type'] = 'failed_login';
+            $entry['user'] = $m[1];
+            $entry['service'] = 'sudo';
+        }
+        // Authentication succeeded/failed patterns
+        elseif (preg_match('/authentication\s+(succeeded|success|failed|failure)/i', $line, $m)) {
+            $entry['type'] = (strtolower($m[1]) === 'succeeded' || strtolower($m[1]) === 'success') 
+                ? 'successful_login' : 'failed_login';
+        }
+        // Login window patterns
+        elseif (preg_match('/(login|password)\s+(accepted|rejected|failed|incorrect)/i', $line, $m)) {
+            $entry['type'] = (strtolower($m[2]) === 'accepted') ? 'successful_login' : 'failed_login';
+        }
+        
+        // Extract username
+        if (preg_match('/user[=:\s]+["\']?(\S+?)["\']?[\s,\]$]/i', $line, $m)) {
+            $entry['user'] = trim($m[1], '"\'');
+        }
+        return $entry;
+    }    
     /**
      * Parse macOS unified log event
      */
