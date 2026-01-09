@@ -321,15 +321,16 @@ class DesktopLogCollector
             // 4648 = Explicit credentials logon
             
             if ($logName === 'Security') {
-                // Filter for login events only
-                $psCommand = 'powershell -NoProfile -Command "Get-WinEvent -LogName Security -MaxEvents ' . $count . ' -FilterXPath \'*[System[(EventID=4624 or EventID=4625 or EventID=4634)]]\' -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,@{n=\'Message\';e={$_.Message.Substring(0,[Math]::Min(500,$_.Message.Length))}} | ConvertTo-Json"';
+                // Use Where-Object filter instead of FilterXPath for better compatibility
+                // Also wrap in try/catch to handle errors better
+                $psCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Get-WinEvent -LogName Security -MaxEvents ' . $count . ' -ErrorAction Stop | Where-Object { $_.Id -in @(4624,4625,4634) } | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress } catch { Write-Output \'[]\' }"';
             } else {
-                $psCommand = 'powershell -NoProfile -Command "Get-WinEvent -LogName ' . $logName . ' -MaxEvents ' . $count . ' -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,@{n=\'Message\';e={$_.Message.Substring(0,[Math]::Min(500,$_.Message.Length))}} | ConvertTo-Json"';
+                $psCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Get-WinEvent -LogName ' . $logName . ' -MaxEvents ' . $count . ' -ErrorAction Stop | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress } catch { Write-Output \'[]\' }"';
             }
             
-            Log::debug("Executing: {$psCommand}");
+            Log::debug("Executing PowerShell: {$psCommand}");
             
-            $output = shell_exec($psCommand . ' 2>&1');
+            $output = shell_exec($psCommand);
             
             Log::debug("PowerShell output length: " . strlen($output ?? ''));
             Log::debug("PowerShell output preview: " . substr($output ?? '', 0, 200));
