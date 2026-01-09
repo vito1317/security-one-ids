@@ -3,9 +3,9 @@
 # iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/vito1317/security-one-ids/main/install/install-windows.ps1'))
 
 param(
-    [string]$WafHubUrl = "",
-    [string]$AgentToken = "",
-    [string]$AgentName = $env:COMPUTERNAME
+    [string]$WafHubUrl = $env:WAF_HUB_URL,
+    [string]$AgentToken = $env:AGENT_TOKEN,
+    [string]$AgentName = $(if ($env:AGENT_NAME) { $env:AGENT_NAME } else { $env:COMPUTERNAME })
 )
 
 $ErrorActionPreference = "Stop"
@@ -114,9 +114,9 @@ APP_NAME="Security One IDS"
 APP_ENV=production
 APP_DEBUG=false
 
-WAF_URL=$WafHubUrl
-AGENT_TOKEN=$AgentToken
-AGENT_NAME=$AgentName
+WAF_URL="$WafHubUrl"
+AGENT_TOKEN="$AgentToken"
+AGENT_NAME="$AgentName"
 
 OLLAMA_URL=https://ollama.futron-life.com
 OLLAMA_MODEL=sentinel-security
