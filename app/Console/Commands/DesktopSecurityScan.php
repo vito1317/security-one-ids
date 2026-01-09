@@ -195,6 +195,9 @@ class DesktopSecurityScan extends Command
                     $response = $wafSync->syncAlert($alertData);
                     if ($response && $response->successful()) {
                         $alertsSent++;
+                        if ($this->option('verbose')) {
+                            $this->info("   ✅ Alert synced: " . substr($response->body(), 0, 100));
+                        }
                     } else if ($response) {
                         $this->warn("   Alert sync failed: HTTP {$response->status()} - " . substr($response->body(), 0, 200));
                     } else {
