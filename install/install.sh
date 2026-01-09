@@ -195,7 +195,7 @@ if [ "$OS" = "macos" ]; then
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
     <key>StartInterval</key>
-    <integer>300</integer>
+    <integer>60</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
@@ -235,7 +235,7 @@ Description=Security One IDS Periodic Scan
 
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=5min
+OnUnitActiveSec=1min
 
 [Install]
 WantedBy=timers.target

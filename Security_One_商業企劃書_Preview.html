@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security One 商業企劃書 - 動態預覽</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
+        * { font-family: 'Noto Sans TC', sans-serif; }
+        .gradient-bg { background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%); }
+        .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+        .glow { box-shadow: 0 0 40px rgba(59,130,246,0.3); }
+        .section-enter { animation: slideUp 0.6s ease-out; }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 20px rgba(59,130,246,0.4); } 50% { box-shadow: 0 0 40px rgba(59,130,246,0.8); } }
+        .pulse-glow { animation: pulse-glow 2s infinite; }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+        .float { animation: float 3s ease-in-out infinite; }
+        .nav-link { transition: all 0.3s; }
+        .nav-link:hover { color: #3b82f6; transform: translateX(5px); }
+        .card-hover { transition: all 0.3s; }
+        .card-hover:hover { transform: translateY(-5px); box-shadow: 0 20px 40px rgba(0,0,0,0.3); }
+        .stat-counter { transition: all 0.5s; }
+        .progress-bar { background: linear-gradient(90deg, #3b82f6, #8b5cf6); }
+    </style>
+</head>
+<body class="gradient-bg text-white min-h-screen">
+    <div x-data="{ 
+        currentSection: 'hero',
+        showNav: true,
+        stats: { threats: 0, blocked: 0, uptime: 0 },
+        animateStats() {
+            const targets = { threats: 376000, blocked: 99.7, uptime: 99.99 };
+            const duration = 2000;
+            const start = Date.now();
+            const animate = () => {
+                const elapsed = Date.now() - start;
+                const progress = Math.min(elapsed / duration, 1);
+                this.stats.threats = Math.floor(targets.threats * progress);
+                this.stats.blocked = (targets.blocked * progress).toFixed(1);
+                this.stats.uptime = (targets.uptime * progress).toFixed(2);
+                if (progress < 1) requestAnimationFrame(animate);
+            };
+            animate();
+        }
+    }" x-init="setTimeout(() => animateStats(), 500)">
+
+        <!-- Navigation -->
+        <nav class="fixed top-0 left-0 right-0 z-50 glass px-6 py-4">
+            <div class="max-w-7xl mx-auto flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center pulse-glow">
+                        <span class="text-xl font-bold">S1</span>
+                    </div>
+                    <span class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">Security One</span>
+                </div>
+                <div class="hidden md:flex items-center gap-6 text-sm">
+                    <a href="#hero" class="nav-link hover:text-blue-400">首頁</a>
+                    <a href="#products" class="nav-link hover:text-blue-400">產品方案</a>
+                    <a href="#architecture" class="nav-link hover:text-blue-400">技術架構</a>
+                    <a href="#pricing" class="nav-link hover:text-blue-400">定價</a>
+                    <a href="#cases" class="nav-link hover:text-blue-400">客戶案例</a>
+                    <button class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition">立即洽詢</button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Hero Section -->
+        <section id="hero" class="min-h-screen flex items-center justify-center pt-20 px-6">
+            <div class="max-w-6xl mx-auto text-center section-enter">
+                <div class="inline-block glass px-4 py-2 rounded-full text-sm text-blue-400 mb-6">
+                    🛡️ 企業級網路安全一站式解決方案
+                </div>
+                <h1 class="text-5xl md:text-7xl font-bold mb-6">
+                    <span class="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400">
+                        Security One
+                    </span>
+                    <br>
+                    <span class="text-3xl md:text-5xl text-gray-300">WAF & IDS/IPS</span>
+                </h1>
+                <p class="text-xl text-gray-400 mb-8 max-w-3xl mx-auto">
+                    整合 Web 應用程式防火牆與入侵偵測防禦系統，<br>
+                    AI 智能驅動、15分鐘快速部署、全方位縱深防禦
+                </p>
+                
+                <!-- Live Stats -->
+                <div class="grid grid-cols-3 gap-6 max-w-2xl mx-auto mb-12">
+                    <div class="glass rounded-xl p-6 card-hover">
+                        <div class="text-3xl font-bold text-blue-400" x-text="'$' + (stats.threats/1000000).toFixed(2) + 'B'">$0B</div>
+                        <div class="text-sm text-gray-400">全球市場規模 (2027)</div>
+                    </div>
+                    <div class="glass rounded-xl p-6 card-hover">
+                        <div class="text-3xl font-bold text-green-400" x-text="stats.blocked + '%'">0%</div>
+                        <div class="text-sm text-gray-400">攻擊攔截率</div>
+                    </div>
+                    <div class="glass rounded-xl p-6 card-hover">
+                        <div class="text-3xl font-bold text-purple-400" x-text="stats.uptime + '%'">0%</div>
+                        <div class="text-sm text-gray-400">服務可用性</div>
+                    </div>
+                </div>
+
+                <div class="flex gap-4 justify-center">
+                    <a href="#products" class="bg-blue-600 hover:bg-blue-700 px-8 py-4 rounded-xl text-lg font-medium transition glow">
+                        探索產品 →
+                    </a>
+                    <a href="#pricing" class="glass hover:bg-white/10 px-8 py-4 rounded-xl text-lg font-medium transition">
+                        查看定價
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- Core Values -->
+        <section class="py-20 px-6">
+            <div class="max-w-6xl mx-auto">
+                <h2 class="text-3xl font-bold text-center mb-12">核心價值主張</h2>
+                <div class="grid md:grid-cols-5 gap-6">
+                    <div class="glass rounded-xl p-6 text-center card-hover float" style="animation-delay: 0s">
+                        <div class="text-4xl mb-4">🛡️</div>
+                        <h3 class="font-bold mb-2">全方位防護</h3>
+                        <p class="text-sm text-gray-400">WAF + IDS/IPS 縱深防禦</p>
+                    </div>
+                    <div class="glass rounded-xl p-6 text-center card-hover float" style="animation-delay: 0.2s">
+                        <div class="text-4xl mb-4">🤖</div>
+                        <h3 class="font-bold mb-2">AI 智能驅動</h3>
+                        <p class="text-sm text-gray-400">本地 LLM 威脅分析</p>
+                    </div>
+                    <div class="glass rounded-xl p-6 text-center card-hover float" style="animation-delay: 0.4s">
+                        <div class="text-4xl mb-4">📊</div>
+                        <h3 class="font-bold mb-2">視覺化監控</h3>
+                        <p class="text-sm text-gray-400">3D SOC Dashboard</p>
+                    </div>
+                    <div class="glass rounded-xl p-6 text-center card-hover float" style="animation-delay: 0.6s">
+                        <div class="text-4xl mb-4">🚀</div>
+                        <h3 class="font-bold mb-2">快速部署</h3>
+                        <p class="text-sm text-gray-400">Docker 15分鐘上線</p>
+                    </div>
+                    <div class="glass rounded-xl p-6 text-center card-hover float" style="animation-delay: 0.8s">
+                        <div class="text-4xl mb-4">💰</div>
+                        <h3 class="font-bold mb-2">成本效益</h3>
+                        <p class="text-sm text-gray-400">訂閱制無隱藏費用</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Products Section -->
+        <section id="products" class="py-20 px-6 bg-black/20">
+            <div class="max-w-6xl mx-auto">
+                <h2 class="text-3xl font-bold text-center mb-4">產品方案</h2>
+                <p class="text-gray-400 text-center mb-12">完整的企業級網路安全解決方案</p>
+                
+                <div class="grid md:grid-cols-2 gap-8">
+                    <!-- WAF Card -->
+                    <div class="glass rounded-2xl p-8 card-hover">
+                        <div class="flex items-center gap-4 mb-6">
+                            <div class="w-16 h-16 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center">
+                                <span class="text-2xl">🔥</span>
+                            </div>
+                            <div>
+                                <h3 class="text-2xl font-bold">Security One WAF</h3>
+                                <p class="text-gray-400">Web 應用程式防火牆</p>
+                            </div>
+                        </div>
+                        <div class="space-y-4">
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>多站點管理 + 反向代理</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>SQL/XSS/RCE/Traversal 防護</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>AI 智能分析 (Ollama LLM)</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>CC/DDoS 防護 + CAPTCHA</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>Passkey 無密碼認證</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>Let's Encrypt SSL 自動簽發</span>
+                            </div>
+                        </div>
+                        <div class="mt-6 pt-6 border-t border-white/10">
+                            <div class="text-sm text-gray-400">端口配置</div>
+                            <div class="flex gap-4 mt-2">
+                                <span class="glass px-3 py-1 rounded text-sm">管理: 8001</span>
+                                <span class="glass px-3 py-1 rounded text-sm">HTTP: 80</span>
+                                <span class="glass px-3 py-1 rounded text-sm">HTTPS: 443</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- IDS/IPS Card -->
+                    <div class="glass rounded-2xl p-8 card-hover">
+                        <div class="flex items-center gap-4 mb-6">
+                            <div class="w-16 h-16 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center">
+                                <span class="text-2xl">🔍</span>
+                            </div>
+                            <div>
+                                <h3 class="text-2xl font-bold">Security One IDS/IPS</h3>
+                                <p class="text-gray-400">入侵偵測/防禦系統</p>
+                            </div>
+                        </div>
+                        <div class="space-y-4">
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>分散式 Agent 架構</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>特徵偵測引擎</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>異常偵測引擎</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>行為分析引擎</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>AI 智能偵測引擎</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="text-green-400">✓</span>
+                                <span>自動封鎖 + 通知服務</span>
+                            </div>
+                        </div>
+                        <div class="mt-6 pt-6 border-t border-white/10">
+                            <div class="text-sm text-gray-400">端口配置</div>
+                            <div class="flex gap-4 mt-2">
+                                <span class="glass px-3 py-1 rounded text-sm">Agent API: 8003</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detection Engines -->
+                <div class="mt-12">
+                    <h3 class="text-2xl font-bold text-center mb-8">四大偵測引擎</h3>
+                    <div class="grid md:grid-cols-4 gap-6">
+                        <div class="glass rounded-xl p-6 text-center">
+                            <div class="w-12 h-12 mx-auto mb-4 bg-blue-500/20 rounded-full flex items-center justify-center">
+                                <span class="text-2xl">📝</span>
+                            </div>
+                            <h4 class="font-bold mb-2">特徵引擎</h4>
+                            <p class="text-sm text-gray-400">正規表達式匹配<br>已知攻擊特徵</p>
+                        </div>
+                        <div class="glass rounded-xl p-6 text-center">
+                            <div class="w-12 h-12 mx-auto mb-4 bg-purple-500/20 rounded-full flex items-center justify-center">
+                                <span class="text-2xl">📊</span>
+                            </div>
+                            <h4 class="font-bold mb-2">異常引擎</h4>
+                            <p class="text-sm text-gray-400">基線偏離偵測<br>異常行為識別</p>
+                        </div>
+                        <div class="glass rounded-xl p-6 text-center">
+                            <div class="w-12 h-12 mx-auto mb-4 bg-pink-500/20 rounded-full flex items-center justify-center">
+                                <span class="text-2xl">👁️</span>
+                            </div>
+                            <h4 class="font-bold mb-2">行為引擎</h4>
+                            <p class="text-sm text-gray-400">模式分析<br>掃描/暴力破解偵測</p>
+                        </div>
+                        <div class="glass rounded-xl p-6 text-center">
+                            <div class="w-12 h-12 mx-auto mb-4 bg-green-500/20 rounded-full flex items-center justify-center">
+                                <span class="text-2xl">🤖</span>
+                            </div>
+                            <h4 class="font-bold mb-2">AI 引擎</h4>
+                            <p class="text-sm text-gray-400">LLM 智能分析<br>變形攻擊偵測</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Architecture -->
+        <section id="architecture" class="py-20 px-6">
+            <div class="max-w-6xl mx-auto">
+                <h2 class="text-3xl font-bold text-center mb-4">技術架構</h2>
+                <p class="text-gray-400 text-center mb-12">現代化、容器化、可擴展的架構設計</p>
+                
+                <div class="glass rounded-2xl p-8 mb-8">
+                    <pre class="text-sm text-gray-300 overflow-x-auto">
+┌─────────────────────────────────────────────────────────────────┐
+│                           Internet                               │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              Security One WAF Proxy (Port 80/443)                │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │                  OpenResty (Nginx + Lua)                  │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  │   │
+│  │  │ 規則引擎 │  │ AI 分析  │  │ CC 防護  │  │   認證   │  │   │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘  │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │         Laravel 12 + Vue.js 3 管理介面 (Port 8001)        │   │
+│  └───────────────────────────────────────────────────────────┘   │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+          ┌─────────────────────┴─────────────────────┐
+          ▼                                           ▼
+┌───────────────────┐                       ┌───────────────────┐
+│   Backend Server  │                       │   Backend Server  │
+│  ┌─────────────┐  │                       │  ┌─────────────┐  │
+│  │  IDS Agent  │  │                       │  │  IDS Agent  │  │
+│  │  Port: 8003 │  │                       │  │  Port: 8003 │  │
+│  └─────────────┘  │                       │  └─────────────┘  │
+└───────────────────┘                       └───────────────────┘
+                    </pre>
+                </div>
+
+                <!-- Tech Stack -->
+                <div class="grid md:grid-cols-3 gap-6">
+                    <div class="glass rounded-xl p-6">
+                        <h4 class="font-bold mb-4 text-blue-400">後端技術</h4>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between"><span>反向代理</span><span class="text-gray-400">OpenResty</span></div>
+                            <div class="flex justify-between"><span>應用框架</span><span class="text-gray-400">Laravel 12</span></div>
+                            <div class="flex justify-between"><span>資料庫</span><span class="text-gray-400">SQLite/MySQL</span></div>
+                            <div class="flex justify-between"><span>AI 引擎</span><span class="text-gray-400">Ollama LLM</span></div>
+                        </div>
+                    </div>
+                    <div class="glass rounded-xl p-6">
+                        <h4 class="font-bold mb-4 text-purple-400">前端技術</h4>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between"><span>框架</span><span class="text-gray-400">Vue.js 3</span></div>
+                            <div class="flex justify-between"><span>整合</span><span class="text-gray-400">Inertia.js v2</span></div>
+                            <div class="flex justify-between"><span>CSS</span><span class="text-gray-400">Tailwind v4</span></div>
+                            <div class="flex justify-between"><span>3D</span><span class="text-gray-400">Three.js</span></div>
+                        </div>
+                    </div>
+                    <div class="glass rounded-xl p-6">
+                        <h4 class="font-bold mb-4 text-green-400">部署技術</h4>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between"><span>容器化</span><span class="text-gray-400">Docker</span></div>
+                            <div class="flex justify-between"><span>編排</span><span class="text-gray-400">Docker Compose</span></div>
+                            <div class="flex justify-between"><span>即時通訊</span><span class="text-gray-400">SSE</span></div>
+                            <div class="flex justify-between"><span>SSL</span><span class="text-gray-400">Let's Encrypt</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Pricing -->
+        <section id="pricing" class="py-20 px-6 bg-black/20">
+            <div class="max-w-6xl mx-auto">
+                <h2 class="text-3xl font-bold text-center mb-4">定價方案</h2>
+                <p class="text-gray-400 text-center mb-12">靈活的訂閱方案，滿足不同規模需求</p>
+                
+                <div class="grid md:grid-cols-3 gap-8">
+                    <!-- Starter -->
+                    <div class="glass rounded-2xl p-8 card-hover">
+                        <div class="text-sm text-gray-400 mb-2">入門方案</div>
+                        <h3 class="text-2xl font-bold mb-4">Starter</h3>
+                        <div class="text-4xl font-bold mb-6">
+                            NT$ 2,990<span class="text-lg text-gray-400">/月</span>
+                        </div>
+                        <div class="space-y-3 mb-8">
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 3 個域名</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 100 萬請求/月</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 基礎 WAF 防護</div>
+                            <div class="flex items-center gap-2"><span class="text-gray-500">✗</span> <span class="text-gray-500">IDS Agent</span></div>
+                        </div>
+                        <button class="w-full glass hover:bg-white/10 py-3 rounded-xl transition">選擇方案</button>
+                    </div>
+
+                    <!-- Professional -->
+                    <div class="glass rounded-2xl p-8 card-hover border-2 border-blue-500 relative">
+                        <div class="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-500 px-4 py-1 rounded-full text-sm">推薦</div>
+                        <div class="text-sm text-blue-400 mb-2">專業方案</div>
+                        <h3 class="text-2xl font-bold mb-4">Professional</h3>
+                        <div class="text-4xl font-bold mb-6">
+                            NT$ 12,990<span class="text-lg text-gray-400">/月</span>
+                        </div>
+                        <div class="space-y-3 mb-8">
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 10 個域名</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 500 萬請求/月</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> WAF + IDS Bundle</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 10 個 IDS Agent</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> AI 威脅分析</div>
+                        </div>
+                        <button class="w-full bg-blue-600 hover:bg-blue-700 py-3 rounded-xl transition">選擇方案</button>
+                    </div>
+
+                    <!-- Enterprise -->
+                    <div class="glass rounded-2xl p-8 card-hover">
+                        <div class="text-sm text-purple-400 mb-2">企業方案</div>
+                        <h3 class="text-2xl font-bold mb-4">Enterprise</h3>
+                        <div class="text-4xl font-bold mb-6">
+                            洽詢<span class="text-lg text-gray-400"></span>
+                        </div>
+                        <div class="space-y-3 mb-8">
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 無限域名</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 無限請求</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 完整功能</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 7x24 技術支援</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> SLA 保證</div>
+                        </div>
+                        <button class="w-full glass hover:bg-white/10 py-3 rounded-xl transition">聯繫銷售</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Cases -->
+        <section id="cases" class="py-20 px-6">
+            <div class="max-w-6xl mx-auto">
+                <h2 class="text-3xl font-bold text-center mb-4">客戶成功案例</h2>
+                <p class="text-gray-400 text-center mb-12">跨產業的安全防護實績</p>
+                
+                <div class="grid md:grid-cols-3 gap-8">
+                    <div class="glass rounded-2xl p-8 card-hover">
+                        <div class="text-4xl mb-4">🛒</div>
+                        <h3 class="text-xl font-bold mb-2">電商平台</h3>
+                        <p class="text-gray-400 text-sm mb-4">200 員工 · 年營收 NT$ 3 億</p>
+                        <div class="space-y-2 text-sm mb-6">
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 攔截 99.7% 惡意請求</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 促銷期零服務中斷</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 人工處理減少 80%</div>
+                        </div>
+                        <div class="text-sm text-gray-500">挑戰：雙 11 CC 攻擊、競爭對手爬蟲</div>
+                    </div>
+                    
+                    <div class="glass rounded-2xl p-8 card-hover">
+                        <div class="text-4xl mb-4">🏦</div>
+                        <h3 class="text-xl font-bold mb-2">金融科技公司</h3>
+                        <p class="text-gray-400 text-sm mb-4">350 員工 · 年營收 NT$ 8 億</p>
+                        <div class="space-y-2 text-sm mb-6">
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 通過金管會稽核</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 月攔截 50,000+ 攻擊</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 效率提升 60%</div>
+                        </div>
+                        <div class="text-sm text-gray-500">挑戰：合規要求、API 攻擊、7x24 監控</div>
+                    </div>
+                    
+                    <div class="glass rounded-2xl p-8 card-hover">
+                        <div class="text-4xl mb-4">🏛️</div>
+                        <h3 class="text-xl font-bold mb-2">政府機關</h3>
+                        <p class="text-gray-400 text-sm mb-4">縣市政府資訊中心</p>
+                        <div class="space-y-2 text-sm mb-6">
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 符合資安法 A 級要求</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 統一安全視圖</div>
+                            <div class="flex items-center gap-2"><span class="text-green-400">✓</span> 資料 100% 本地</div>
+                        </div>
+                        <div class="text-sm text-gray-500">挑戰：資安法合規、多局處保護</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CTA -->
+        <section class="py-20 px-6 bg-gradient-to-r from-blue-600/20 to-purple-600/20">
+            <div class="max-w-4xl mx-auto text-center">
+                <h2 class="text-4xl font-bold mb-6">準備好保護您的網站了嗎？</h2>
+                <p class="text-xl text-gray-400 mb-8">15 分鐘快速部署，立即享受企業級安全防護</p>
+                <div class="flex gap-4 justify-center">
+                    <button class="bg-blue-600 hover:bg-blue-700 px-8 py-4 rounded-xl text-lg font-medium transition glow">
+                        免費試用 14 天
+                    </button>
+                    <button class="glass hover:bg-white/10 px-8 py-4 rounded-xl text-lg font-medium transition">
+                        預約 Demo
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="py-12 px-6 border-t border-white/10">
+            <div class="max-w-6xl mx-auto">
+                <div class="grid md:grid-cols-4 gap-8 mb-8">
+                    <div>
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                                <span class="text-xl font-bold">S1</span>
+                            </div>
+                            <span class="text-xl font-bold">Security One</span>
+                        </div>
+                        <p class="text-sm text-gray-400">企業級網路安全一站式解決方案</p>
+                    </div>
+                    <div>
+                        <h4 class="font-bold mb-4">產品</h4>
+                        <div class="space-y-2 text-sm text-gray-400">
+                            <div>Security One WAF</div>
+                            <div>Security One IDS/IPS</div>
+                            <div>SOC Dashboard</div>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 class="font-bold mb-4">資源</h4>
+                        <div class="space-y-2 text-sm text-gray-400">
+                            <div>技術文件</div>
+                            <div>API 文件</div>
+                            <div>部署指南</div>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 class="font-bold mb-4">聯絡我們</h4>
+                        <div class="space-y-2 text-sm text-gray-400">
+                            <div>📧 support@security-one.io</div>
+                            <div>💼 sales@security-one.io</div>
+                            <div>🌐 security-one.io</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="pt-8 border-t border-white/10 text-center text-sm text-gray-500">
+                    © 2026 Security One. All rights reserved.
+                </div>
+            </div>
+        </footer>
+    </div>
+</body>
+</html>
