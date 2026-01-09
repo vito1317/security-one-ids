@@ -483,14 +483,16 @@ class DesktopLogCollector
                 }
             }
             
-            // Fallback: Try to read /var/log/system.log directly for auth events
-            if (empty($logs)) {
-                Log::debug("Trying fallback: /var/log/system.log");
-                $output = shell_exec("grep -E '(authentication|password|login|su:|sudo:)' /var/log/system.log 2>/dev/null | tail -200");
-                if ($output) {
-                    $lines = array_filter(explode("\n", $output));
-                    foreach ($lines as $line) {
-                        $logs[] = $this->parseMacOsLogLine($line);
+            // Always try to read /var/log/system.log for su/sudo events (may not be in unified log)
+            Log::debug("Checking /var/log/system.log for su/sudo events");
+            $output = shell_exec("sudo grep -iE '(su:|sudo:|authentication|password|login failure)' /var/log/system.log 2>/dev/null | tail -200");
+            if ($output) {
+                $lines = array_filter(explode("\n", $output));
+                Log::debug("Found " . count($lines) . " lines in system.log");
+                foreach ($lines as $line) {
+                    $parsed = $this->parseMacOsLogLine($line);
+                    if ($parsed['type'] !== 'unknown') {
+                        $logs[] = $parsed;
                     }
                 }
             }
