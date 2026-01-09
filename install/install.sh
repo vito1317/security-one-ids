@@ -190,7 +190,7 @@ if [ "$OS" = "macos" ]; then
         <string>/usr/bin/php</string>
         <string>$INSTALL_DIR/artisan</string>
         <string>desktop:scan</string>
-        <string>--report</string>
+        <string>--full</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
@@ -198,10 +198,20 @@ if [ "$OS" = "macos" ]; then
     <integer>60</integer>
     <key>RunAtLoad</key>
     <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>StandardOutPath</key>
     <string>$LOG_DIR/output.log</string>
     <key>StandardErrorPath</key>
     <string>$LOG_DIR/error.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
 </dict>
 </plist>
 EOF
