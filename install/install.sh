@@ -150,8 +150,12 @@ EOF
 
 echo -e "${GREEN}✅ Configuration saved${NC}"
 
-# Set permissions
-chown -R root:root "$INSTALL_DIR"
+# Set permissions (macOS uses 'wheel' group, Linux uses 'root')
+if [ "$OS" = "macos" ]; then
+    chown -R root:wheel "$INSTALL_DIR"
+else
+    chown -R root:root "$INSTALL_DIR"
+fi
 chmod -R 755 "$INSTALL_DIR"
 chmod 600 "$INSTALL_DIR/.env"
 
