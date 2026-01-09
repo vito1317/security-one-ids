@@ -210,7 +210,11 @@ class DesktopLogCollector
         $parsed = [];
         
         foreach ($lines as $line) {
-            if (empty($line)) continue;
+            // Ensure $line is a string (Windows Event Log may return arrays)
+            if (is_array($line)) {
+                $line = json_encode($line);
+            }
+            if (empty($line) || !is_string($line)) continue;
             
             $entry = [
                 'raw' => $line,
