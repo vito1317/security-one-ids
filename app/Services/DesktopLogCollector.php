@@ -313,46 +313,38 @@ class DesktopLogCollector
         $logs = [];
         
         try {
-            // PowerShell command to get security events
-            // Use -ErrorAction SilentlyContinue instead of 2>/dev/null which doesn't work on Windows
-            $psCommand = match ($logName) {
-                'Security' => "Get-WinEvent -LogName Security -MaxEvents {$count} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress",
-                'System' => "Get-WinEvent -LogName System -MaxEvents {$count} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress",
-                default => "Get-WinEvent -LogName '{$logName}' -MaxEvents {$count} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress",
-            };
+            // Use simpler PowerShell command - write to temp file then read
+            // Security Event Log IDs for login events:
+            // 4624 = Successful logon
+            // 4625 = Failed logon
+            // 4634 = Logoff
+            // 4648 = Explicit credentials logon
             
-            Log::debug("Windows Event Log command: powershell -Command {$psCommand}");
-            
-            // Use proc_open for better error handling on Windows
-            $descriptorspec = [
-                0 => ['pipe', 'r'],
-                1 => ['pipe', 'w'],
-                2 => ['pipe', 'w'],
-            ];
-            
-            $process = proc_open("powershell -NoProfile -Command \"{$psCommand}\"", $descriptorspec, $pipes);
-            
-            if (is_resource($process)) {
-                $output = stream_get_contents($pipes[1]);
-                $error = stream_get_contents($pipes[2]);
-                fclose($pipes[0]);
-                fclose($pipes[1]);
-                fclose($pipes[2]);
-                proc_close($process);
-                
-                if (!empty($error)) {
-                    Log::debug("Windows Event Log error: {$error}");
-                }
-                
-                Log::debug("Windows Event Log output length: " . strlen($output));
+            if ($logName === 'Security') {
+                // Filter for login events only
+                $psCommand = 'powershell -NoProfile -Command "Get-WinEvent -LogName Security -MaxEvents ' . $count . ' -FilterXPath \'*[System[(EventID=4624 or EventID=4625 or EventID=4634)]]\' -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,@{n=\'Message\';e={$_.Message.Substring(0,[Math]::Min(500,$_.Message.Length))}} | ConvertTo-Json"';
             } else {
-                $output = null;
+                $psCommand = 'powershell -NoProfile -Command "Get-WinEvent -LogName ' . $logName . ' -MaxEvents ' . $count . ' -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,@{n=\'Message\';e={$_.Message.Substring(0,[Math]::Min(500,$_.Message.Length))}} | ConvertTo-Json"';
             }
             
-            if ($output) {
+            Log::debug("Executing: {$psCommand}");
+            
+            $output = shell_exec($psCommand . ' 2>&1');
+            
+            Log::debug("PowerShell output length: " . strlen($output ?? ''));
+            Log::debug("PowerShell output preview: " . substr($output ?? '', 0, 200));
+            
+            if ($output && strlen($output) > 2) {
                 $events = json_decode($output, true);
+                
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    Log::debug("JSON decode error: " . json_last_error_msg());
+                    Log::debug("Raw output: " . substr($output, 0, 500));
+                    return $logs;
+                }
+                
                 if (is_array($events)) {
-                    // Handle single event (not array)
+                    // Handle single event (PowerShell returns object not array for single result)
                     if (isset($events['TimeCreated'])) {
                         $events = [$events];
                     }
@@ -363,6 +355,8 @@ class DesktopLogCollector
                         $logs[] = $this->parseWindowsEvent($event);
                     }
                 }
+            } else {
+                Log::debug("No output from PowerShell command");
             }
         } catch (\Exception $e) {
             Log::warning("Failed to collect Windows Event Log: " . $e->getMessage());
