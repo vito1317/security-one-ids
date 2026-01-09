@@ -174,36 +174,59 @@ class DesktopSecurityScan extends Command
             $this->newLine();
             $this->info('📤 Sending report to WAF Hub...');
             
-            $alertData = [
-                'type' => 'desktop_security_scan',
-                'platform' => $collector->getPlatform(),
-                'summary' => $summary,
-                'brute_force' => $bruteForceResult,
-                'network' => $networkResult,
-                'timestamp' => now()->toIso8601String(),
-            ];
+            $alertsSent = 0;
             
-            // Determine severity
-            $severity = 'low';
-            if ($bruteForceResult['threat_detected'] || $networkResult['threat_detected']) {
-                $severity = 'high';
-                if ($bruteForceResult['threat_detected']) {
-                    foreach ($bruteForceResult['threats'] ?? [] as $threat) {
-                        if (($threat['severity'] ?? '') === 'critical') {
-                            $severity = 'critical';
-                            break;
-                        }
+            // Send individual alerts for each brute force threat
+            if ($bruteForceResult['threat_detected']) {
+                foreach ($bruteForceResult['threats'] ?? [] as $threat) {
+                    $alertData = [
+                        'source_ip' => $threat['ip'] ?? '0.0.0.0',
+                        'severity' => $threat['severity'] ?? 'high',
+                        'category' => 'brute_force',
+                        'log_type' => 'system',
+                        'detections' => "Brute force attack: {$threat['attempts']} failed login attempts",
+                        'raw_log' => json_encode([
+                            'platform' => $collector->getPlatform(),
+                            'attempts' => $threat['attempts'] ?? 0,
+                            'timestamp' => now()->toIso8601String(),
+                        ]),
+                    ];
+                    
+                    $response = $wafSync->syncAlert($alertData);
+                    if ($response && $response->successful()) {
+                        $alertsSent++;
                     }
                 }
             }
             
-            $alertData['severity'] = $severity;
+            // Send network threat alerts
+            if ($networkResult['threat_detected']) {
+                foreach ($networkResult['suspicious_connections'] ?? [] as $suspicious) {
+                    $conn = $suspicious['connection'] ?? [];
+                    $alertData = [
+                        'source_ip' => $conn['remote'] ?? $conn['remote_ip'] ?? '0.0.0.0',
+                        'severity' => 'medium',
+                        'category' => 'suspicious_network',
+                        'log_type' => 'system',
+                        'detections' => $suspicious['reason'] ?? 'Suspicious network activity',
+                        'raw_log' => json_encode([
+                            'platform' => $collector->getPlatform(),
+                            'connection' => $conn,
+                            'timestamp' => now()->toIso8601String(),
+                        ]),
+                    ];
+                    
+                    $response = $wafSync->syncAlert($alertData);
+                    if ($response && $response->successful()) {
+                        $alertsSent++;
+                    }
+                }
+            }
             
-            $response = $wafSync->syncAlert($alertData);
-            if ($response && $response->successful()) {
-                $this->info('✅ Report sent');
+            if ($alertsSent > 0) {
+                $this->info("✅ {$alertsSent} alert(s) sent");
             } else {
-                $this->warn('⚠️  Report sync failed');
+                $this->warn('⚠️  No alerts sent (no valid threats or sync failed)');
             }
         }
         
