@@ -55,6 +55,22 @@ class DesktopSecurityScan extends Command
                     $this->line("    > " . $sample);
                 }
             }
+            
+            // Show samples of successful_login to verify correctness
+            if (!empty($samples['successful_login'])) {
+                $this->info("  Sample successful_login logs:");
+                foreach (array_slice($samples['successful_login'], 0, 3) as $sample) {
+                    $this->line("    > " . $sample);
+                }
+            }
+            
+            // Show samples of failed_login to verify correctness
+            if (!empty($samples['failed_login'])) {
+                $this->warn("  Sample failed_login logs:");
+                foreach (array_slice($samples['failed_login'], 0, 3) as $sample) {
+                    $this->line("    > " . $sample);
+                }
+            }
         }
         
         // Collect security summary
