@@ -349,6 +349,7 @@ class WafSyncService
 
         try {
             $response = Http::timeout(10)
+                ->acceptJson()
                 ->withToken($this->agentToken)
                 ->post("{$this->wafUrl}/api/ids/alerts", [
                     'agent_id' => $this->getAgentId(),
