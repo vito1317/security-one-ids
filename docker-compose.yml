@@ -20,9 +20,17 @@ services:
       - ./database:/var/www/html/database
       - ./storage:/var/www/html/storage
       # Mount host log directories for monitoring (read-only)
+      # Web server logs
       - /var/log/nginx:/var/log/host-nginx:ro
       - /var/log/apache2:/var/log/host-apache2:ro
       - /var/log/httpd:/var/log/host-httpd:ro
+      # System logs (for desktop/personal computer monitoring)
+      - /var/log/auth.log:/var/log/host-auth.log:ro
+      - /var/log/syslog:/var/log/host-syslog:ro
+      - /var/log/secure:/var/log/host-secure:ro
+      - /var/log/messages:/var/log/host-messages:ro
+      # UFW Firewall logs
+      - /var/log/ufw.log:/var/log/host-ufw.log:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

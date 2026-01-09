@@ -35,6 +35,7 @@ class WafSyncService
                 'ip_address' => $this->getPublicIp(),
                 'hostname' => gethostname(),
                 'version' => config('app.version', '1.0.0'),
+                'platform' => $this->detectPlatform(),
                 'system_info' => $this->getSystemInfo(),
             ]);
 
@@ -451,5 +452,27 @@ class WafSyncService
             ]);
             return null;
         }
+    }
+
+    /**
+     * Detect the current platform
+     */
+    private function detectPlatform(): string
+    {
+        // Check if running in Docker (likely server deployment)
+        if (file_exists('/.dockerenv') || file_exists('/run/.containerenv')) {
+            return 'server';
+        }
+        
+        if (stripos(PHP_OS, 'WIN') === 0) {
+            return 'windows';
+        } elseif (stripos(PHP_OS, 'Darwin') !== false) {
+            return 'macos';
+        }
+        
+        // Check if it's a desktop Linux vs server
+        $isDesktop = getenv('DISPLAY') || getenv('WAYLAND_DISPLAY') || file_exists('/usr/share/xsessions');
+        
+        return $isDesktop ? 'desktop' : 'linux';
     }
 }
