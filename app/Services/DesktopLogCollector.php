@@ -378,9 +378,10 @@ class DesktopLogCollector
             // Build PowerShell script as a file for more reliable execution
             if ($logName === 'Security') {
                 // Get specifically login/failure events to avoid noise from other security events
+                // Aggressively replace newlines with spaces to ensure single-line JSON for PHP regex
                 $psScript = <<<'PS'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$events = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625} -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object @{N='TimeCreated';E={$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')}}, Id, @{N='Msg';E={$_.Message.Substring(0,[Math]::Min(1000,$_.Message.Length))}}
+$events = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625} -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object @{N='TimeCreated';E={$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')}}, Id, @{N='Msg';E={$_.Message.Replace("`r", " ").Replace("`n", " ").Substring(0,[Math]::Min(1000,$_.Message.Length))}}
 if ($events) { $events | ConvertTo-Json -Compress } else { Write-Output '[]' }
 PS;
                 $psScript = sprintf($psScript, $count);
@@ -475,6 +476,7 @@ PS;
         switch ($eventId) {
             case 4625:
                 $entry['type'] = 'failed_login';
+                // More robust regex allowing for whitespace variations
                 if (preg_match('/Account Name:\s+(\S+)/i', $message, $m)) {
                     $entry['user'] = $m[1];
                 }
@@ -485,9 +487,14 @@ PS;
                 
             case 4624:
                 $entry['type'] = 'successful_login';
-                if (preg_match('/Account Name:\s+(\S+)/i', $message, $m)) {
+                // Pattern often appears twice (Target/Subject), we want the Target (second occurrence usually, or explicit New Logon)
+                // Using a more specific pattern for New Logon to avoid capturing the machine account
+                if (preg_match('/New Logon:.*?Account Name:\s+(\S+)/is', $message, $m)) {
+                    $entry['user'] = $m[1];
+                } elseif (preg_match('/Account Name:\s+(\S+)/i', $message, $m)) {
                     $entry['user'] = $m[1];
                 }
+                
                 if (preg_match('/Source Network Address:\s+(\S+)/i', $message, $m)) {
                     $entry['ip'] = $m[1];
                 }
