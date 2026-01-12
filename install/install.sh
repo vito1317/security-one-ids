@@ -192,17 +192,48 @@ if [ -f "$EXISTING_ENV" ] && [ -z "$WAF_HUB_URL" ] && [ -z "$AGENT_TOKEN" ]; the
     echo -e "${GREEN}✅ Using existing configuration${NC}"
 fi
 
-# Download IDS Agent
+# Download IDS Agent using git clone (allows git pull for updates)
 echo -e "\n${CYAN}📥 Downloading Security One IDS Agent...${NC}"
-cd /tmp
-rm -rf security-one-ids-main security-one-ids.zip
 
-curl -fsSL -o security-one-ids.zip https://github.com/vito1317/security-one-ids/archive/refs/heads/main.zip
-unzip -q security-one-ids.zip
-cp -r security-one-ids-main/* "$INSTALL_DIR/"
-rm -rf security-one-ids-main security-one-ids.zip
-
-echo -e "${GREEN}✅ IDS Agent downloaded${NC}"
+# Check if git is available
+if command -v git &> /dev/null; then
+    # Backup existing .env if exists
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        cp "$INSTALL_DIR/.env" /tmp/security-one-ids-env-backup
+    fi
+    
+    # Remove old installation but keep data
+    rm -rf "$INSTALL_DIR/.git" "$INSTALL_DIR/app" "$INSTALL_DIR/config" "$INSTALL_DIR/routes" "$INSTALL_DIR/resources" 2>/dev/null
+    
+    # Clone or update repository
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        cd "$INSTALL_DIR"
+        git pull origin main
+    else
+        git clone --depth 1 https://github.com/vito1317/security-one-ids.git /tmp/security-one-ids-clone
+        cp -r /tmp/security-one-ids-clone/* "$INSTALL_DIR/"
+        cp -r /tmp/security-one-ids-clone/.git "$INSTALL_DIR/"
+        rm -rf /tmp/security-one-ids-clone
+    fi
+    
+    # Restore .env if was backed up
+    if [ -f /tmp/security-one-ids-env-backup ]; then
+        cp /tmp/security-one-ids-env-backup "$INSTALL_DIR/.env"
+        rm /tmp/security-one-ids-env-backup
+    fi
+    
+    echo -e "${GREEN}✅ IDS Agent downloaded via Git (supports updates)${NC}"
+else
+    # Fallback to zip download if git is not available
+    echo -e "${YELLOW}Git not found, using zip download (git pull won't work)${NC}"
+    cd /tmp
+    rm -rf security-one-ids-main security-one-ids.zip
+    curl -fsSL -o security-one-ids.zip https://github.com/vito1317/security-one-ids/archive/refs/heads/main.zip
+    unzip -q security-one-ids.zip
+    cp -r security-one-ids-main/* "$INSTALL_DIR/"
+    rm -rf security-one-ids-main security-one-ids.zip
+    echo -e "${GREEN}✅ IDS Agent downloaded${NC}"
+fi
 
 # Install Composer dependencies (skip scripts to avoid .env loading issues)
 echo -e "\n${CYAN}📦 Installing dependencies...${NC}"
