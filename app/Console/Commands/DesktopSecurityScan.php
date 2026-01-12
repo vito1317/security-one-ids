@@ -431,6 +431,12 @@ class DesktopSecurityScan extends Command
             
             // Send enhanced log threats (from macOS or Windows analysis)
             $enhancedAnalysisToSync = $macEnhancedAnalysis ?? null;
+            
+            // DEBUG: Check what we're working with
+            $threatCount = !empty($enhancedAnalysisToSync['threats']) ? count($enhancedAnalysisToSync['threats']) : 0;
+            $this->line("DEBUG: macEnhancedAnalysis set: " . ($enhancedAnalysisToSync !== null ? 'yes' : 'no'));
+            $this->line("DEBUG: Threat count for sync: " . $threatCount);
+            
             if ($enhancedAnalysisToSync && !empty($enhancedAnalysisToSync['threats'])) {
                 $this->info('📤 Sending enhanced log threats...');
                 foreach ($enhancedAnalysisToSync['threats'] as $threat) {
