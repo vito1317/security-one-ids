@@ -88,12 +88,74 @@ fi
 PHP_VERSION=$(php -r "echo PHP_VERSION;")
 echo -e "${GREEN}✅ PHP $PHP_VERSION installed${NC}"
 
-# Check Composer
 if ! command -v composer &> /dev/null; then
     echo -e "${YELLOW}Installing Composer...${NC}"
     curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 fi
 echo -e "${GREEN}✅ Composer installed${NC}"
+
+# ClamAV Installation Function
+install_clamav() {
+    echo -e "\n${CYAN}🛡️  Installing ClamAV Antivirus...${NC}"
+    
+    if [ "$OS" = "macos" ]; then
+        # macOS - use Homebrew
+        if command -v brew &> /dev/null; then
+            # Run brew as the original user (not root)
+            ORIGINAL_USER="${SUDO_USER:-$USER}"
+            sudo -u "$ORIGINAL_USER" brew install clamav 2>/dev/null || brew install clamav
+            
+            # Configure freshclam
+            CLAMAV_CONF_DIR="/opt/homebrew/etc/clamav"
+            if [ ! -d "$CLAMAV_CONF_DIR" ]; then
+                CLAMAV_CONF_DIR="/usr/local/etc/clamav"
+            fi
+            
+            if [ -f "$CLAMAV_CONF_DIR/freshclam.conf.sample" ] && [ ! -f "$CLAMAV_CONF_DIR/freshclam.conf" ]; then
+                cp "$CLAMAV_CONF_DIR/freshclam.conf.sample" "$CLAMAV_CONF_DIR/freshclam.conf"
+                sed -i '' 's/^Example/#Example/' "$CLAMAV_CONF_DIR/freshclam.conf" 2>/dev/null || true
+            fi
+        else
+            echo -e "${RED}Homebrew not found. Please install Homebrew first or install ClamAV manually.${NC}"
+            return 1
+        fi
+    elif [ "$OS" = "debian" ]; then
+        apt-get update -qq
+        apt-get install -y clamav clamav-daemon
+        systemctl stop clamav-freshclam 2>/dev/null || true
+    elif [ "$OS" = "redhat" ]; then
+        if command -v dnf &> /dev/null; then
+            dnf install -y clamav clamav-update clamd
+        else
+            yum install -y clamav clamav-update clamd
+        fi
+    else
+        echo -e "${YELLOW}Please install ClamAV manually for your distribution.${NC}"
+        return 1
+    fi
+    
+    # Update virus definitions
+    echo -e "${CYAN}📥 Updating virus definitions...${NC}"
+    freshclam 2>/dev/null || true
+    
+    echo -e "${GREEN}✅ ClamAV installed and updated${NC}"
+    return 0
+}
+
+# Ask about ClamAV installation
+INSTALL_CLAMAV="${INSTALL_CLAMAV:-}"
+if [ -z "$INSTALL_CLAMAV" ]; then
+    echo -e "\n${YELLOW}🛡️  Install ClamAV Antivirus? (Optional add-on)${NC}"
+    echo -e "   ClamAV can scan your system for malware and viruses."
+    read -p "   Install ClamAV? [y/N]: " CLAMAV_CHOICE
+    if [[ "$CLAMAV_CHOICE" =~ ^[Yy]$ ]]; then
+        INSTALL_CLAMAV="yes"
+    fi
+fi
+
+if [ "$INSTALL_CLAMAV" = "yes" ]; then
+    install_clamav || echo -e "${YELLOW}⚠️  ClamAV installation skipped${NC}"
+fi
 
 # Create directories
 echo -e "\n${CYAN}📂 Creating directories...${NC}"
