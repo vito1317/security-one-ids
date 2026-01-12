@@ -357,8 +357,16 @@ class DesktopSecurityScan extends Command
         // Check if we have enhanced log threats to report
         $hasEnhancedThreats = !empty($macEnhancedAnalysis['threats']);
         
+        // DEBUG: Trace sync condition
+        $this->warn("DEBUG SYNC: macEnhancedAnalysis is " . ($macEnhancedAnalysis === null ? 'NULL' : 'SET'));
+        $this->warn("DEBUG SYNC: hasEnhancedThreats = " . ($hasEnhancedThreats ? 'TRUE' : 'FALSE'));
+        if ($macEnhancedAnalysis !== null && isset($macEnhancedAnalysis['threats'])) {
+            $this->warn("DEBUG SYNC: threats array count = " . count($macEnhancedAnalysis['threats']));
+        }
+        
         // Send report to WAF Hub (always sync if threats detected, or if --report flag)
         $shouldReport = $this->option('report') || $bruteForceResult['threat_detected'] || $networkResult['threat_detected'] || $hasEnhancedThreats;
+        $this->warn("DEBUG SYNC: shouldReport = " . ($shouldReport ? 'TRUE' : 'FALSE'));
         
         if ($shouldReport) {
             $this->newLine();
