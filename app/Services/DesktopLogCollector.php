@@ -862,46 +862,31 @@ PS;
         $logs = [];
         
         try {
-            // Use simple single-process predicates that are more likely to work
-            $processes = ['kernel', 'launchd', 'configd', 'powerd', 'diskutil', 'fsck'];
+            // Use text-based parsing which is proven to work
+            // JSON parsing fails due to truncation issues
+            $processes = ['launchd', 'WindowServer'];
             
             foreach ($processes as $process) {
-                // Simple predicate with just process name
-                $cmd = "log show --predicate 'process == \"{$process}\"' --last {$minutes}m --style json 2>/dev/null | head -c 200000";
+                $cmd = "log show --predicate 'process == \"{$process}\"' --last 10m 2>/dev/null | head -100";
                 $output = shell_exec($cmd);
                 
-                if ($output && strlen($output) > 10) {
-                    $events = @json_decode($output, true);
-                    if (is_array($events) && !empty($events)) {
-                        Log::debug("macOS system log: process '{$process}' found " . count($events) . " events");
-                        foreach (array_slice($events, 0, 20) as $event) {
-                            $logs[] = $this->parseGenericMacOsEvent($event, 'system');
-                        }
-                        if (count($logs) >= 50) break;
-                    }
-                }
-            }
-            
-            // If still empty, try getting any recent system logs without predicate filter
-            if (empty($logs)) {
-                Log::debug("No process-specific logs found, trying general system log");
-                $cmd = "log show --last 5m --style json 2>/dev/null | head -c 300000";
-                $output = shell_exec($cmd);
-                
-                if ($output && strlen($output) > 10) {
-                    $events = @json_decode($output, true);
-                    if (is_array($events)) {
-                        Log::debug("General log show returned " . count($events) . " events");
-                        // Filter to system-related events only
-                        foreach (array_slice($events, 0, 100) as $event) {
-                            $proc = $event['processImagePath'] ?? $event['process'] ?? '';
-                            // Include system daemon processes
-                            if (preg_match('/(kernel|launchd|configd|powerd|System|daemon|coreaudiod|bluetoothd|systemstats)/i', $proc)) {
-                                $logs[] = $this->parseGenericMacOsEvent($event, 'system');
-                                if (count($logs) >= 50) break;
-                            }
+                if ($output && strlen($output) > 50) {
+                    $lines = explode("\n", $output);
+                    Log::debug("macOS system log: process '{$process}' returned " . count($lines) . " lines");
+                    
+                    foreach (array_slice($lines, 1, 50) as $line) { // Skip header
+                        if (trim($line) && strlen($line) > 20) {
+                            $logs[] = [
+                                'raw' => substr($line, 0, 300),
+                                'type' => 'system',
+                                'category' => 'system',
+                                'timestamp' => date('Y-m-d H:i:s'),
+                                'process' => $process,
+                                'level' => 'info',
+                            ];
                         }
                     }
+                    if (count($logs) >= 50) break;
                 }
             }
             
