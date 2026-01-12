@@ -799,19 +799,24 @@ PS;
         $logs = [];
         
         try {
-            // Use simple single-process predicates that are more likely to work
-            $processes = ['kernel', 'launchd', 'configd', 'powerd', 'diskutil', 'fsck'];
+            // Method 1: Try system-specific subsystems
+            $subsystems = [
+                'com.apple.launchd',
+                'com.apple.powermanagement',
+                'com.apple.SystemConfiguration',
+                'com.apple.xpc',
+                'com.apple.coreservices',
+            ];
             
-            foreach ($processes as $process) {
-                // Simple predicate with just process name
-                $cmd = "log show --predicate 'process == \"{$process}\"' --last {$minutes}m --style json 2>/dev/null | head -c 200000";
+            foreach ($subsystems as $subsystem) {
+                $cmd = "log show --predicate 'subsystem == \"{$subsystem}\"' --last {$minutes}m --style json 2>/dev/null | head -c 200000";
                 $output = shell_exec($cmd);
                 
                 if ($output && strlen($output) > 10) {
                     $events = @json_decode($output, true);
                     if (is_array($events) && !empty($events)) {
-                        Log::debug("macOS system log: process '{$process}' found " . count($events) . " events");
-                        foreach (array_slice($events, 0, 20) as $event) {
+                        Log::debug("macOS system log: subsystem '{$subsystem}' found " . count($events) . " events");
+                        foreach (array_slice($events, 0, 15) as $event) {
                             $logs[] = $this->parseGenericMacOsEvent($event, 'system');
                         }
                         if (count($logs) >= 50) break;
@@ -819,24 +824,39 @@ PS;
                 }
             }
             
-            // If still empty, try getting any recent system logs without predicate filter
+            // Method 2: Try specific system processes (not in firewall list)
             if (empty($logs)) {
-                Log::debug("No process-specific logs found, trying general system log");
-                $cmd = "log show --last 5m --style json 2>/dev/null | head -c 300000";
+                $processes = ['launchd', 'powerd', 'loginwindow', 'WindowServer', 'SystemUIServer', 'Finder'];
+                
+                foreach ($processes as $process) {
+                    $cmd = "log show --predicate 'process == \"{$process}\"' --last {$minutes}m --style json 2>/dev/null | head -c 150000";
+                    $output = shell_exec($cmd);
+                    
+                    if ($output && strlen($output) > 10) {
+                        $events = @json_decode($output, true);
+                        if (is_array($events) && !empty($events)) {
+                            Log::debug("macOS system log: process '{$process}' found " . count($events) . " events");
+                            foreach (array_slice($events, 0, 15) as $event) {
+                                $logs[] = $this->parseGenericMacOsEvent($event, 'system');
+                            }
+                            if (count($logs) >= 50) break;
+                        }
+                    }
+                }
+            }
+            
+            // Method 3: If still empty, try sender image path for kernel extensions
+            if (empty($logs)) {
+                Log::debug("Trying senderImagePath approach for system logs");
+                $cmd = "log show --predicate 'senderImagePath CONTAINS \"System\"' --last 10m --style json 2>/dev/null | head -c 200000";
                 $output = shell_exec($cmd);
                 
                 if ($output && strlen($output) > 10) {
                     $events = @json_decode($output, true);
                     if (is_array($events)) {
-                        Log::debug("General log show returned " . count($events) . " events");
-                        // Filter to system-related events only
-                        foreach (array_slice($events, 0, 100) as $event) {
-                            $proc = $event['processImagePath'] ?? $event['process'] ?? '';
-                            // Include system daemon processes
-                            if (preg_match('/(kernel|launchd|configd|powerd|System|daemon|coreaudiod|bluetoothd|systemstats)/i', $proc)) {
-                                $logs[] = $this->parseGenericMacOsEvent($event, 'system');
-                                if (count($logs) >= 50) break;
-                            }
+                        Log::debug("senderImagePath approach returned " . count($events) . " events");
+                        foreach (array_slice($events, 0, 50) as $event) {
+                            $logs[] = $this->parseGenericMacOsEvent($event, 'system');
                         }
                     }
                 }
