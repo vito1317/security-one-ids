@@ -368,87 +368,73 @@ class DesktopLogCollector
     }
     
     /**
-     * Collect Windows Event Log entries (PUBLIC for enhanced analysis)
+     * Collect Windows Event Log entries using PowerShell (Public for enhanced analysis)
      */
     public function collectWindowsEventLog(string $logName, int $count): array
     {
         $logs = [];
         
-        if ($this->platform !== 'windows') {
-            return [];
-        }
-        
         try {
-            // Method 1: Try wevtutil first (more reliable in some environments)
-            Log::debug("Windows log collection: trying wevtutil for {$logName}");
-            $wevtCmd = sprintf('wevtutil qe %s /c:%d /rd:true /f:text 2>&1', $logName, min($count, 50));
-            $wevtOutput = shell_exec($wevtCmd);
-            
-            if ($wevtOutput && strlen($wevtOutput) > 100 && strpos($wevtOutput, 'Error') === false) {
-                Log::debug("wevtutil returned " . strlen($wevtOutput) . " bytes");
-                
-                // Parse wevtutil text output - events are separated by blank lines
-                $eventBlocks = preg_split('/\n\s*\n/', $wevtOutput, -1, PREG_SPLIT_NO_EMPTY);
-                
-                foreach (array_slice($eventBlocks, 0, $count) as $eventText) {
-                    if (strlen(trim($eventText)) > 20) {
-                        $eventId = 0;
-                        $timeCreated = date('Y-m-d H:i:s');
-                        
-                        // Extract Event ID from text
-                        if (preg_match('/Event ID:\s*(\d+)/i', $eventText, $m) ||
-                            preg_match('/EventID[:\s]+(\d+)/i', $eventText, $m)) {
-                            $eventId = (int)$m[1];
-                        }
-                        
-                        // Extract Date/Time
-                        if (preg_match('/Date:\s*(.+)/im', $eventText, $m) ||
-                            preg_match('/TimeCreated\s*\[\s*SystemTime\s*\]:\s*(.+)/i', $eventText, $m)) {
-                            $timeCreated = trim($m[1]);
-                        }
-                        
-                        $logs[] = $this->parseWindowsEvent([
-                            'Id' => $eventId,
-                            'TimeCreated' => $timeCreated,
-                            'Message' => substr($eventText, 0, 500),
-                        ]);
-                    }
-                }
-                Log::debug("wevtutil parsed " . count($logs) . " events from {$logName}");
+            // Build PowerShell script as a file for more reliable execution
+            if ($logName === 'Security') {
+                // Get specifically login/failure events to avoid noise from other security events
+                $psScript = <<<'PS'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$events = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625} -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object @{N='TimeCreated';E={$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')}}, Id, @{N='Msg';E={$_.Message.Substring(0,[Math]::Min(1000,$_.Message.Length))}}
+if ($events) { $events | ConvertTo-Json -Compress } else { Write-Output '[]' }
+PS;
+                $psScript = sprintf($psScript, $count);
+            } else {
+                $psScript = sprintf(
+                    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-WinEvent -LogName "%s" -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object @{N=\'TimeCreated\';E={$_.TimeCreated.ToString(\'yyyy-MM-dd HH:mm:ss\')}}, Id, Message | ConvertTo-Json -Compress',
+                    $logName,
+                    $count
+                );
             }
             
-            // Method 2: Try PowerShell if wevtutil didn't work
-            if (empty($logs)) {
-                Log::debug("Trying PowerShell for {$logName}");
+            // Write script to temp file
+            $scriptFile = sys_get_temp_dir() . '\\get_events_' . time() . '.ps1';
+            file_put_contents($scriptFile, $psScript);
+            
+            Log::debug("PowerShell script file: {$scriptFile}");
+            
+            // Execute the script file
+            $psCommand = sprintf(
+                'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%s"',
+                $scriptFile
+            );
+            
+            Log::debug("Executing: {$psCommand}");
+            
+            // Use exec for better output handling on Windows
+            $output = [];
+            $returnCode = 0;
+            exec($psCommand . ' 2>&1', $output, $returnCode);
+            
+            $outputStr = implode("\n", $output);
+            
+            Log::debug("PowerShell return code: {$returnCode}");
+            
+            // Clean up temp files
+            @unlink($scriptFile);
+            
+            if ($outputStr && strlen(trim($outputStr)) > 2 && $outputStr !== '[]') {
+                $events = json_decode($outputStr, true);
                 
-                // Use pipe-delimited output for easier parsing
-                $psCmd = sprintf(
-                    'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-WinEvent -LogName %s -MaxEvents %d -ErrorAction SilentlyContinue | ForEach-Object { $_.Id.ToString() + \\\"~\\\" + $_.TimeCreated.ToString() + \\\"~\\\" + $_.Message.Substring(0,[Math]::Min(300,$_.Message.Length)).Replace(\\\"`n\\\",\\\" \\\") }"',
-                    $logName,
-                    min($count, 30)
-                );
-                
-                $psOutput = shell_exec($psCmd . ' 2>&1');
-                Log::debug("PowerShell output length: " . strlen($psOutput ?? ''));
-                
-                if ($psOutput && strlen($psOutput) > 10) {
-                    $lines = array_filter(explode("\n", trim($psOutput)));
-                    foreach ($lines as $line) {
-                        $parts = explode('~', $line, 3);
-                        if (count($parts) >= 2 && is_numeric($parts[0])) {
-                            $logs[] = $this->parseWindowsEvent([
-                                'Id' => (int)$parts[0],
-                                'TimeCreated' => $parts[1] ?? date('Y-m-d H:i:s'),
-                                'Message' => $parts[2] ?? '',
-                            ]);
-                        }
+                if (json_last_error() === JSON_ERROR_NONE && is_array($events)) {
+                    // Handle single event case
+                    if (isset($events['TimeCreated'])) {
+                        $events = [$events];
                     }
-                    Log::debug("PowerShell parsed " . count($logs) . " events from {$logName}");
+                    
+                    foreach ($events as $event) {
+                        $logs[] = $this->parseWindowsEvent($event);
+                    }
                 }
             }
             
         } catch (\Exception $e) {
-            Log::warning("Failed to collect Windows Event Log {$logName}: " . $e->getMessage());
+            Log::warning("Failed to collect Windows Event Log: " . $e->getMessage());
         }
         
         return $logs;
