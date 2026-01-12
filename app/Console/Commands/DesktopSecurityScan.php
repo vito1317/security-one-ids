@@ -72,6 +72,9 @@ class DesktopSecurityScan extends Command
                 }
             }
             
+            // Initialize enhanced analysis variable for cross-platform sync
+            $macEnhancedAnalysis = null;
+            
             // macOS Enhanced Log Collection
             if ($collector->getPlatform() === 'macos') {
                 $this->newLine();
@@ -100,6 +103,7 @@ class DesktopSecurityScan extends Command
                 ];
                 
                 // Perform AI analysis on enhanced logs
+                $enhancedAnalysis = null;
                 if ($this->option('full')) {
                     $this->newLine();
                     $this->info('🤖 Analyzing enhanced logs with AI...');
@@ -144,6 +148,9 @@ class DesktopSecurityScan extends Command
                         }
                     }
                 }
+                
+                // Store for later sync
+                $macEnhancedAnalysis = $enhancedAnalysis;
                 
                 // Show samples if in very verbose mode
                 if ($this->output->isVeryVerbose()) {
@@ -190,6 +197,7 @@ class DesktopSecurityScan extends Command
                 ];
                 
                 // Perform AI analysis on enhanced logs
+                $enhancedAnalysis = null;
                 if ($this->option('full')) {
                     $this->newLine();
                     $this->info('🤖 Analyzing enhanced logs with AI...');
@@ -234,6 +242,9 @@ class DesktopSecurityScan extends Command
                         }
                     }
                 }
+                
+                // Store for later sync (Windows uses same variable name)
+                $macEnhancedAnalysis = $enhancedAnalysis;
                 
                 // Show samples if in very verbose mode
                 if ($this->output->isVeryVerbose()) {
@@ -414,6 +425,40 @@ class DesktopSecurityScan extends Command
                     $response = $wafSync->syncAlert($alertData);
                     if ($response && $response->successful()) {
                         $alertsSent++;
+                    }
+                }
+            }
+            
+            // Send enhanced log threats (from macOS or Windows analysis)
+            $enhancedAnalysisToSync = $macEnhancedAnalysis ?? null;
+            if ($enhancedAnalysisToSync && !empty($enhancedAnalysisToSync['threats'])) {
+                $this->info('📤 Sending enhanced log threats...');
+                foreach ($enhancedAnalysisToSync['threats'] as $threat) {
+                    $sourceIp = $threat['ip'] ?? '127.0.0.1';
+                    if (!filter_var($sourceIp, FILTER_VALIDATE_IP)) {
+                        $sourceIp = '127.0.0.1';
+                    }
+                    
+                    $alertData = [
+                        'source_ip' => $sourceIp,
+                        'severity' => $threat['severity'] ?? 'medium',
+                        'category' => $threat['type'] ?? 'enhanced_log_threat',
+                        'log_type' => $threat['source'] ?? 'system',
+                        'detections' => $threat['description'] ?? 'Enhanced log threat detected',
+                        'raw_log' => json_encode([
+                            'platform' => $collector->getPlatform(),
+                            'threat_type' => $threat['type'],
+                            'details' => array_diff_key($threat, array_flip(['description', 'type', 'severity', 'source', 'ip'])),
+                            'timestamp' => now()->toIso8601String(),
+                        ]),
+                    ];
+                    
+                    $response = $wafSync->syncAlert($alertData);
+                    if ($response && $response->successful()) {
+                        $alertsSent++;
+                        if ($this->option('verbose')) {
+                            $this->info("   ✅ Enhanced threat synced: {$threat['type']}");
+                        }
                     }
                 }
             }
