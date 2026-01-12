@@ -260,11 +260,13 @@ class DesktopAiAnalyzer
         // Build comprehensive analysis
         $threats = array_merge($firewallThreats, $securityViolations, $appCrashes);
         
-        // Use AI for deeper analysis if we have enough logs
+        // Use AI for deeper analysis if we have any logs
         $totalLogs = array_sum(array_map('count', $allLogs));
         $aiAnalysis = null;
         
-        if ($totalLogs > 10) {
+        // Always perform AI analysis if there are logs (removed threshold)
+        if ($totalLogs > 0) {
+            Log::info("Performing AI log analysis on {$totalLogs} logs using {$this->ollamaUrl}");
             $aiAnalysis = $this->performAiLogAnalysis($logSummary);
         }
         

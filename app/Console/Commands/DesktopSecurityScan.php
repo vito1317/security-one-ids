@@ -29,9 +29,9 @@ class DesktopSecurityScan extends Command
         $this->info("Platform: {$collector->getPlatform()}");
         $this->newLine();
         
-        // Debug: Test raw log collection
-        if ($this->output->isVerbose() || $this->output->isVeryVerbose()) {
-            $this->warn('🔧 DEBUG: Testing raw log collection...');
+        // Enhanced log collection: Run when --full option is used OR verbose mode
+        if ($this->option('full') || $this->output->isVerbose() || $this->output->isVeryVerbose()) {
+            $this->info('📋 Collecting enhanced logs for AI analysis...');
             $authLogs = $collector->collectAuthLogs(200);
             $this->info("  Auth logs collected: " . count($authLogs));
             
