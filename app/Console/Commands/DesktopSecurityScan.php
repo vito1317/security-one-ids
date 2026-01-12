@@ -165,6 +165,88 @@ class DesktopSecurityScan extends Command
                     }
                 }
             }
+            
+            // Windows Enhanced Log Collection
+            if ($collector->getPlatform() === 'windows') {
+                $this->newLine();
+                $this->info('📋 Windows Enhanced Log Collection:');
+                
+                // Collect Windows event logs
+                $securityLogs = $collector->collectWindowsEventLog('Security', 100);
+                $this->line("  🔐 Security logs: " . count($securityLogs));
+                
+                $systemLogs = $collector->collectWindowsEventLog('System', 50);
+                $this->line("  📦 System logs: " . count($systemLogs));
+                
+                $appLogs = $collector->collectWindowsEventLog('Application', 50);
+                $this->line("  📱 Application logs: " . count($appLogs));
+                
+                // Store for AI analysis
+                $enhancedLogs = [
+                    'auth' => $authLogs,
+                    'security' => $securityLogs,
+                    'system' => $systemLogs,
+                    'applications' => $appLogs,
+                ];
+                
+                // Perform AI analysis on enhanced logs
+                if ($this->option('full')) {
+                    $this->newLine();
+                    $this->info('🤖 Analyzing enhanced logs with AI...');
+                    $enhancedAnalysis = $analyzer->analyzeEnhancedLogs($enhancedLogs);
+                    
+                    if ($enhancedAnalysis['analyzed']) {
+                        $this->line("  📊 Total logs analyzed: " . $enhancedAnalysis['total_logs_analyzed']);
+                        
+                        // Display threats detected
+                        if (!empty($enhancedAnalysis['threats'])) {
+                            $this->newLine();
+                            $this->error('  ⚠️ THREATS DETECTED FROM ENHANCED LOGS:');
+                            foreach ($enhancedAnalysis['threats'] as $threat) {
+                                $severity = strtoupper($threat['severity'] ?? 'unknown');
+                                $this->warn("    [{$severity}] {$threat['type']}: {$threat['description']}");
+                            }
+                        } else {
+                            $this->info('  ✅ No immediate threats detected in enhanced logs');
+                        }
+                        
+                        // Display AI analysis if available
+                        if (!empty($enhancedAnalysis['ai_analysis'])) {
+                            $ai = $enhancedAnalysis['ai_analysis'];
+                            $this->newLine();
+                            $this->info('  🧠 AI Security Assessment:');
+                            $this->line("    Threat Level: " . ($ai['threat_level'] ?? 'unknown'));
+                            $this->line("    Confidence: " . ($ai['confidence'] ?? 0) . "%");
+                            
+                            if (!empty($ai['findings'])) {
+                                $this->line("    Findings:");
+                                foreach (array_slice($ai['findings'], 0, 5) as $finding) {
+                                    $this->line("      • [{$finding['severity']}] {$finding['description']}");
+                                }
+                            }
+                            
+                            if (!empty($ai['recommendations'])) {
+                                $this->line("    Recommendations:");
+                                foreach (array_slice($ai['recommendations'], 0, 3) as $rec) {
+                                    $this->line("      → {$rec}");
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Show samples if in very verbose mode
+                if ($this->output->isVeryVerbose()) {
+                    if (!empty($securityLogs)) {
+                        $this->info("  Sample security log:");
+                        $this->line("    > " . substr($securityLogs[0]['raw'] ?? '', 0, 150));
+                    }
+                    if (!empty($systemLogs)) {
+                        $this->info("  Sample system log:");
+                        $this->line("    > " . substr($systemLogs[0]['raw'] ?? '', 0, 150));
+                    }
+                }
+            }
         }
         
         // Collect security summary
