@@ -26,14 +26,29 @@ class AiEngine
         $this->ollamaModel = env('OLLAMA_MODEL', 'sentinel-security');
         $this->sensitivity = env('AI_SENSITIVITY', 'medium');
         $this->timeout = (int) env('AI_TIMEOUT', 15);
+        $this->enabled = filter_var(env('AI_DETECTION_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
         
         // Override with synced settings from WAF Hub if available
-        $settingsPath = storage_path('app/ids_settings.json');
-        if (file_exists($settingsPath)) {
-            $settings = json_decode(file_get_contents($settingsPath), true) ?: [];
-            $this->enabled = filter_var($settings['ai_detection_enabled'] ?? env('AI_DETECTION_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
-        } else {
-            $this->enabled = filter_var(env('AI_DETECTION_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
+        try {
+            $wafSync = app(\App\Services\WafSyncService::class);
+            $remoteConfig = $wafSync->getCachedConfig();
+            
+            if (!empty($remoteConfig)) {
+                if (isset($remoteConfig['ollama']['url'])) {
+                    $this->ollamaUrl = $remoteConfig['ollama']['url'];
+                }
+                if (isset($remoteConfig['ollama']['model'])) {
+                    $this->ollamaModel = $remoteConfig['ollama']['model'];
+                }
+                if (isset($remoteConfig['ai_detection_enabled'])) {
+                    $this->enabled = filter_var($remoteConfig['ai_detection_enabled'], FILTER_VALIDATE_BOOLEAN);
+                } elseif (isset($remoteConfig['log_sync_enabled'])) {
+                    // Fallback to log_sync_enabled if specifically not set
+                    $this->enabled = filter_var($remoteConfig['log_sync_enabled'], FILTER_VALIDATE_BOOLEAN);
+                }
+            }
+        } catch (\Exception $e) {
+            Log::debug('Failed to load remote configuration for AiEngine, using defaults: ' . $e->getMessage());
         }
     }
 

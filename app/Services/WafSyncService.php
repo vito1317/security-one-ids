@@ -477,6 +477,47 @@ class WafSyncService
     }
 
     /**
+     * Fetch agent configuration from WAF Hub
+     */
+    public function fetchAgentConfig(): ?array
+    {
+        if (!$this->isConfigured()) {
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(10)
+                ->withToken($this->agentToken)
+                ->get("{$this->wafUrl}/api/ids/agents/config");
+
+            if ($response->successful()) {
+                $config = $response->json()['config'] ?? [];
+                // Cache for 1 hour
+                cache()->put('waf_agent_config', $config, now()->addHour());
+                Log::info('Agent configuration fetched and cached from WAF Hub');
+                return $config;
+            }
+
+            Log::warning('Failed to fetch agent config', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+            return null;
+        } catch (\Exception $e) {
+            Log::error('Exception during agent config fetch: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Get cached agent configuration
+     */
+    public function getCachedConfig(): array
+    {
+        return cache()->get('waf_agent_config') ?? $this->fetchAgentConfig() ?? [];
+    }
+
+    /**
      * Detect the current platform
      */
     private function detectPlatform(): string

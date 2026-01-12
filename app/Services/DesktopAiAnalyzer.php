@@ -25,6 +25,28 @@ class DesktopAiAnalyzer
         $this->ollamaModel = env('OLLAMA_MODEL', 'sentinel-security');
         $this->timeout = (int) env('AI_TIMEOUT', 30);
         $this->enabled = filter_var(env('AI_DETECTION_ENABLED', true), FILTER_VALIDATE_BOOLEAN);
+        
+        // Override with synced settings from WAF Hub if available
+        try {
+            $wafSync = app(\App\Services\WafSyncService::class);
+            $remoteConfig = $wafSync->getCachedConfig();
+            
+            if (!empty($remoteConfig)) {
+                if (isset($remoteConfig['ollama']['url'])) {
+                    $this->ollamaUrl = $remoteConfig['ollama']['url'];
+                }
+                if (isset($remoteConfig['ollama']['model'])) {
+                    $this->ollamaModel = $remoteConfig['ollama']['model'];
+                }
+                if (isset($remoteConfig['ai_detection_enabled'])) {
+                    $this->enabled = filter_var($remoteConfig['ai_detection_enabled'], FILTER_VALIDATE_BOOLEAN);
+                } elseif (isset($remoteConfig['log_sync_enabled'])) {
+                    $this->enabled = filter_var($remoteConfig['log_sync_enabled'], FILTER_VALIDATE_BOOLEAN);
+                }
+            }
+        } catch (\Exception $e) {
+            Log::debug('Failed to load remote configuration for DesktopAiAnalyzer, using defaults: ' . $e->getMessage());
+        }
     }
     
     /**
