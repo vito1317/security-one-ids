@@ -763,12 +763,18 @@ class DesktopLogCollector
         $logs = [];
         
         try {
-            // System events from kernel, launchd, and critical system processes
+            // System events - broader predicates to capture more system activity
             $predicates = [
-                'process == "kernel"',
-                'process == "launchd"',
-                'messageType == 16 OR messageType == 17', // Error and Fault levels
-                'subsystem == "com.apple.system"',
+                // Any kernel or launchd process events
+                'process == "kernel" OR process == "launchd"',
+                // System daemon events
+                'process == "configd" OR process == "notifyd" OR process == "distnoted"',
+                // Power management, sleep/wake events
+                'subsystem == "com.apple.powermanagement" OR subsystem == "com.apple.sleep"',
+                // Disk and filesystem events
+                'subsystem == "com.apple.DiskArbitration" OR process == "diskutil"',
+                // Any error or fault level messages (cross-subsystem)
+                'messageType == 16 OR messageType == 17',
             ];
             
             foreach ($predicates as $predicate) {
@@ -847,11 +853,18 @@ class DesktopLogCollector
         $logs = [];
         
         try {
-            // Application Level Firewall events
+            // Firewall and network security events - broader predicates
             $predicates = [
-                'subsystem == "com.apple.alf"',
-                'process == "socketfilterfw"',
-                'eventMessage CONTAINS "firewall" OR eventMessage CONTAINS "deny" OR eventMessage CONTAINS "block"',
+                // Application Level Firewall
+                'subsystem == "com.apple.alf" OR process == "socketfilterfw"',
+                // Network filter and connection events
+                'subsystem == "com.apple.networkextension" OR process == "nesessionmanager"',
+                // TCP/IP and network stack events
+                'process == "mDNSResponder" OR process == "configd"',
+                // Packet filter and firewall rules
+                'eventMessage CONTAINS "firewall" OR eventMessage CONTAINS "deny" OR eventMessage CONTAINS "block" OR eventMessage CONTAINS "accept"',
+                // Connection filtering
+                'eventMessage CONTAINS "connection" OR eventMessage CONTAINS "network"',
             ];
             
             foreach ($predicates as $predicate) {
