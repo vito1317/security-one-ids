@@ -345,15 +345,21 @@ class ClamavService
         try {
             $wafUrl = rtrim(config('ids.waf_url') ?? env('WAF_URL', ''), '/');
             
-            // Use same token retrieval pattern as WafSyncService
-            $cachedToken = cache()->get('waf_agent_token');
-            $envToken = config('ids.agent_token') ?? env('AGENT_TOKEN', '');
-            $token = !empty($cachedToken) ? $cachedToken : $envToken;
+            // Read token directly from .env to avoid cache/database issues
+            $envPath = base_path('.env');
+            $token = env('AGENT_TOKEN', '');
+            
+            // Also try reading .env file directly if env() doesn't work
+            if (empty($token) && file_exists($envPath)) {
+                $envContent = file_get_contents($envPath);
+                if (preg_match('/^AGENT_TOKEN=(.*)$/m', $envContent, $matches)) {
+                    $token = trim($matches[1], '"\'');
+                }
+            }
 
             Log::info('ClamAV reportToHub: attempting to report status', [
                 'waf_url' => $wafUrl,
                 'has_token' => !empty($token),
-                'token_source' => !empty($cachedToken) ? 'cache' : 'env',
             ]);
 
             if (empty($wafUrl) || empty($token)) {
