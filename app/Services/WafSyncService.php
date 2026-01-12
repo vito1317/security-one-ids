@@ -349,7 +349,11 @@ class WafSyncService
 
         try {
             $response = Http::timeout(10)
-                ->acceptJson()
+                ->withHeaders([
+                    'Accept' => 'application/json',
+                    'Content-Type' => 'application/json',
+                    'X-Requested-With' => 'XMLHttpRequest',  // Makes Laravel treat as AJAX
+                ])
                 ->withToken($this->agentToken)
                 ->post("{$this->wafUrl}/api/ids/alerts", [
                     'agent_id' => $this->getAgentId(),
