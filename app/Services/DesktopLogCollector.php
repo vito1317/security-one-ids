@@ -799,27 +799,19 @@ PS;
         $logs = [];
         
         try {
-            // System events - broader predicates to capture more system activity
-            $predicates = [
-                // Any kernel or launchd process events
-                'process == "kernel" OR process == "launchd"',
-                // System daemon events
-                'process == "configd" OR process == "notifyd" OR process == "distnoted"',
-                // Power management, sleep/wake events
-                'subsystem == "com.apple.powermanagement" OR subsystem == "com.apple.sleep"',
-                // Disk and filesystem events
-                'subsystem == "com.apple.DiskArbitration" OR process == "diskutil"',
-                // Any error or fault level messages (cross-subsystem)
-                'messageType == 16 OR messageType == 17',
-            ];
+            // Use simple single-process predicates that are more likely to work
+            $processes = ['kernel', 'launchd', 'configd', 'powerd', 'diskutil', 'fsck'];
             
-            foreach ($predicates as $predicate) {
-                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null | head -c 500000");
+            foreach ($processes as $process) {
+                // Simple predicate with just process name
+                $cmd = "log show --predicate 'process == \"{$process}\"' --last {$minutes}m --style json 2>/dev/null | head -c 200000";
+                $output = shell_exec($cmd);
                 
                 if ($output && strlen($output) > 10) {
-                    $events = json_decode($output, true);
-                    if (is_array($events)) {
-                        foreach (array_slice($events, 0, 50) as $event) {
+                    $events = @json_decode($output, true);
+                    if (is_array($events) && !empty($events)) {
+                        Log::debug("macOS system log: process '{$process}' found " . count($events) . " events");
+                        foreach (array_slice($events, 0, 20) as $event) {
                             $logs[] = $this->parseGenericMacOsEvent($event, 'system');
                         }
                         if (count($logs) >= 50) break;
@@ -827,7 +819,30 @@ PS;
                 }
             }
             
-            Log::debug("macOS system logs collected: " . count($logs));
+            // If still empty, try getting any recent system logs without predicate filter
+            if (empty($logs)) {
+                Log::debug("No process-specific logs found, trying general system log");
+                $cmd = "log show --last 5m --style json 2>/dev/null | head -c 300000";
+                $output = shell_exec($cmd);
+                
+                if ($output && strlen($output) > 10) {
+                    $events = @json_decode($output, true);
+                    if (is_array($events)) {
+                        Log::debug("General log show returned " . count($events) . " events");
+                        // Filter to system-related events only
+                        foreach (array_slice($events, 0, 100) as $event) {
+                            $proc = $event['processImagePath'] ?? $event['process'] ?? '';
+                            // Include system daemon processes
+                            if (preg_match('/(kernel|launchd|configd|powerd|System|daemon|coreaudiod|bluetoothd|systemstats)/i', $proc)) {
+                                $logs[] = $this->parseGenericMacOsEvent($event, 'system');
+                                if (count($logs) >= 50) break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            Log::debug("macOS system logs total: " . count($logs));
         } catch (\Exception $e) {
             Log::warning('Failed to collect macOS system logs: ' . $e->getMessage());
         }
@@ -889,46 +904,37 @@ PS;
         $logs = [];
         
         try {
-            // Firewall and network security events - broader predicates
-            $predicates = [
-                // Application Level Firewall
-                'subsystem == "com.apple.alf" OR process == "socketfilterfw"',
-                // Network filter and connection events
-                'subsystem == "com.apple.networkextension" OR process == "nesessionmanager"',
-                // TCP/IP and network stack events
-                'process == "mDNSResponder" OR process == "configd"',
-                // Packet filter and firewall rules
-                'eventMessage CONTAINS "firewall" OR eventMessage CONTAINS "deny" OR eventMessage CONTAINS "block" OR eventMessage CONTAINS "accept"',
-                // Connection filtering
-                'eventMessage CONTAINS "connection" OR eventMessage CONTAINS "network"',
-            ];
+            // Network and firewall related processes
+            $processes = ['socketfilterfw', 'mDNSResponder', 'configd', 'networkd', 'nfcd', 'WiFiAgent'];
             
-            foreach ($predicates as $predicate) {
-                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null | head -c 300000");
+            foreach ($processes as $process) {
+                $cmd = "log show --predicate 'process == \"{$process}\"' --last {$minutes}m --style json 2>/dev/null | head -c 200000";
+                $output = shell_exec($cmd);
                 
                 if ($output && strlen($output) > 10) {
-                    $events = json_decode($output, true);
-                    if (is_array($events)) {
-                        foreach (array_slice($events, 0, 30) as $event) {
+                    $events = @json_decode($output, true);
+                    if (is_array($events) && !empty($events)) {
+                        Log::debug("macOS firewall log: process '{$process}' found " . count($events) . " events");
+                        foreach (array_slice($events, 0, 20) as $event) {
                             $parsed = $this->parseGenericMacOsEvent($event, 'firewall');
-                            // Extract IP from firewall messages if present
+                            // Extract IP from messages if present
                             if (preg_match('/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/', $event['eventMessage'] ?? '', $m)) {
                                 $parsed['ip'] = $m[1];
                             }
                             $logs[] = $parsed;
                         }
-                        if (count($logs) >= 30) break;
+                        if (count($logs) >= 40) break;
                     }
                 }
             }
             
-            // Also try to read /var/log/appfirewall.log if exists
+            // Also try appfirewall.log file if exists
             $firewallLog = '/var/log/appfirewall.log';
             if (file_exists($firewallLog) && is_readable($firewallLog)) {
-                $fileContent = $this->tailFile($firewallLog, 50);
+                $fileContent = $this->tailFile($firewallLog, 30);
                 foreach ($fileContent as $line) {
                     $logs[] = [
-                        'raw' => $line['raw'] ?? $line,
+                        'raw' => $line['raw'] ?? (is_string($line) ? $line : ''),
                         'type' => 'firewall',
                         'category' => 'firewall',
                         'timestamp' => date('Y-m-d H:i:s'),
@@ -937,7 +943,23 @@ PS;
                 }
             }
             
-            Log::debug("macOS firewall logs collected: " . count($logs));
+            // If still empty, try general network subsystem
+            if (empty($logs)) {
+                Log::debug("No firewall process logs found, trying network subsystem");
+                $cmd = "log show --predicate 'subsystem CONTAINS \"network\"' --last 10m --style json 2>/dev/null | head -c 200000";
+                $output = shell_exec($cmd);
+                
+                if ($output && strlen($output) > 10) {
+                    $events = @json_decode($output, true);
+                    if (is_array($events)) {
+                        foreach (array_slice($events, 0, 30) as $event) {
+                            $logs[] = $this->parseGenericMacOsEvent($event, 'firewall');
+                        }
+                    }
+                }
+            }
+            
+            Log::debug("macOS firewall logs total: " . count($logs));
         } catch (\Exception $e) {
             Log::warning('Failed to collect macOS firewall logs: ' . $e->getMessage());
         }
