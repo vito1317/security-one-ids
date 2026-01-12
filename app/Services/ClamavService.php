@@ -26,12 +26,28 @@ class ClamavService
         
         try {
             if ($platform === 'macos') {
-                $result = Process::run('which clamscan');
+                // Check common Homebrew paths for clamscan
+                $paths = [
+                    '/opt/homebrew/bin/clamscan',
+                    '/usr/local/bin/clamscan',
+                    '/usr/bin/clamscan',
+                ];
+                
+                foreach ($paths as $path) {
+                    if (file_exists($path)) {
+                        $this->isInstalled = true;
+                        $this->getVersion();
+                        return true;
+                    }
+                }
+                
+                // Also try which command with Homebrew PATH
+                $result = Process::run('export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" && which clamscan');
+                $this->isInstalled = $result->successful() && !empty(trim($result->output()));
             } else {
                 $result = Process::run('which clamscan 2>/dev/null || command -v clamscan 2>/dev/null');
+                $this->isInstalled = $result->successful() && !empty(trim($result->output()));
             }
-            
-            $this->isInstalled = $result->successful() && !empty(trim($result->output()));
             
             if ($this->isInstalled) {
                 $this->getVersion();
@@ -54,7 +70,12 @@ class ClamavService
         }
 
         try {
-            $result = Process::run('clamscan --version');
+            // Use full PATH for macOS Homebrew compatibility
+            $cmd = $this->getPlatform() === 'macos'
+                ? 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" && clamscan --version'
+                : 'clamscan --version';
+            
+            $result = Process::run($cmd);
             if ($result->successful()) {
                 $output = trim($result->output());
                 // Extract version: "ClamAV 0.103.6/26589/Wed Jul  3 07:32:13 2024"
