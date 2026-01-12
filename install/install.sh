@@ -127,7 +127,36 @@ composer install --no-dev --optimize-autoloader --no-interaction --no-scripts 2>
 # Configure environment
 echo -e "\n${CYAN}⚙️  Configuring IDS Agent...${NC}"
 
-# Prompt for configuration if not set
+# Check for existing configuration
+EXISTING_ENV="$INSTALL_DIR/.env"
+if [ -f "$EXISTING_ENV" ] && [ -z "$WAF_HUB_URL" ] && [ -z "$AGENT_TOKEN" ]; then
+    echo -e "${YELLOW}📋 Found existing configuration, loading previous settings...${NC}"
+    
+    # Read existing values from .env file
+    EXISTING_WAF_URL=$(grep "^WAF_URL=" "$EXISTING_ENV" | cut -d'"' -f2)
+    EXISTING_TOKEN=$(grep "^AGENT_TOKEN=" "$EXISTING_ENV" | cut -d'"' -f2)
+    EXISTING_NAME=$(grep "^AGENT_NAME=" "$EXISTING_ENV" | cut -d'"' -f2)
+    
+    # Use existing values if found
+    if [ -n "$EXISTING_WAF_URL" ]; then
+        WAF_HUB_URL="$EXISTING_WAF_URL"
+        echo -e "  WAF Hub URL: ${GREEN}$WAF_HUB_URL${NC}"
+    fi
+    
+    if [ -n "$EXISTING_TOKEN" ]; then
+        AGENT_TOKEN="$EXISTING_TOKEN"
+        echo -e "  Agent Token: ${GREEN}(using existing token)${NC}"
+    fi
+    
+    if [ -n "$EXISTING_NAME" ]; then
+        AGENT_NAME="$EXISTING_NAME"
+        echo -e "  Agent Name: ${GREEN}$AGENT_NAME${NC}"
+    fi
+    
+    echo -e "${GREEN}✅ Using existing configuration${NC}"
+fi
+
+# Prompt for configuration if still not set
 if [ -z "$WAF_HUB_URL" ]; then
     read -p "Enter WAF Hub URL (e.g., https://waf.example.com): " WAF_HUB_URL
 fi

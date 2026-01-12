@@ -101,7 +101,46 @@ if ($LASTEXITCODE -eq 0) {
 # Configure environment
 Write-Host "`n⚙️ Configuring IDS Agent..." -ForegroundColor Cyan
 
-# Get configuration if not provided
+# Check for existing configuration
+$ExistingEnvPath = "$InstallDir\.env"
+if ((Test-Path $ExistingEnvPath) -and (-not $WafHubUrl) -and (-not $AgentToken)) {
+    Write-Host "📋 Found existing configuration, loading previous settings..." -ForegroundColor Yellow
+    
+    $EnvFileContent = Get-Content $ExistingEnvPath
+    
+    # Parse existing values
+    foreach ($line in $EnvFileContent) {
+        if ($line -match '^WAF_URL="(.+)"') {
+            $ExistingWafUrl = $matches[1]
+        }
+        if ($line -match '^AGENT_TOKEN="(.+)"') {
+            $ExistingToken = $matches[1]
+        }
+        if ($line -match '^AGENT_NAME="(.+)"') {
+            $ExistingName = $matches[1]
+        }
+    }
+    
+    # Use existing values if found
+    if ($ExistingWafUrl) {
+        $WafHubUrl = $ExistingWafUrl
+        Write-Host "  WAF Hub URL: $WafHubUrl" -ForegroundColor Green
+    }
+    
+    if ($ExistingToken) {
+        $AgentToken = $ExistingToken
+        Write-Host "  Agent Token: (using existing token)" -ForegroundColor Green
+    }
+    
+    if ($ExistingName) {
+        $AgentName = $ExistingName
+        Write-Host "  Agent Name: $AgentName" -ForegroundColor Green
+    }
+    
+    Write-Host "✅ Using existing configuration" -ForegroundColor Green
+}
+
+# Get configuration if still not provided
 if (-not $WafHubUrl) {
     $WafHubUrl = Read-Host "Enter WAF Hub URL (e.g., https://waf.example.com)"
 }
