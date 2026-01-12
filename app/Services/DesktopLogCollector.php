@@ -746,4 +746,236 @@ class DesktopLogCollector
         arsort($ipCounts);
         return array_slice($ipCounts, 0, 5, true);
     }
+    
+    // ========================================
+    // macOS Enhanced Log Collection Methods
+    // ========================================
+    
+    /**
+     * Collect macOS system logs (kernel, launchd, system events)
+     */
+    public function collectMacOsSystemLogs(int $minutes = 60): array
+    {
+        if ($this->platform !== 'macos') {
+            return [];
+        }
+        
+        $logs = [];
+        
+        try {
+            // System events from kernel, launchd, and critical system processes
+            $predicates = [
+                'process == "kernel"',
+                'process == "launchd"',
+                'messageType == 16 OR messageType == 17', // Error and Fault levels
+                'subsystem == "com.apple.system"',
+            ];
+            
+            foreach ($predicates as $predicate) {
+                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null | head -c 500000");
+                
+                if ($output && strlen($output) > 10) {
+                    $events = json_decode($output, true);
+                    if (is_array($events)) {
+                        foreach (array_slice($events, 0, 50) as $event) {
+                            $logs[] = $this->parseGenericMacOsEvent($event, 'system');
+                        }
+                        if (count($logs) >= 50) break;
+                    }
+                }
+            }
+            
+            Log::debug("macOS system logs collected: " . count($logs));
+        } catch (\Exception $e) {
+            Log::warning('Failed to collect macOS system logs: ' . $e->getMessage());
+        }
+        
+        return array_slice($logs, 0, 100);
+    }
+    
+    /**
+     * Collect macOS application logs (crashes, errors)
+     */
+    public function collectMacOsAppLogs(int $minutes = 60): array
+    {
+        if ($this->platform !== 'macos') {
+            return [];
+        }
+        
+        $logs = [];
+        
+        try {
+            // Application errors, faults, and crashes
+            $predicates = [
+                'messageType == 17', // Fault level (crashes, serious errors)
+                'subsystem == "com.apple.diagnosticd"',
+                'process == "ReportCrash"',
+                'eventMessage CONTAINS "crash" OR eventMessage CONTAINS "exception"',
+            ];
+            
+            foreach ($predicates as $predicate) {
+                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null | head -c 300000");
+                
+                if ($output && strlen($output) > 10) {
+                    $events = json_decode($output, true);
+                    if (is_array($events)) {
+                        foreach (array_slice($events, 0, 30) as $event) {
+                            $logs[] = $this->parseGenericMacOsEvent($event, 'application');
+                        }
+                        if (count($logs) >= 30) break;
+                    }
+                }
+            }
+            
+            Log::debug("macOS app logs collected: " . count($logs));
+        } catch (\Exception $e) {
+            Log::warning('Failed to collect macOS app logs: ' . $e->getMessage());
+        }
+        
+        return array_slice($logs, 0, 50);
+    }
+    
+    /**
+     * Collect macOS firewall logs (ALF / Application Level Firewall)
+     */
+    public function collectMacOsFirewallLogs(int $minutes = 60): array
+    {
+        if ($this->platform !== 'macos') {
+            return [];
+        }
+        
+        $logs = [];
+        
+        try {
+            // Application Level Firewall events
+            $predicates = [
+                'subsystem == "com.apple.alf"',
+                'process == "socketfilterfw"',
+                'eventMessage CONTAINS "firewall" OR eventMessage CONTAINS "deny" OR eventMessage CONTAINS "block"',
+            ];
+            
+            foreach ($predicates as $predicate) {
+                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null | head -c 300000");
+                
+                if ($output && strlen($output) > 10) {
+                    $events = json_decode($output, true);
+                    if (is_array($events)) {
+                        foreach (array_slice($events, 0, 30) as $event) {
+                            $parsed = $this->parseGenericMacOsEvent($event, 'firewall');
+                            // Extract IP from firewall messages if present
+                            if (preg_match('/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/', $event['eventMessage'] ?? '', $m)) {
+                                $parsed['ip'] = $m[1];
+                            }
+                            $logs[] = $parsed;
+                        }
+                        if (count($logs) >= 30) break;
+                    }
+                }
+            }
+            
+            // Also try to read /var/log/appfirewall.log if exists
+            $firewallLog = '/var/log/appfirewall.log';
+            if (file_exists($firewallLog) && is_readable($firewallLog)) {
+                $fileContent = $this->tailFile($firewallLog, 50);
+                foreach ($fileContent as $line) {
+                    $logs[] = [
+                        'raw' => $line['raw'] ?? $line,
+                        'type' => 'firewall',
+                        'category' => 'firewall',
+                        'timestamp' => date('Y-m-d H:i:s'),
+                        'source' => 'appfirewall.log',
+                    ];
+                }
+            }
+            
+            Log::debug("macOS firewall logs collected: " . count($logs));
+        } catch (\Exception $e) {
+            Log::warning('Failed to collect macOS firewall logs: ' . $e->getMessage());
+        }
+        
+        return array_slice($logs, 0, 50);
+    }
+    
+    /**
+     * Collect macOS security audit logs (securityd, keychain, authorization)
+     */
+    public function collectMacOsSecurityAuditLogs(int $minutes = 60): array
+    {
+        if ($this->platform !== 'macos') {
+            return [];
+        }
+        
+        $logs = [];
+        
+        try {
+            // Security-related subsystems
+            $predicates = [
+                'subsystem == "com.apple.securityd"',
+                'subsystem == "com.apple.security"',
+                'subsystem == "com.apple.ManagedClient"',
+                'process == "SecurityAgent"',
+                'process == "securityd"',
+                'eventMessage CONTAINS "keychain" OR eventMessage CONTAINS "certificate" OR eventMessage CONTAINS "codesign"',
+            ];
+            
+            foreach ($predicates as $predicate) {
+                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null | head -c 300000");
+                
+                if ($output && strlen($output) > 10) {
+                    $events = json_decode($output, true);
+                    if (is_array($events)) {
+                        foreach (array_slice($events, 0, 30) as $event) {
+                            $logs[] = $this->parseGenericMacOsEvent($event, 'security_audit');
+                        }
+                        if (count($logs) >= 50) break;
+                    }
+                }
+            }
+            
+            Log::debug("macOS security audit logs collected: " . count($logs));
+        } catch (\Exception $e) {
+            Log::warning('Failed to collect macOS security audit logs: ' . $e->getMessage());
+        }
+        
+        return array_slice($logs, 0, 50);
+    }
+    
+    /**
+     * Parse generic macOS event into standard format
+     */
+    private function parseGenericMacOsEvent(array $event, string $category): array
+    {
+        return [
+            'raw' => substr($event['eventMessage'] ?? '', 0, 500),
+            'type' => $category,
+            'category' => $category,
+            'timestamp' => $event['timestamp'] ?? date('Y-m-d H:i:s'),
+            'process' => $event['processImagePath'] ?? $event['process'] ?? 'unknown',
+            'subsystem' => $event['subsystem'] ?? 'unknown',
+            'message_type' => $event['messageType'] ?? 'default',
+            'level' => match ($event['messageType'] ?? 0) {
+                16 => 'error',
+                17 => 'fault',
+                default => 'info',
+            },
+        ];
+    }
+    
+    /**
+     * Collect all macOS logs (comprehensive collection)
+     */
+    public function collectAllMacOsLogs(int $minutes = 60): array
+    {
+        if ($this->platform !== 'macos') {
+            return [];
+        }
+        
+        return [
+            'auth' => $this->collectMacOsLogs($minutes),
+            'system' => $this->collectMacOsSystemLogs($minutes),
+            'applications' => $this->collectMacOsAppLogs($minutes),
+            'firewall' => $this->collectMacOsFirewallLogs($minutes),
+            'security_audit' => $this->collectMacOsSecurityAuditLogs($minutes),
+        ];
+    }
 }

@@ -503,6 +503,6 @@ AI_SENSITIVITY=medium
 
 **聯絡方式**
 
-- **官方網站**：https://security-one.io
-- **技術支援**：support@security-one.io
-- **業務洽詢**：sales@security-one.io
+- **官方網站**：https://cybersecureone.com
+- **技術支援**service@cybersecureone.com
+- **業務洽詢**service@cybersecureone.com

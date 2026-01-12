@@ -71,6 +71,48 @@ class DesktopSecurityScan extends Command
                     $this->line("    > " . $sample);
                 }
             }
+            
+            // macOS Enhanced Log Collection
+            if ($collector->getPlatform() === 'macos') {
+                $this->newLine();
+                $this->info('📋 macOS Enhanced Log Collection:');
+                
+                // System logs
+                $systemLogs = $collector->collectMacOsSystemLogs(60);
+                $this->line("  📦 System logs: " . count($systemLogs));
+                
+                // Application logs
+                $appLogs = $collector->collectMacOsAppLogs(60);
+                $this->line("  📱 Application logs: " . count($appLogs));
+                
+                // Firewall logs
+                $firewallLogs = $collector->collectMacOsFirewallLogs(60);
+                $this->line("  🔥 Firewall logs: " . count($firewallLogs));
+                
+                // Security audit logs
+                $securityLogs = $collector->collectMacOsSecurityAuditLogs(60);
+                $this->line("  🔐 Security audit logs: " . count($securityLogs));
+                
+                // Show samples if in very verbose mode
+                if ($this->output->isVeryVerbose()) {
+                    if (!empty($systemLogs)) {
+                        $this->info("  Sample system log:");
+                        $this->line("    > " . substr($systemLogs[0]['raw'] ?? '', 0, 150));
+                    }
+                    if (!empty($appLogs)) {
+                        $this->info("  Sample app log:");
+                        $this->line("    > " . substr($appLogs[0]['raw'] ?? '', 0, 150));
+                    }
+                    if (!empty($firewallLogs)) {
+                        $this->warn("  Sample firewall log:");
+                        $this->line("    > " . substr($firewallLogs[0]['raw'] ?? '', 0, 150));
+                    }
+                    if (!empty($securityLogs)) {
+                        $this->info("  Sample security log:");
+                        $this->line("    > " . substr($securityLogs[0]['raw'] ?? '', 0, 150));
+                    }
+                }
+            }
         }
         
         // Collect security summary
