@@ -23,6 +23,9 @@ class DesktopSecurityScan extends Command
         $collector = new DesktopLogCollector();
         $analyzer = new DesktopAiAnalyzer();
         
+        // Initialize enhanced analysis variable at function scope for later sync
+        $macEnhancedAnalysis = null;
+        
         $this->info("Platform: {$collector->getPlatform()}");
         $this->newLine();
         
@@ -71,9 +74,6 @@ class DesktopSecurityScan extends Command
                     $this->line("    > " . $sample);
                 }
             }
-            
-            // Initialize enhanced analysis variable for cross-platform sync
-            $macEnhancedAnalysis = null;
             
             // macOS Enhanced Log Collection
             if ($collector->getPlatform() === 'macos') {
