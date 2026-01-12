@@ -357,16 +357,8 @@ class DesktopSecurityScan extends Command
         // Check if we have enhanced log threats to report
         $hasEnhancedThreats = !empty($macEnhancedAnalysis['threats']);
         
-        // DEBUG: Trace sync condition
-        $this->warn("DEBUG SYNC: macEnhancedAnalysis is " . ($macEnhancedAnalysis === null ? 'NULL' : 'SET'));
-        $this->warn("DEBUG SYNC: hasEnhancedThreats = " . ($hasEnhancedThreats ? 'TRUE' : 'FALSE'));
-        if ($macEnhancedAnalysis !== null && isset($macEnhancedAnalysis['threats'])) {
-            $this->warn("DEBUG SYNC: threats array count = " . count($macEnhancedAnalysis['threats']));
-        }
-        
         // Send report to WAF Hub (always sync if threats detected, or if --report flag)
         $shouldReport = $this->option('report') || $bruteForceResult['threat_detected'] || $networkResult['threat_detected'] || $hasEnhancedThreats;
-        $this->warn("DEBUG SYNC: shouldReport = " . ($shouldReport ? 'TRUE' : 'FALSE'));
         
         if ($shouldReport) {
             $this->newLine();
@@ -451,15 +443,19 @@ class DesktopSecurityScan extends Command
                         $sourceIp = '127.0.0.1';
                     }
                     
+                    // Server only accepts log_type in:system,server - ensure we use valid value
+                    $logType = 'system';
+                    
                     $alertData = [
                         'source_ip' => $sourceIp,
                         'severity' => $threat['severity'] ?? 'medium',
                         'category' => $threat['type'] ?? 'enhanced_log_threat',
-                        'log_type' => $threat['source'] ?? 'system',
+                        'log_type' => $logType,  // Fixed to valid value
                         'detections' => $threat['description'] ?? 'Enhanced log threat detected',
                         'raw_log' => json_encode([
                             'platform' => $collector->getPlatform(),
                             'threat_type' => $threat['type'],
+                            'original_source' => $threat['source'] ?? 'unknown',
                             'details' => array_diff_key($threat, array_flip(['description', 'type', 'severity', 'source', 'ip'])),
                             'timestamp' => now()->toIso8601String(),
                         ]),
@@ -470,7 +466,13 @@ class DesktopSecurityScan extends Command
                         $alertsSent++;
                         if ($this->option('verbose')) {
                             $this->info("   ✅ Enhanced threat synced: {$threat['type']}");
+                            $this->line("      Response: " . substr($response->body(), 0, 100));
                         }
+                    } else if ($response) {
+                        $this->warn("   ❌ Sync failed for {$threat['type']}: HTTP {$response->status()}");
+                        $this->line("      Error: " . substr($response->body(), 0, 200));
+                    } else {
+                        $this->warn("   ❌ Sync failed for {$threat['type']}: No response");
                     }
                 }
             }
