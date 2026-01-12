@@ -14,10 +14,11 @@ class LogCollectorService
 {
     /**
      * Nginx log format pattern
-     * Supports both combined format and extended format with X-Forwarded-For
-     * Example: 192.168.1.1 - - [07/Jan/2026:10:00:00 +0000] "GET /api HTTP/1.1" 200 1234 "https://example.com" "Mozilla/5.0" "-"
+     * Supports extended WAF format with X-Forwarded-For
+     * Format: $remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" "$http_x_forwarded_for"
+     * Example: 172.22.0.2 - - [07/Jan/2026:10:00:00 +0000] "GET /api HTTP/1.1" 200 1234 "https://example.com" "Mozilla/5.0" "203.0.113.50, 10.0.0.1"
      */
-    private const LOG_PATTERN = '/^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) ([^\s]+) ([^"]+)" (\d+) (\d+) "([^"]*)" "([^"]*)"/';
+    private const LOG_PATTERN = '/^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) ([^\s]+) ([^"]+)" (\d+) (\d+) "([^"]*)" "([^"]*)"(?:\s+"([^"]*)")?/';
 
     /**
      * Collect logs from Nginx access log file
@@ -64,7 +65,7 @@ class LogCollectorService
 
         [
             $full,
-            $ip,
+            $remoteAddr,
             $timestamp,
             $method,
             $uri,
@@ -75,8 +76,31 @@ class LogCollectorService
             $userAgent
         ] = $matches;
 
+        // Extract X-Forwarded-For if present (10th capture group)
+        $xForwardedFor = $matches[10] ?? null;
+        
+        // Determine real client IP:
+        // 1. If X-Forwarded-For exists and is not "-", use the first IP in the chain (original client)
+        // 2. Otherwise, fall back to remote_addr
+        $realIp = $remoteAddr;
+        if ($xForwardedFor && $xForwardedFor !== '-' && !empty(trim($xForwardedFor))) {
+            // X-Forwarded-For format: "client, proxy1, proxy2"
+            // The first IP is the original client
+            $forwardedIps = array_map('trim', explode(',', $xForwardedFor));
+            if (!empty($forwardedIps[0]) && filter_var($forwardedIps[0], FILTER_VALIDATE_IP)) {
+                $realIp = $forwardedIps[0];
+                Log::debug("Using X-Forwarded-For IP", [
+                    'original' => $remoteAddr,
+                    'x_forwarded_for' => $xForwardedFor,
+                    'real_ip' => $realIp
+                ]);
+            }
+        }
+
         return [
-            'ip' => $ip,
+            'ip' => $realIp,
+            'remote_addr' => $remoteAddr, // Keep original for debugging
+            'x_forwarded_for' => $xForwardedFor,
             'timestamp' => $this->parseTimestamp($timestamp),
             'method' => $method,
             'uri' => $this->parseUri($uri),
