@@ -799,66 +799,60 @@ PS;
         $logs = [];
         
         try {
-            // Method 1: Try system-specific subsystems
-            $subsystems = [
-                'com.apple.launchd',
-                'com.apple.powermanagement',
-                'com.apple.SystemConfiguration',
-                'com.apple.xpc',
-                'com.apple.coreservices',
-            ];
+            // Use processes proven to work: launchd, WindowServer
+            $processes = ['launchd', 'WindowServer'];
             
-            foreach ($subsystems as $subsystem) {
-                $cmd = "log show --predicate 'subsystem == \"{$subsystem}\"' --last {$minutes}m --style json 2>/dev/null | head -c 200000";
+            foreach ($processes as $process) {
+                // Use shorter time window and no head truncation to get valid JSON
+                $cmd = "log show --predicate 'process == \"{$process}\"' --last 10m --style json 2>/dev/null";
                 $output = shell_exec($cmd);
                 
                 if ($output && strlen($output) > 10) {
                     $events = @json_decode($output, true);
+                    
+                    if (json_last_error() !== JSON_ERROR_NONE) {
+                        Log::debug("macOS system log JSON error for '{$process}': " . json_last_error_msg());
+                        // Try to fix truncated JSON by finding last complete object
+                        $lastBracket = strrpos($output, '}');
+                        if ($lastBracket !== false) {
+                            $fixedOutput = substr($output, 0, $lastBracket + 1) . ']';
+                            $events = @json_decode($fixedOutput, true);
+                        }
+                    }
+                    
                     if (is_array($events) && !empty($events)) {
-                        Log::debug("macOS system log: subsystem '{$subsystem}' found " . count($events) . " events");
-                        foreach (array_slice($events, 0, 15) as $event) {
+                        Log::debug("macOS system log: process '{$process}' found " . count($events) . " events");
+                        foreach (array_slice($events, 0, 25) as $event) {
                             $logs[] = $this->parseGenericMacOsEvent($event, 'system');
                         }
                         if (count($logs) >= 50) break;
+                    } else {
+                        Log::debug("macOS system log: process '{$process}' returned no parseable events");
                     }
                 }
             }
             
-            // Method 2: Try specific system processes (not in firewall list)
+            // If JSON parsing fails, try text-based parsing as fallback
             if (empty($logs)) {
-                $processes = ['launchd', 'powerd', 'loginwindow', 'WindowServer', 'SystemUIServer', 'Finder'];
-                
-                foreach ($processes as $process) {
-                    $cmd = "log show --predicate 'process == \"{$process}\"' --last {$minutes}m --style json 2>/dev/null | head -c 150000";
-                    $output = shell_exec($cmd);
-                    
-                    if ($output && strlen($output) > 10) {
-                        $events = @json_decode($output, true);
-                        if (is_array($events) && !empty($events)) {
-                            Log::debug("macOS system log: process '{$process}' found " . count($events) . " events");
-                            foreach (array_slice($events, 0, 15) as $event) {
-                                $logs[] = $this->parseGenericMacOsEvent($event, 'system');
-                            }
-                            if (count($logs) >= 50) break;
-                        }
-                    }
-                }
-            }
-            
-            // Method 3: If still empty, try sender image path for kernel extensions
-            if (empty($logs)) {
-                Log::debug("Trying senderImagePath approach for system logs");
-                $cmd = "log show --predicate 'senderImagePath CONTAINS \"System\"' --last 10m --style json 2>/dev/null | head -c 200000";
+                Log::debug("JSON parsing failed, trying text-based parsing");
+                $cmd = "log show --predicate 'process == \"launchd\"' --last 10m 2>/dev/null | head -100";
                 $output = shell_exec($cmd);
                 
                 if ($output && strlen($output) > 10) {
-                    $events = @json_decode($output, true);
-                    if (is_array($events)) {
-                        Log::debug("senderImagePath approach returned " . count($events) . " events");
-                        foreach (array_slice($events, 0, 50) as $event) {
-                            $logs[] = $this->parseGenericMacOsEvent($event, 'system');
+                    $lines = explode("\n", $output);
+                    foreach (array_slice($lines, 1, 50) as $line) { // Skip header
+                        if (trim($line)) {
+                            $logs[] = [
+                                'raw' => substr($line, 0, 300),
+                                'type' => 'system',
+                                'category' => 'system',
+                                'timestamp' => date('Y-m-d H:i:s'),
+                                'process' => 'launchd',
+                                'level' => 'info',
+                            ];
                         }
                     }
+                    Log::debug("Text-based parsing got " . count($logs) . " lines");
                 }
             }
             
