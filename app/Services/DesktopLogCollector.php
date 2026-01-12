@@ -387,16 +387,16 @@ class DesktopLogCollector
             
             // Build PowerShell script as a file for more reliable execution
             if ($logName === 'Security') {
-                // Get all security events first (no filter), let PHP do the filtering
+                // Get specifically login/failure events to avoid noise from other security events
                 $psScript = <<<'PS'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$events = Get-WinEvent -LogName Security -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, @{N='Msg';E={$_.Message.Substring(0,[Math]::Min(500,$_.Message.Length))}}
+$events = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625} -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object @{N='TimeCreated';E={$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')}}, Id, @{N='Msg';E={$_.Message.Substring(0,[Math]::Min(1000,$_.Message.Length))}}
 if ($events) { $events | ConvertTo-Json -Compress } else { Write-Output '[]' }
 PS;
                 $psScript = sprintf($psScript, $count);
             } else {
                 $psScript = sprintf(
-                    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-WinEvent -LogName "%s" -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | ConvertTo-Json -Compress',
+                    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-WinEvent -LogName "%s" -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object @{N=\'TimeCreated\';E={$_.TimeCreated.ToString(\'yyyy-MM-dd HH:mm:ss\')}}, Id, Message | ConvertTo-Json -Compress',
                     $logName,
                     $count
                 );
@@ -862,60 +862,31 @@ PS;
         $logs = [];
         
         try {
-            // Use processes proven to work: launchd, WindowServer
+            // Use text-based parsing which is proven to work
+            // JSON parsing fails due to truncation issues
             $processes = ['launchd', 'WindowServer'];
             
             foreach ($processes as $process) {
-                // Use shorter time window and no head truncation to get valid JSON
-                $cmd = "log show --predicate 'process == \"{$process}\"' --last 10m --style json 2>/dev/null";
+                $cmd = "log show --predicate 'process == \"{$process}\"' --last 10m 2>/dev/null | head -100";
                 $output = shell_exec($cmd);
                 
-                if ($output && strlen($output) > 10) {
-                    $events = @json_decode($output, true);
-                    
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        Log::debug("macOS system log JSON error for '{$process}': " . json_last_error_msg());
-                        // Try to fix truncated JSON by finding last complete object
-                        $lastBracket = strrpos($output, '}');
-                        if ($lastBracket !== false) {
-                            $fixedOutput = substr($output, 0, $lastBracket + 1) . ']';
-                            $events = @json_decode($fixedOutput, true);
-                        }
-                    }
-                    
-                    if (is_array($events) && !empty($events)) {
-                        Log::debug("macOS system log: process '{$process}' found " . count($events) . " events");
-                        foreach (array_slice($events, 0, 25) as $event) {
-                            $logs[] = $this->parseGenericMacOsEvent($event, 'system');
-                        }
-                        if (count($logs) >= 50) break;
-                    } else {
-                        Log::debug("macOS system log: process '{$process}' returned no parseable events");
-                    }
-                }
-            }
-            
-            // If JSON parsing fails, try text-based parsing as fallback
-            if (empty($logs)) {
-                Log::debug("JSON parsing failed, trying text-based parsing");
-                $cmd = "log show --predicate 'process == \"launchd\"' --last 10m 2>/dev/null | head -100";
-                $output = shell_exec($cmd);
-                
-                if ($output && strlen($output) > 10) {
+                if ($output && strlen($output) > 50) {
                     $lines = explode("\n", $output);
+                    Log::debug("macOS system log: process '{$process}' returned " . count($lines) . " lines");
+                    
                     foreach (array_slice($lines, 1, 50) as $line) { // Skip header
-                        if (trim($line)) {
+                        if (trim($line) && strlen($line) > 20) {
                             $logs[] = [
                                 'raw' => substr($line, 0, 300),
                                 'type' => 'system',
                                 'category' => 'system',
                                 'timestamp' => date('Y-m-d H:i:s'),
-                                'process' => 'launchd',
+                                'process' => $process,
                                 'level' => 'info',
                             ];
                         }
                     }
-                    Log::debug("Text-based parsing got " . count($logs) . " lines");
+                    if (count($logs) >= 50) break;
                 }
             }
             
