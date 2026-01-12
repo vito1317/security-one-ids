@@ -156,7 +156,71 @@ class WafSyncService
         Log::info('Config synced from WAF Hub', [
             'ollama_url' => $config['ollama']['url'] ?? 'not set',
             'ollama_model' => $config['ollama']['model'] ?? 'not set',
+            'clamav_enabled' => $config['addons']['clamav_enabled'] ?? false,
+            'update_ids' => $config['addons']['update_ids'] ?? false,
         ]);
+        
+        // Handle ClamAV add-on
+        if (!empty($config['addons']['clamav_enabled'])) {
+            $this->handleClamavAddon();
+        }
+        
+        // Handle IDS update signal
+        if (!empty($config['addons']['update_ids'])) {
+            $this->handleIdsUpdate();
+        }
+    }
+    
+    /**
+     * Handle ClamAV add-on installation
+     */
+    private function handleClamavAddon(): void
+    {
+        try {
+            $clamav = app(\App\Services\ClamavService::class);
+            
+            if (!$clamav->isInstalled()) {
+                Log::info('ClamAV enabled but not installed, starting installation...');
+                $result = $clamav->install();
+                
+                if ($result['success']) {
+                    Log::info('ClamAV installed successfully');
+                } else {
+                    Log::error('ClamAV installation failed: ' . ($result['message'] ?? 'Unknown error'));
+                }
+            }
+            
+            // Report status to Hub
+            $clamav->reportToHub($clamav->getStatus());
+            
+        } catch (\Exception $e) {
+            Log::error('ClamAV addon handling failed: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle IDS update signal
+     */
+    private function handleIdsUpdate(): void
+    {
+        try {
+            Log::info('IDS update signal received, running update...');
+            
+            // Run the IDS update command
+            \Illuminate\Support\Facades\Artisan::call('ids:update');
+            
+            Log::info('IDS update completed');
+            
+            // Mark update as processed
+            $configPath = storage_path('app/waf_config.json');
+            if (file_exists($configPath)) {
+                $config = json_decode(file_get_contents($configPath), true) ?: [];
+                unset($config['addons']['update_ids']);
+                file_put_contents($configPath, json_encode($config, JSON_PRETTY_PRINT));
+            }
+        } catch (\Exception $e) {
+            Log::error('IDS update failed: ' . $e->getMessage());
+        }
     }
 
     /**
