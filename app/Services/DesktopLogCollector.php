@@ -89,6 +89,7 @@ class DesktopLogCollector
     public function collectAuthLogs(int $lines = 100): array
     {
         $logs = [];
+        $rawLogs = []; // For file-based logs that need parsing
         
         // macOS uses unified logging - use the log command
         if ($this->platform === 'macos') {
@@ -99,18 +100,21 @@ class DesktopLogCollector
         foreach ($this->logPaths['auth'] ?? [] as $path) {
             if ($this->platform === 'windows') {
                 Log::debug("Collecting Windows Event Log: {$path}");
+                // Windows logs are already parsed arrays
                 $windowsLogs = $this->collectWindowsEventLog($path, $lines);
                 Log::debug("Windows Event Log returned " . count($windowsLogs) . " entries");
                 $logs = array_merge($logs, $windowsLogs);
             } elseif (file_exists($path) && is_readable($path)) {
                 Log::debug("Reading log file: {$path}");
-                $logs = array_merge($logs, $this->tailFile($path, $lines));
+                // Linux file logs are strings
+                $rawLogs = array_merge($rawLogs, $this->tailFile($path, $lines));
             } else {
                 Log::debug("Log file not accessible: {$path}");
             }
         }
         
-        return $this->parseAuthLogs($logs);
+        // Parse the raw text logs and merge with already parsed logs
+        return array_merge($logs, $this->parseAuthLogs($rawLogs));
     }
     
     /**
@@ -139,9 +143,12 @@ class DesktopLogCollector
         $connections = [];
         
         try {
+            if ($this->platform === 'windows') {
+                return $this->collectWindowsNetworkConnections();
+            }
+            
             $output = match ($this->platform) {
                 'linux', 'macos' => shell_exec('netstat -tunap 2>/dev/null || ss -tunap 2>/dev/null'),
-                'windows' => shell_exec('netstat -ano'),
                 default => '',
             };
             
@@ -150,6 +157,61 @@ class DesktopLogCollector
             }
         } catch (\Exception $e) {
             Log::warning('Failed to collect network connections: ' . $e->getMessage());
+        }
+        
+        return $connections;
+    }
+
+    /**
+     * Collect network connections on Windows using PowerShell
+     */
+    private function collectWindowsNetworkConnections(): array
+    {
+        $connections = [];
+        try {
+            // Use Get-NetTCPConnection for reliable structured output
+            $psScript = 'Get-NetTCPConnection | Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess | ConvertTo-Json -Compress';
+            
+            // Write script to temp file
+            $scriptFile = sys_get_temp_dir() . '\\get_net_' . time() . '.ps1';
+            file_put_contents($scriptFile, $psScript);
+            
+            $psCommand = sprintf(
+                'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%s"',
+                $scriptFile
+            );
+            
+            $output = [];
+            $returnCode = 0;
+            exec($psCommand . ' 2>&1', $output, $returnCode);
+            @unlink($scriptFile);
+            
+            $outputStr = implode("\n", $output);
+            
+            if ($outputStr && strlen(trim($outputStr)) > 2 && $outputStr !== '[]') {
+                $entries = json_decode($outputStr, true);
+                if (is_array($entries)) {
+                    // Handle single entry case
+                    if (isset($entries['LocalAddress'])) {
+                        $entries = [$entries];
+                    }
+                    
+                    foreach ($entries as $entry) {
+                        $connections[] = [
+                            'protocol' => 'tcp', // Get-NetTCPConnection implies TCP
+                            'local' => ($entry['LocalAddress'] ?? '') . ':' . ($entry['LocalPort'] ?? ''),
+                            'remote' => ($entry['RemoteAddress'] ?? '') . ':' . ($entry['RemotePort'] ?? ''),
+                            'state' => match($entry['State'] ?? '') {
+                                2 => 'Listen', // Numeric enum mapping if needed, but PS usually returns string 'Listen'
+                                default => $entry['State'] ?? 'UNKNOWN'
+                            },
+                            'pid' => $entry['OwningProcess'] ?? null,
+                        ];
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning('Failed to collect Windows network connections: ' . $e->getMessage());
         }
         
         return $connections;
@@ -327,13 +389,14 @@ class DesktopLogCollector
             if ($logName === 'Security') {
                 // Get all security events first (no filter), let PHP do the filtering
                 $psScript = <<<'PS'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $events = Get-WinEvent -LogName Security -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, @{N='Msg';E={$_.Message.Substring(0,[Math]::Min(500,$_.Message.Length))}}
 if ($events) { $events | ConvertTo-Json -Compress } else { Write-Output '[]' }
 PS;
                 $psScript = sprintf($psScript, $count);
             } else {
                 $psScript = sprintf(
-                    'Get-WinEvent -LogName "%s" -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | ConvertTo-Json -Compress',
+                    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-WinEvent -LogName "%s" -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | ConvertTo-Json -Compress',
                     $logName,
                     $count
                 );
@@ -799,60 +862,46 @@ PS;
         $logs = [];
         
         try {
-            // Use processes proven to work: launchd, WindowServer
-            $processes = ['launchd', 'WindowServer'];
+            // Use simple single-process predicates that are more likely to work
+            $processes = ['kernel', 'launchd', 'configd', 'powerd', 'diskutil', 'fsck'];
             
             foreach ($processes as $process) {
-                // Use shorter time window and no head truncation to get valid JSON
-                $cmd = "log show --predicate 'process == \"{$process}\"' --last 10m --style json 2>/dev/null";
+                // Simple predicate with just process name
+                $cmd = "log show --predicate 'process == \"{$process}\"' --last {$minutes}m --style json 2>/dev/null | head -c 200000";
                 $output = shell_exec($cmd);
                 
                 if ($output && strlen($output) > 10) {
                     $events = @json_decode($output, true);
-                    
-                    if (json_last_error() !== JSON_ERROR_NONE) {
-                        Log::debug("macOS system log JSON error for '{$process}': " . json_last_error_msg());
-                        // Try to fix truncated JSON by finding last complete object
-                        $lastBracket = strrpos($output, '}');
-                        if ($lastBracket !== false) {
-                            $fixedOutput = substr($output, 0, $lastBracket + 1) . ']';
-                            $events = @json_decode($fixedOutput, true);
-                        }
-                    }
-                    
                     if (is_array($events) && !empty($events)) {
                         Log::debug("macOS system log: process '{$process}' found " . count($events) . " events");
-                        foreach (array_slice($events, 0, 25) as $event) {
+                        foreach (array_slice($events, 0, 20) as $event) {
                             $logs[] = $this->parseGenericMacOsEvent($event, 'system');
                         }
                         if (count($logs) >= 50) break;
-                    } else {
-                        Log::debug("macOS system log: process '{$process}' returned no parseable events");
                     }
                 }
             }
             
-            // If JSON parsing fails, try text-based parsing as fallback
+            // If still empty, try getting any recent system logs without predicate filter
             if (empty($logs)) {
-                Log::debug("JSON parsing failed, trying text-based parsing");
-                $cmd = "log show --predicate 'process == \"launchd\"' --last 10m 2>/dev/null | head -100";
+                Log::debug("No process-specific logs found, trying general system log");
+                $cmd = "log show --last 5m --style json 2>/dev/null | head -c 300000";
                 $output = shell_exec($cmd);
                 
                 if ($output && strlen($output) > 10) {
-                    $lines = explode("\n", $output);
-                    foreach (array_slice($lines, 1, 50) as $line) { // Skip header
-                        if (trim($line)) {
-                            $logs[] = [
-                                'raw' => substr($line, 0, 300),
-                                'type' => 'system',
-                                'category' => 'system',
-                                'timestamp' => date('Y-m-d H:i:s'),
-                                'process' => 'launchd',
-                                'level' => 'info',
-                            ];
+                    $events = @json_decode($output, true);
+                    if (is_array($events)) {
+                        Log::debug("General log show returned " . count($events) . " events");
+                        // Filter to system-related events only
+                        foreach (array_slice($events, 0, 100) as $event) {
+                            $proc = $event['processImagePath'] ?? $event['process'] ?? '';
+                            // Include system daemon processes
+                            if (preg_match('/(kernel|launchd|configd|powerd|System|daemon|coreaudiod|bluetoothd|systemstats)/i', $proc)) {
+                                $logs[] = $this->parseGenericMacOsEvent($event, 'system');
+                                if (count($logs) >= 50) break;
+                            }
                         }
                     }
-                    Log::debug("Text-based parsing got " . count($logs) . " lines");
                 }
             }
             
