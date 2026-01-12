@@ -29,19 +29,40 @@ class DesktopAiAnalyzer
         // Override with synced settings from WAF Hub if available
         try {
             $wafSync = app(\App\Services\WafSyncService::class);
-            $remoteConfig = $wafSync->getCachedConfig();
             
-            if (!empty($remoteConfig)) {
-                if (isset($remoteConfig['ollama']['url'])) {
-                    $this->ollamaUrl = $remoteConfig['ollama']['url'];
+            // First try the synced config (from heartbeat)
+            $syncedConfig = $wafSync->getSyncedConfig();
+            
+            if (!empty($syncedConfig)) {
+                if (isset($syncedConfig['ollama']['url'])) {
+                    $this->ollamaUrl = $syncedConfig['ollama']['url'];
                 }
-                if (isset($remoteConfig['ollama']['model'])) {
-                    $this->ollamaModel = $remoteConfig['ollama']['model'];
+                if (isset($syncedConfig['ollama']['model'])) {
+                    $this->ollamaModel = $syncedConfig['ollama']['model'];
                 }
-                if (isset($remoteConfig['ai_detection_enabled'])) {
-                    $this->enabled = filter_var($remoteConfig['ai_detection_enabled'], FILTER_VALIDATE_BOOLEAN);
-                } elseif (isset($remoteConfig['log_sync_enabled'])) {
-                    $this->enabled = filter_var($remoteConfig['log_sync_enabled'], FILTER_VALIDATE_BOOLEAN);
+                if (isset($syncedConfig['ai_detection_enabled'])) {
+                    $this->enabled = filter_var($syncedConfig['ai_detection_enabled'], FILTER_VALIDATE_BOOLEAN);
+                }
+                Log::debug('Using synced Ollama config', [
+                    'url' => $this->ollamaUrl,
+                    'model' => $this->ollamaModel,
+                ]);
+            } else {
+                // Fallback to cached config if no synced config
+                $remoteConfig = $wafSync->getCachedConfig();
+                
+                if (!empty($remoteConfig)) {
+                    if (isset($remoteConfig['ollama']['url'])) {
+                        $this->ollamaUrl = $remoteConfig['ollama']['url'];
+                    }
+                    if (isset($remoteConfig['ollama']['model'])) {
+                        $this->ollamaModel = $remoteConfig['ollama']['model'];
+                    }
+                    if (isset($remoteConfig['ai_detection_enabled'])) {
+                        $this->enabled = filter_var($remoteConfig['ai_detection_enabled'], FILTER_VALIDATE_BOOLEAN);
+                    } elseif (isset($remoteConfig['log_sync_enabled'])) {
+                        $this->enabled = filter_var($remoteConfig['log_sync_enabled'], FILTER_VALIDATE_BOOLEAN);
+                    }
                 }
             }
         } catch (\Exception $e) {

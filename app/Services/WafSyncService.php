@@ -104,6 +104,12 @@ class WafSyncService
             if ($response->successful()) {
                 $data = $response->json();
                 Log::debug('Heartbeat sent successfully', $data);
+                
+                // Sync config from WAF Hub (including Ollama settings)
+                if (isset($data['config'])) {
+                    $this->syncConfigFromHub($data['config']);
+                }
+                
                 return true;
             }
 
@@ -126,6 +132,45 @@ class WafSyncService
             }
             return false;
         }
+    }
+
+    /**
+     * Sync config received from WAF Hub
+     */
+    private function syncConfigFromHub(array $config): void
+    {
+        $configPath = storage_path('app/waf_config.json');
+        
+        // Read existing config
+        $existingConfig = [];
+        if (file_exists($configPath)) {
+            $existingConfig = json_decode(file_get_contents($configPath), true) ?: [];
+        }
+        
+        // Merge with new config
+        $mergedConfig = array_merge($existingConfig, $config);
+        
+        // Save to storage
+        file_put_contents($configPath, json_encode($mergedConfig, JSON_PRETTY_PRINT));
+        
+        Log::info('Config synced from WAF Hub', [
+            'ollama_url' => $config['ollama']['url'] ?? 'not set',
+            'ollama_model' => $config['ollama']['model'] ?? 'not set',
+        ]);
+    }
+
+    /**
+     * Get synced config from local storage
+     */
+    public function getSyncedConfig(): array
+    {
+        $configPath = storage_path('app/waf_config.json');
+        
+        if (file_exists($configPath)) {
+            return json_decode(file_get_contents($configPath), true) ?: [];
+        }
+        
+        return [];
     }
 
     /**
