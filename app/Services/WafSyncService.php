@@ -158,6 +158,7 @@ class WafSyncService
             'ollama_model' => $config['ollama']['model'] ?? 'not set',
             'clamav_enabled' => $config['addons']['clamav_enabled'] ?? false,
             'update_ids' => $config['addons']['update_ids'] ?? false,
+            'scan_now' => $config['addons']['scan_now'] ?? false,
         ]);
         
         // Handle ClamAV add-on
@@ -168,6 +169,11 @@ class WafSyncService
         // Handle IDS update signal
         if (!empty($config['addons']['update_ids'])) {
             $this->handleIdsUpdate();
+        }
+        
+        // Handle scan now signal
+        if (!empty($config['addons']['scan_now'])) {
+            $this->handleScanNow();
         }
     }
     
@@ -220,6 +226,61 @@ class WafSyncService
             }
         } catch (\Exception $e) {
             Log::error('IDS update failed: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle scan now signal from WAF Hub
+     */
+    private function handleScanNow(): void
+    {
+        try {
+            Log::info('Scan now signal received, starting ClamAV scan...');
+            
+            $clamav = app(\App\Services\ClamavService::class);
+            
+            if (!$clamav->isInstalled()) {
+                Log::warning('ClamAV not installed, cannot perform scan');
+                return;
+            }
+            
+            // Perform scan on common directories
+            $scanPaths = [
+                '/home',
+                '/var/www',
+                '/tmp',
+            ];
+            
+            $allResults = [
+                'last_scan' => now()->toDateTimeString(),
+                'infected_files' => 0,
+                'scanned_files' => 0,
+                'threats' => [],
+            ];
+            
+            foreach ($scanPaths as $path) {
+                if (is_dir($path)) {
+                    Log::info("Scanning directory: {$path}");
+                    $result = $clamav->scan($path);
+                    
+                    if ($result['success']) {
+                        $allResults['scanned_files'] += $result['scanned_files'] ?? 0;
+                        $allResults['infected_files'] += $result['infected_files'] ?? 0;
+                        $allResults['threats'] = array_merge($allResults['threats'], $result['threats'] ?? []);
+                    }
+                }
+            }
+            
+            Log::info('ClamAV scan completed', [
+                'scanned_files' => $allResults['scanned_files'],
+                'infected_files' => $allResults['infected_files'],
+            ]);
+            
+            // Report results to WAF Hub
+            $clamav->reportToHub($allResults);
+            
+        } catch (\Exception $e) {
+            Log::error('Scan now failed: ' . $e->getMessage());
         }
     }
 
