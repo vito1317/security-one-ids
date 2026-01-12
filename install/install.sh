@@ -307,9 +307,9 @@ echo -e "\n${CYAN}📡 Registering with WAF Hub...${NC}"
 cd "$INSTALL_DIR"
 php artisan waf:sync --register || echo -e "${YELLOW}⚠️  Registration will retry on next scan${NC}"
 
-# Run initial scan
+# Run initial scan with full AI analysis
 echo -e "\n${CYAN}🔍 Running initial security scan...${NC}"
-php artisan desktop:scan
+php artisan desktop:scan --full --report
 
 # Create convenience commands
 echo -e "\n${CYAN}🔧 Creating convenience commands...${NC}"
