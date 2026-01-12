@@ -77,39 +77,73 @@ class DesktopSecurityScan extends Command
                 $this->newLine();
                 $this->info('📋 macOS Enhanced Log Collection:');
                 
-                // System logs - with debug
-                if ($this->output->isVerbose()) {
-                    // Direct debug: test what PHP actually gets from log show
-                    $testCmd = "log show --predicate 'process == \"launchd\"' --last 2m --style json 2>&1 | head -c 1000";
-                    $testOutput = shell_exec($testCmd);
-                    $this->warn("  DEBUG: launchd test output length: " . strlen($testOutput ?? ''));
-                    if ($testOutput) {
-                        $this->line("  DEBUG: First 200 chars: " . substr($testOutput, 0, 200));
-                        $testJson = @json_decode($testOutput, true);
-                        if ($testJson === null) {
-                            $this->error("  DEBUG: JSON parse failed: " . json_last_error_msg());
-                        } else {
-                            $this->info("  DEBUG: JSON parsed OK, events: " . (is_array($testJson) ? count($testJson) : 'not array'));
-                        }
-                    } else {
-                        $this->error("  DEBUG: shell_exec returned null/empty");
-                    }
-                }
-                
+                // Collect all macOS enhanced logs
                 $systemLogs = $collector->collectMacOsSystemLogs(60);
                 $this->line("  📦 System logs: " . count($systemLogs));
                 
-                // Application logs
                 $appLogs = $collector->collectMacOsAppLogs(60);
                 $this->line("  📱 Application logs: " . count($appLogs));
                 
-                // Firewall logs
                 $firewallLogs = $collector->collectMacOsFirewallLogs(60);
                 $this->line("  🔥 Firewall logs: " . count($firewallLogs));
                 
-                // Security audit logs
                 $securityLogs = $collector->collectMacOsSecurityAuditLogs(60);
                 $this->line("  🔐 Security audit logs: " . count($securityLogs));
+                
+                // Store for AI analysis
+                $enhancedLogs = [
+                    'auth' => $authLogs,
+                    'system' => $systemLogs,
+                    'applications' => $appLogs,
+                    'firewall' => $firewallLogs,
+                    'security_audit' => $securityLogs,
+                ];
+                
+                // Perform AI analysis on enhanced logs
+                if ($this->option('full')) {
+                    $this->newLine();
+                    $this->info('🤖 Analyzing enhanced logs with AI...');
+                    $enhancedAnalysis = $analyzer->analyzeEnhancedLogs($enhancedLogs);
+                    
+                    if ($enhancedAnalysis['analyzed']) {
+                        $this->line("  📊 Total logs analyzed: " . $enhancedAnalysis['total_logs_analyzed']);
+                        
+                        // Display threats detected
+                        if (!empty($enhancedAnalysis['threats'])) {
+                            $this->newLine();
+                            $this->error('  ⚠️ THREATS DETECTED FROM ENHANCED LOGS:');
+                            foreach ($enhancedAnalysis['threats'] as $threat) {
+                                $severity = strtoupper($threat['severity'] ?? 'unknown');
+                                $this->warn("    [{$severity}] {$threat['type']}: {$threat['description']}");
+                            }
+                        } else {
+                            $this->info('  ✅ No immediate threats detected in enhanced logs');
+                        }
+                        
+                        // Display AI analysis if available
+                        if (!empty($enhancedAnalysis['ai_analysis'])) {
+                            $ai = $enhancedAnalysis['ai_analysis'];
+                            $this->newLine();
+                            $this->info('  🧠 AI Security Assessment:');
+                            $this->line("    Threat Level: " . ($ai['threat_level'] ?? 'unknown'));
+                            $this->line("    Confidence: " . ($ai['confidence'] ?? 0) . "%");
+                            
+                            if (!empty($ai['findings'])) {
+                                $this->line("    Findings:");
+                                foreach (array_slice($ai['findings'], 0, 5) as $finding) {
+                                    $this->line("      • [{$finding['severity']}] {$finding['description']}");
+                                }
+                            }
+                            
+                            if (!empty($ai['recommendations'])) {
+                                $this->line("    Recommendations:");
+                                foreach (array_slice($ai['recommendations'], 0, 3) as $rec) {
+                                    $this->line("      → {$rec}");
+                                }
+                            }
+                        }
+                    }
+                }
                 
                 // Show samples if in very verbose mode
                 if ($this->output->isVeryVerbose()) {

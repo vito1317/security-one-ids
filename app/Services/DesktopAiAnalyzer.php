@@ -188,6 +188,253 @@ class DesktopAiAnalyzer
     }
     
     /**
+     * Analyze enhanced system logs (system, app, firewall, security audit)
+     */
+    public function analyzeEnhancedLogs(array $allLogs): array
+    {
+        if (!$this->enabled) {
+            return ['analyzed' => false, 'reason' => 'AI disabled'];
+        }
+        
+        // Prepare log summary for AI
+        $logSummary = [
+            'system_logs' => $this->summarizeLogs($allLogs['system'] ?? [], 'system'),
+            'application_logs' => $this->summarizeLogs($allLogs['applications'] ?? [], 'application'),
+            'firewall_logs' => $this->summarizeLogs($allLogs['firewall'] ?? [], 'firewall'),
+            'security_audit_logs' => $this->summarizeLogs($allLogs['security_audit'] ?? [], 'security'),
+            'auth_logs' => $this->summarizeLogs($allLogs['auth'] ?? [], 'auth'),
+        ];
+        
+        // Check for immediate threats in firewall logs
+        $firewallThreats = $this->detectFirewallThreats($allLogs['firewall'] ?? []);
+        
+        // Check for security violations
+        $securityViolations = $this->detectSecurityViolations($allLogs['security_audit'] ?? []);
+        
+        // Check for app crashes (potential exploitation)
+        $appCrashes = $this->detectAppCrashes($allLogs['applications'] ?? []);
+        
+        // Build comprehensive analysis
+        $threats = array_merge($firewallThreats, $securityViolations, $appCrashes);
+        
+        // Use AI for deeper analysis if we have enough logs
+        $totalLogs = array_sum(array_map('count', $allLogs));
+        $aiAnalysis = null;
+        
+        if ($totalLogs > 10) {
+            $aiAnalysis = $this->performAiLogAnalysis($logSummary);
+        }
+        
+        return [
+            'analyzed' => true,
+            'threat_detected' => !empty($threats),
+            'threats' => $threats,
+            'summary' => $logSummary,
+            'total_logs_analyzed' => $totalLogs,
+            'ai_analysis' => $aiAnalysis,
+        ];
+    }
+    
+    /**
+     * Summarize logs for AI analysis
+     */
+    private function summarizeLogs(array $logs, string $category): array
+    {
+        if (empty($logs)) {
+            return ['count' => 0, 'types' => [], 'sample' => null];
+        }
+        
+        $types = [];
+        $errorCount = 0;
+        
+        foreach ($logs as $log) {
+            $type = $log['type'] ?? $log['level'] ?? 'unknown';
+            $types[$type] = ($types[$type] ?? 0) + 1;
+            
+            if (in_array(strtolower($log['level'] ?? ''), ['error', 'fault', 'critical'])) {
+                $errorCount++;
+            }
+        }
+        
+        return [
+            'count' => count($logs),
+            'types' => $types,
+            'error_count' => $errorCount,
+            'sample' => isset($logs[0]) ? substr($logs[0]['raw'] ?? '', 0, 200) : null,
+        ];
+    }
+    
+    /**
+     * Detect threats from firewall logs
+     */
+    private function detectFirewallThreats(array $firewallLogs): array
+    {
+        $threats = [];
+        $blockedIps = [];
+        
+        foreach ($firewallLogs as $log) {
+            $raw = strtolower($log['raw'] ?? '');
+            
+            // Look for blocked/denied connections
+            if (preg_match('/(block|deny|reject|drop)/i', $raw)) {
+                $ip = $log['ip'] ?? null;
+                if ($ip && $ip !== 'unknown') {
+                    $blockedIps[$ip] = ($blockedIps[$ip] ?? 0) + 1;
+                }
+            }
+        }
+        
+        // Flag IPs with multiple blocked attempts
+        foreach ($blockedIps as $ip => $count) {
+            if ($count >= 5) {
+                $threats[] = [
+                    'type' => 'firewall_block',
+                    'source' => 'firewall',
+                    'ip' => $ip,
+                    'blocked_count' => $count,
+                    'severity' => $count >= 20 ? 'high' : 'medium',
+                    'description' => "IP {$ip} was blocked {$count} times by firewall",
+                ];
+            }
+        }
+        
+        return $threats;
+    }
+    
+    /**
+     * Detect security violations from security audit logs
+     */
+    private function detectSecurityViolations(array $securityLogs): array
+    {
+        $threats = [];
+        
+        foreach ($securityLogs as $log) {
+            $raw = strtolower($log['raw'] ?? '');
+            
+            // Look for keychain access violations
+            if (preg_match('/(keychain|credential).*?(denied|failed|error)/i', $raw)) {
+                $threats[] = [
+                    'type' => 'credential_access_violation',
+                    'source' => 'security_audit',
+                    'severity' => 'medium',
+                    'description' => 'Credential or keychain access violation detected',
+                    'raw' => substr($log['raw'] ?? '', 0, 200),
+                ];
+            }
+            
+            // Look for code signing violations
+            if (preg_match('/codesign.*(invalid|failed|untrusted)/i', $raw)) {
+                $threats[] = [
+                    'type' => 'code_signature_violation',
+                    'source' => 'security_audit',
+                    'severity' => 'high',
+                    'description' => 'Code signature validation failed - potential malware',
+                    'raw' => substr($log['raw'] ?? '', 0, 200),
+                ];
+            }
+        }
+        
+        return array_slice($threats, 0, 10); // Limit to prevent flooding
+    }
+    
+    /**
+     * Detect app crashes that might indicate exploitation
+     */
+    private function detectAppCrashes(array $appLogs): array
+    {
+        $threats = [];
+        $crashCounts = [];
+        
+        foreach ($appLogs as $log) {
+            $raw = strtolower($log['raw'] ?? '');
+            $process = $log['process'] ?? 'unknown';
+            
+            // Look for crash patterns
+            if (preg_match('/(crash|exception|fault|segmentation|abort)/i', $raw)) {
+                $crashCounts[$process] = ($crashCounts[$process] ?? 0) + 1;
+            }
+        }
+        
+        // Multiple crashes of same app could indicate exploitation
+        foreach ($crashCounts as $process => $count) {
+            if ($count >= 3) {
+                $threats[] = [
+                    'type' => 'repeated_crash',
+                    'source' => 'application',
+                    'process' => $process,
+                    'crash_count' => $count,
+                    'severity' => $count >= 10 ? 'high' : 'medium',
+                    'description' => "Process {$process} crashed {$count} times - potential exploitation attempt",
+                ];
+            }
+        }
+        
+        return $threats;
+    }
+    
+    /**
+     * Perform AI analysis on log summary
+     */
+    private function performAiLogAnalysis(array $logSummary): ?array
+    {
+        $prompt = $this->buildEnhancedLogAnalysisPrompt($logSummary);
+        
+        try {
+            $response = Http::timeout($this->timeout)
+                ->post("{$this->ollamaUrl}/api/generate", [
+                    'model' => $this->ollamaModel,
+                    'prompt' => $prompt,
+                    'stream' => false,
+                    'format' => 'json',
+                ]);
+            
+            if ($response->successful()) {
+                $data = json_decode($response->json('response'), true);
+                if (is_array($data)) {
+                    return $data;
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning('Enhanced log AI analysis failed: ' . $e->getMessage());
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Build prompt for enhanced log analysis
+     */
+    private function buildEnhancedLogAnalysisPrompt(array $logSummary): string
+    {
+        $json = json_encode($logSummary, JSON_PRETTY_PRINT);
+        
+        return <<<PROMPT
+You are a security analyst reviewing comprehensive system logs from a personal computer.
+
+Log Summary:
+{$json}
+
+Analyze these logs for:
+1. Security threats (malware, intrusion attempts, unauthorized access)
+2. System stability issues that could indicate compromise
+3. Suspicious application behavior
+4. Firewall activity anomalies
+5. Authentication and access patterns
+
+Respond in JSON format:
+{
+    "threat_level": "none|low|medium|high|critical",
+    "confidence": 0-100,
+    "findings": [
+        {"category": "string", "severity": "low|medium|high", "description": "string"}
+    ],
+    "recommendations": ["action1", "action2"],
+    "summary": "brief security assessment"
+}
+PROMPT;
+    }
+    
+    /**
      * Build prompt for login analysis
      */
     private function buildLoginAnalysisPrompt(array $loginData): string
