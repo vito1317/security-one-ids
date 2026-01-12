@@ -103,6 +103,7 @@ install_clamav() {
         if command -v brew &> /dev/null; then
             # Run brew as the original user (not root)
             ORIGINAL_USER="${SUDO_USER:-$USER}"
+            echo -e "${YELLOW}Installing ClamAV via Homebrew as $ORIGINAL_USER...${NC}"
             sudo -u "$ORIGINAL_USER" brew install clamav 2>/dev/null || brew install clamav
             
             # Configure freshclam
@@ -115,6 +116,17 @@ install_clamav() {
                 cp "$CLAMAV_CONF_DIR/freshclam.conf.sample" "$CLAMAV_CONF_DIR/freshclam.conf"
                 sed -i '' 's/^Example/#Example/' "$CLAMAV_CONF_DIR/freshclam.conf" 2>/dev/null || true
             fi
+            
+            # Fix ClamAV database directory permissions for freshclam
+            echo -e "${YELLOW}Setting up ClamAV database directory permissions...${NC}"
+            CLAMAV_DB_DIR="/opt/homebrew/var/lib/clamav"
+            if [ ! -d "$CLAMAV_DB_DIR" ]; then
+                CLAMAV_DB_DIR="/usr/local/var/lib/clamav"
+            fi
+            mkdir -p "$CLAMAV_DB_DIR"
+            chown -R "$ORIGINAL_USER" "$CLAMAV_DB_DIR"
+            chmod -R 755 "$CLAMAV_DB_DIR"
+            
         else
             echo -e "${RED}Homebrew not found. Please install Homebrew first or install ClamAV manually.${NC}"
             return 1
@@ -136,7 +148,13 @@ install_clamav() {
     
     # Update virus definitions
     echo -e "${CYAN}📥 Updating virus definitions...${NC}"
-    freshclam 2>/dev/null || true
+    if [ "$OS" = "macos" ]; then
+        # Run freshclam as the original user on macOS
+        ORIGINAL_USER="${SUDO_USER:-$USER}"
+        sudo -u "$ORIGINAL_USER" freshclam 2>/dev/null || freshclam 2>/dev/null || true
+    else
+        freshclam 2>/dev/null || true
+    fi
     
     echo -e "${GREEN}✅ ClamAV installed and updated${NC}"
     return 0
