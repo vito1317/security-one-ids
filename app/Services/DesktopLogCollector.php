@@ -313,57 +313,67 @@ class DesktopLogCollector
         $logs = [];
         
         try {
-            // Use simpler PowerShell command - write to temp file then read
-            // Security Event Log IDs for login events:
+            // Security Event Log IDs we care about:
             // 4624 = Successful logon
             // 4625 = Failed logon
             // 4634 = Logoff
             // 4648 = Explicit credentials logon
+            // 5379 = Credential Manager read (also security related)
             
-            // First try: Simple PowerShell with Get-WinEvent
+            // Method 1: Use temp file approach (more reliable on Windows)
+            $tempFile = sys_get_temp_dir() . '\\security_log_' . time() . '.json';
+            
+            // Build PowerShell script as a file for more reliable execution
             if ($logName === 'Security') {
-                $psCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-WinEvent -LogName Security -MaxEvents ' . $count . ' 2>$null | Where-Object { $_.Id -in @(4624,4625,4634) } | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress"';
+                // Get all security events first (no filter), let PHP do the filtering
+                $psScript = <<<'PS'
+$events = Get-WinEvent -LogName Security -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, @{N='Msg';E={$_.Message.Substring(0,[Math]::Min(500,$_.Message.Length))}}
+if ($events) { $events | ConvertTo-Json -Compress } else { Write-Output '[]' }
+PS;
+                $psScript = sprintf($psScript, $count);
             } else {
-                $psCommand = 'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-WinEvent -LogName ' . $logName . ' -MaxEvents ' . $count . ' 2>$null | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Compress"';
+                $psScript = sprintf(
+                    'Get-WinEvent -LogName "%s" -MaxEvents %d -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | ConvertTo-Json -Compress',
+                    $logName,
+                    $count
+                );
             }
             
-            Log::debug("Executing PowerShell: {$psCommand}");
+            // Write script to temp file
+            $scriptFile = sys_get_temp_dir() . '\\get_events_' . time() . '.ps1';
+            file_put_contents($scriptFile, $psScript);
             
-            // Execute and capture both stdout and stderr
-            $descriptors = [
-                0 => ['pipe', 'r'],
-                1 => ['pipe', 'w'],
-                2 => ['pipe', 'w'],
-            ];
+            Log::debug("PowerShell script file: {$scriptFile}");
+            Log::debug("PowerShell script content: " . substr($psScript, 0, 200));
             
-            $process = proc_open($psCommand, $descriptors, $pipes);
+            // Execute the script file
+            $psCommand = sprintf(
+                'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%s"',
+                $scriptFile
+            );
             
-            if (is_resource($process)) {
-                fclose($pipes[0]); // Close stdin
-                $output = stream_get_contents($pipes[1]);
-                $stderr = stream_get_contents($pipes[2]);
-                fclose($pipes[1]);
-                fclose($pipes[2]);
-                $exitCode = proc_close($process);
-                
-                Log::debug("PowerShell exit code: {$exitCode}");
-                if ($stderr) {
-                    Log::debug("PowerShell stderr: " . substr($stderr, 0, 200));
-                }
-            } else {
-                // Fallback to shell_exec if proc_open fails
-                $output = shell_exec($psCommand . ' 2>&1');
-            }
+            Log::debug("Executing: {$psCommand}");
             
-            Log::debug("PowerShell output length: " . strlen($output ?? ''));
-            Log::debug("PowerShell output preview: " . substr($output ?? '', 0, 300));
+            // Use exec for better output handling on Windows
+            $output = [];
+            $returnCode = 0;
+            exec($psCommand . ' 2>&1', $output, $returnCode);
             
-            if ($output && strlen(trim($output)) > 2 && $output !== '[]') {
-                $events = json_decode($output, true);
+            $outputStr = implode("\n", $output);
+            
+            Log::debug("PowerShell return code: {$returnCode}");
+            Log::debug("PowerShell output length: " . strlen($outputStr));
+            Log::debug("PowerShell output preview: " . substr($outputStr, 0, 500));
+            
+            // Clean up temp files
+            @unlink($scriptFile);
+            
+            if ($outputStr && strlen(trim($outputStr)) > 2 && $outputStr !== '[]') {
+                $events = json_decode($outputStr, true);
                 
                 if (json_last_error() !== JSON_ERROR_NONE) {
                     Log::debug("JSON decode error: " . json_last_error_msg());
-                    Log::debug("Raw output: " . substr($output, 0, 500));
+                    Log::debug("Raw output: " . substr($outputStr, 0, 500));
                 } else if (is_array($events)) {
                     // Handle single event (PowerShell returns object not array for single result)
                     if (isset($events['TimeCreated'])) {
@@ -378,34 +388,22 @@ class DesktopLogCollector
                 }
             }
             
-            // If first method failed, try wevtutil as fallback
-            if (empty($logs) && $logName === 'Security') {
-                Log::debug("Trying wevtutil fallback for Security log");
-                $wevtCommand = 'wevtutil qe Security /c:50 /rd:true /f:text /q:"*[System[(EventID=4624 or EventID=4625)]]" 2>&1';
-                $wevtOutput = shell_exec($wevtCommand);
+            // Method 2: If still empty, try direct command without file
+            if (empty($logs)) {
+                Log::debug("Method 1 failed, trying direct PowerShell command");
+                $directOutput = shell_exec('powershell.exe -NoProfile -Command "Get-WinEvent -LogName Security -MaxEvents 20 2>$null | Select TimeCreated,Id | ConvertTo-Json"');
                 
-                if ($wevtOutput && strlen($wevtOutput) > 10) {
-                    Log::debug("wevtutil returned " . strlen($wevtOutput) . " bytes");
-                    // Parse wevtutil text output
-                    preg_match_all('/Event\[\d+\]:\s*\n(.*?)(?=Event\[\d+\]:|$)/s', $wevtOutput, $matches);
-                    foreach ($matches[1] ?? [] as $eventText) {
-                        $eventId = 0;
-                        if (preg_match('/EventID:\s*(\d+)/', $eventText, $m)) {
-                            $eventId = (int)$m[1];
+                if ($directOutput && strlen(trim($directOutput)) > 2) {
+                    Log::debug("Direct PowerShell output: " . substr($directOutput, 0, 300));
+                    $events = json_decode($directOutput, true);
+                    if (is_array($events)) {
+                        if (isset($events['TimeCreated'])) {
+                            $events = [$events];
                         }
-                        $logs[] = [
-                            'raw' => $eventText,
-                            'timestamp' => date('Y-m-d H:i:s'),
-                            'type' => $eventId === 4625 ? 'failed_login' : ($eventId === 4624 ? 'successful_login' : 'unknown'),
-                            'event_id' => $eventId,
-                            'user' => null,
-                            'ip' => null,
-                            'service' => 'windows',
-                        ];
+                        foreach ($events as $event) {
+                            $logs[] = $this->parseWindowsEvent($event);
+                        }
                     }
-                    Log::debug("wevtutil parsed " . count($logs) . " events");
-                } else {
-                    Log::debug("wevtutil returned no output");
                 }
             }
             
@@ -421,8 +419,11 @@ class DesktopLogCollector
      */
     private function parseWindowsEvent(array $event): array
     {
+        // Handle both 'Message' and 'Msg' field names (PowerShell alias)
+        $message = $event['Message'] ?? $event['Msg'] ?? '';
+        
         $entry = [
-            'raw' => $event['Message'] ?? '',
+            'raw' => $message,
             'timestamp' => $event['TimeCreated'] ?? null,
             'type' => 'unknown',
             'event_id' => $event['Id'] ?? null,
@@ -432,7 +433,6 @@ class DesktopLogCollector
         ];
         
         $eventId = $event['Id'] ?? 0;
-        $message = $event['Message'] ?? '';
         
         // Windows Security Event IDs
         // 4624 - Successful login
@@ -442,6 +442,9 @@ class DesktopLogCollector
         // 4672 - Special privileges assigned
         // 4720 - User account created
         // 4726 - User account deleted
+        // 5379 - Credential Manager read
+        // 5058 - Key file operation
+        // 5061 - Cryptographic operation
         
         switch ($eventId) {
             case 4625:
@@ -464,6 +467,10 @@ class DesktopLogCollector
                 }
                 break;
                 
+            case 4634:
+                $entry['type'] = 'logoff';
+                break;
+                
             case 4672:
                 $entry['type'] = 'privilege_escalation';
                 if (preg_match('/Account Name:\s+(\S+)/i', $message, $m)) {
@@ -475,6 +482,35 @@ class DesktopLogCollector
                 $entry['type'] = 'user_created';
                 if (preg_match('/New Account:\s+Account Name:\s+(\S+)/i', $message, $m)) {
                     $entry['user'] = $m[1];
+                }
+                break;
+                
+            case 4726:
+                $entry['type'] = 'user_deleted';
+                break;
+                
+            case 5379:
+                $entry['type'] = 'credential_read';
+                break;
+                
+            case 5058:
+            case 5061:
+                $entry['type'] = 'crypto_operation';
+                break;
+                
+            // System events
+            case 6005:
+                $entry['type'] = 'system_start';
+                break;
+                
+            case 6006:
+                $entry['type'] = 'system_shutdown';
+                break;
+                
+            default:
+                // For events we don't specifically handle, mark as security_event
+                if ($eventId >= 4600 && $eventId <= 5999) {
+                    $entry['type'] = 'security_event';
                 }
                 break;
         }
