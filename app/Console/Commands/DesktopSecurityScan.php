@@ -77,7 +77,25 @@ class DesktopSecurityScan extends Command
                 $this->newLine();
                 $this->info('📋 macOS Enhanced Log Collection:');
                 
-                // System logs
+                // System logs - with debug
+                if ($this->output->isVerbose()) {
+                    // Direct debug: test what PHP actually gets from log show
+                    $testCmd = "log show --predicate 'process == \"launchd\"' --last 2m --style json 2>&1 | head -c 1000";
+                    $testOutput = shell_exec($testCmd);
+                    $this->warn("  DEBUG: launchd test output length: " . strlen($testOutput ?? ''));
+                    if ($testOutput) {
+                        $this->line("  DEBUG: First 200 chars: " . substr($testOutput, 0, 200));
+                        $testJson = @json_decode($testOutput, true);
+                        if ($testJson === null) {
+                            $this->error("  DEBUG: JSON parse failed: " . json_last_error_msg());
+                        } else {
+                            $this->info("  DEBUG: JSON parsed OK, events: " . (is_array($testJson) ? count($testJson) : 'not array'));
+                        }
+                    } else {
+                        $this->error("  DEBUG: shell_exec returned null/empty");
+                    }
+                }
+                
                 $systemLogs = $collector->collectMacOsSystemLogs(60);
                 $this->line("  📦 System logs: " . count($systemLogs));
                 
