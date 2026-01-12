@@ -195,7 +195,7 @@ if [ "$OS" = "macos" ]; then
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
     <key>StartInterval</key>
-    <integer>60</integer>
+    <integer>300</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -244,8 +244,8 @@ EOF
 Description=Security One IDS Periodic Scan
 
 [Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
+OnBootSec=2min
+OnUnitActiveSec=5min
 
 [Install]
 WantedBy=timers.target
@@ -259,7 +259,7 @@ Description=Security One IDS Scan
 Type=oneshot
 User=root
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/php $INSTALL_DIR/artisan desktop:scan --report
+ExecStart=/usr/bin/php $INSTALL_DIR/artisan desktop:scan --full
 EOF
 
     systemctl daemon-reload

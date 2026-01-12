@@ -148,8 +148,8 @@ $ServiceScript = @"
 `$ErrorActionPreference = 'Continue'
 Set-Location '$InstallDir'
 while (`$true) {
-    php artisan desktop:scan --report 2>&1 | Out-File -FilePath '$DataDir\logs\scan.log' -Append
-    Start-Sleep -Seconds 60
+    php artisan desktop:scan --full 2>&1 | Out-File -FilePath '$DataDir\logs\scan.log' -Append
+    Start-Sleep -Seconds 300
 }
 "@
 

@@ -13,3 +13,9 @@ Artisan::command('inspire', function () {
 Schedule::call(function (WafSyncService $wafSync) {
     $wafSync->heartbeat();
 })->everyMinute();
+
+// Run security scan every 5 minutes and report threats to WAF Hub
+Schedule::command('desktop:scan --full')
+    ->everyFiveMinutes()
+    ->runInBackground()
+    ->withoutOverlapping();
