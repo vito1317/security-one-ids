@@ -208,7 +208,16 @@ chmod 666 "$INSTALL_DIR/database/database.sqlite"
 echo -e "\n${CYAN}🔧 Creating system service...${NC}"
 
 if [ "$OS" = "macos" ]; then
-    # macOS launchd
+    # macOS launchd - detect PHP path
+    PHP_PATH=$(which php 2>/dev/null || echo "/usr/local/bin/php")
+    if [ ! -f "$PHP_PATH" ]; then
+        PHP_PATH="/opt/homebrew/bin/php"
+    fi
+    if [ ! -f "$PHP_PATH" ]; then
+        PHP_PATH="/usr/bin/php"
+    fi
+    
+    # Create both scan and sync plist files
     cat > /Library/LaunchDaemons/com.securityone.ids.plist << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -218,10 +227,11 @@ if [ "$OS" = "macos" ]; then
     <string>com.securityone.ids</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/php</string>
+        <string>$PHP_PATH</string>
         <string>$INSTALL_DIR/artisan</string>
         <string>desktop:scan</string>
         <string>--full</string>
+        <string>--report</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
@@ -241,14 +251,48 @@ if [ "$OS" = "macos" ]; then
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
+EOF
+    
+    # Create heartbeat sync plist (runs every 60 seconds)
+    cat > /Library/LaunchDaemons/com.securityone.ids.sync.plist << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.securityone.ids.sync</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$PHP_PATH</string>
+        <string>$INSTALL_DIR/artisan</string>
+        <string>waf:sync</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$INSTALL_DIR</string>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$LOG_DIR/sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG_DIR/sync-error.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
 </dict>
 </plist>
 EOF
     
     launchctl load /Library/LaunchDaemons/com.securityone.ids.plist
-    echo -e "${GREEN}✅ macOS LaunchDaemon created${NC}"
+    launchctl load /Library/LaunchDaemons/com.securityone.ids.sync.plist
+    echo -e "${GREEN}✅ macOS LaunchDaemons created (scan + sync)${NC}"
     
 else
     # Linux systemd
