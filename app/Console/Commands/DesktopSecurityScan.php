@@ -354,8 +354,11 @@ class DesktopSecurityScan extends Command
             $this->warn('⚠️  Heartbeat failed - check WAF_URL and AGENT_TOKEN');
         }
         
+        // Check if we have enhanced log threats to report
+        $hasEnhancedThreats = !empty($macEnhancedAnalysis['threats']);
+        
         // Send report to WAF Hub (always sync if threats detected, or if --report flag)
-        $shouldReport = $this->option('report') || $bruteForceResult['threat_detected'] || $networkResult['threat_detected'];
+        $shouldReport = $this->option('report') || $bruteForceResult['threat_detected'] || $networkResult['threat_detected'] || $hasEnhancedThreats;
         
         if ($shouldReport) {
             $this->newLine();
@@ -431,11 +434,6 @@ class DesktopSecurityScan extends Command
             
             // Send enhanced log threats (from macOS or Windows analysis)
             $enhancedAnalysisToSync = $macEnhancedAnalysis ?? null;
-            
-            // DEBUG: Check what we're working with
-            $threatCount = !empty($enhancedAnalysisToSync['threats']) ? count($enhancedAnalysisToSync['threats']) : 0;
-            $this->line("DEBUG: macEnhancedAnalysis set: " . ($enhancedAnalysisToSync !== null ? 'yes' : 'no'));
-            $this->line("DEBUG: Threat count for sync: " . $threatCount);
             
             if ($enhancedAnalysisToSync && !empty($enhancedAnalysisToSync['threats'])) {
                 $this->info('📤 Sending enhanced log threats...');
