@@ -343,14 +343,24 @@ class ClamavService
     public function reportToHub(array $scanResult = []): bool
     {
         try {
-            $wafSync = app(WafSyncService::class);
-            $config = $wafSync->getSyncedConfig();
-            
             $wafUrl = rtrim(config('ids.waf_url') ?? env('WAF_URL', ''), '/');
-            $token = cache()->get('waf_agent_token') ?? env('AGENT_TOKEN', '');
+            
+            // Use same token retrieval pattern as WafSyncService
+            $cachedToken = cache()->get('waf_agent_token');
+            $envToken = config('ids.agent_token') ?? env('AGENT_TOKEN', '');
+            $token = !empty($cachedToken) ? $cachedToken : $envToken;
+
+            Log::info('ClamAV reportToHub: attempting to report status', [
+                'waf_url' => $wafUrl,
+                'has_token' => !empty($token),
+                'token_source' => !empty($cachedToken) ? 'cache' : 'env',
+            ]);
 
             if (empty($wafUrl) || empty($token)) {
-                Log::warning('Cannot report ClamAV status: WAF not configured');
+                Log::warning('Cannot report ClamAV status: WAF not configured', [
+                    'waf_url_empty' => empty($wafUrl),
+                    'token_empty' => empty($token),
+                ]);
                 return false;
             }
 
@@ -367,11 +377,26 @@ class ClamavService
                 'error_message' => $scanResult['message'] ?? null,
             ];
 
+            Log::info('ClamAV reportToHub: sending payload', [
+                'status' => $status['status'],
+                'version' => $status['version'],
+                'installed' => $status['installed'],
+            ]);
+
             $response = Http::timeout(30)
                 ->withToken($token)
                 ->post("{$wafUrl}/api/ids/agents/clamav-status", $payload);
 
-            return $response->successful();
+            if ($response->successful()) {
+                Log::info('ClamAV status reported successfully');
+                return true;
+            }
+
+            Log::error('ClamAV reportToHub failed', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+            return false;
         } catch (\Exception $e) {
             Log::error('Failed to report ClamAV status: ' . $e->getMessage());
             return false;
