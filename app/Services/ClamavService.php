@@ -437,7 +437,13 @@ class ClamavService
                 $payload['scan_status'] = $scanResult['scan_status'];
             } else {
                 // Heartbeat - detect actual status by checking if clamscan is running
-                $payload['scan_status'] = $this->isScanRunning() ? 'scanning' : 'idle';
+                $isScanning = $this->isScanRunning();
+                $payload['scan_status'] = $isScanning ? 'scanning' : 'idle';
+                
+                // Add progress indicator when scanning detected
+                if ($isScanning && empty($payload['scan_progress'])) {
+                    $payload['scan_progress'] = 'Scanning in progress...';
+                }
             }
 
             // Log full payload for debugging
