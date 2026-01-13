@@ -414,15 +414,19 @@ class ClamavService
                 'infected_files' => $scanResult['infected_files'] ?? 0,
                 'scanned_files' => $scanResult['scanned_files'] ?? 0,
                 'threats' => $scanResult['threats'] ?? [],
-                'status' => $status['status'],
+                'status' => $scanResult['status'] ?? $status['status'],
                 'scan_status' => $scanResult['scan_status'] ?? 'idle',
+                'scan_progress' => $scanResult['scan_progress'] ?? null,
                 'error_message' => $scanResult['message'] ?? null,
             ];
 
+            // Log full payload for debugging
             Log::info('ClamAV reportToHub: sending payload', [
-                'status' => $status['status'],
-                'version' => $status['version'],
+                'scanned_files' => $payload['scanned_files'],
+                'infected_files' => $payload['infected_files'],
+                'last_scan' => $payload['last_scan'],
                 'scan_status' => $payload['scan_status'],
+                'scan_progress' => $payload['scan_progress'],
             ]);
 
             $response = Http::timeout(30)
