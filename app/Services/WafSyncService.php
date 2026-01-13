@@ -180,11 +180,25 @@ class WafSyncService
             Log::info("Scan now signal received (type: {$scanType}), dispatching to background...");
             
             // Run scan in background process so it doesn't block heartbeat
-            // Use nohup to ensure process continues after PHP exits
             $artisanPath = base_path('artisan');
             $logPath = storage_path('logs/scan-output.log');
-            $command = "nohup php {$artisanPath} ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
-            exec($command);
+            $phpPath = PHP_BINARY ?: 'php';  // Use PHP_BINARY for correct PHP path
+            
+            // Platform-specific background execution
+            if (PHP_OS_FAMILY === 'Darwin') {
+                // macOS: use nohup with explicit paths
+                $command = "nohup {$phpPath} {$artisanPath} ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
+            } elseif (file_exists('/.dockerenv')) {
+                // Docker: use nohup but log to container path
+                $command = "nohup {$phpPath} {$artisanPath} ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
+            } else {
+                // Linux: standard nohup
+                $command = "nohup {$phpPath} {$artisanPath} ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
+            }
+            
+            Log::info('Executing background scan command', ['command' => $command]);
+            exec($command, $output, $returnCode);
+            Log::info('Background scan dispatch result', ['return_code' => $returnCode, 'output' => $output]);
             
             Log::info('Scan dispatched to background');
         }
@@ -272,6 +286,26 @@ class WafSyncService
             Log::info('Clearing caches...');
             Artisan::call('config:clear');
             Artisan::call('cache:clear');
+            
+            // Check if running in Docker and trigger rebuild
+            if (file_exists('/.dockerenv') || getenv('DOCKER_CONTAINER')) {
+                Log::info('Docker environment detected, triggering container rebuild...');
+                
+                // The actual rebuild needs to happen outside the container
+                // Signal to webhook or use docker-compose restart
+                $dockerComposeDir = dirname($installDir);
+                
+                // Try to rebuild using docker-compose directly (requires volume mount)
+                $rebuildScript = $installDir . '/docker/rebuild.sh';
+                if (file_exists($rebuildScript)) {
+                    Log::info('Running Docker rebuild script...');
+                    exec("nohup bash {$rebuildScript} >> /var/www/html/storage/logs/docker-rebuild.log 2>&1 &");
+                } else {
+                    // Alternative: create a marker file for external monitoring
+                    file_put_contents($installDir . '/storage/rebuild_requested', date('Y-m-d H:i:s'));
+                    Log::info('Docker rebuild marker created, waiting for external rebuild...');
+                }
+            }
             
             // Get new version from config
             $newVersion = config('ids.version') ?? '1.0.0';
