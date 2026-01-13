@@ -448,16 +448,21 @@ class ClamavService
             $payload = [
                 'version' => $status['version'],
                 'definitions_date' => $this->parseDefinitionsDate($status['definitions_date']),
-                'last_scan' => $scanResult['last_scan'] ?? null,
-                'infected_files' => $scanResult['infected_files'] ?? 0,
-                'scanned_files' => $scanResult['scanned_files'] ?? 0,
-                'threats' => $scanResult['threats'] ?? [],
                 'status' => $scanResult['status'] ?? $status['status'],
                 'scan_progress' => $scanResult['scan_progress'] ?? null,
-                'scan_completed' => $scanResult['scan_completed'] ?? false,
-                'skip_scan_status' => $scanResult['skip_scan_status'] ?? false,  // Skip updating scan_status if true
                 'error_message' => $scanResult['message'] ?? null,
             ];
+            
+            // Only include scan results if they have actual data (not heartbeat defaults)
+            // This prevents resetting existing counts in WAF Hub
+            if (isset($scanResult['last_scan']) || 
+                (isset($scanResult['scanned_files']) && $scanResult['scanned_files'] > 0) ||
+                (isset($scanResult['infected_files']) && $scanResult['infected_files'] > 0)) {
+                $payload['last_scan'] = $scanResult['last_scan'] ?? now()->toDateTimeString();
+                $payload['infected_files'] = $scanResult['infected_files'] ?? 0;
+                $payload['scanned_files'] = $scanResult['scanned_files'] ?? 0;
+                $payload['threats'] = $scanResult['threats'] ?? [];
+            }
             
             // ALWAYS send real scan_status - detect if clamscan is running
             // This replaces the old skip_scan_status logic which was unreliable
