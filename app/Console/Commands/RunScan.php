@@ -86,7 +86,16 @@ class RunScan extends Command
             
             // Report final results with idle status
             $allResults['scan_status'] = 'idle';
+            $allResults['scan_progress'] = null;
+            $allResults['last_scan'] = now()->toDateTimeString();
             $allResults['status'] = $allResults['infected_files'] > 0 ? 'warning' : 'healthy';
+            
+            Log::info('Sending final scan report', [
+                'last_scan' => $allResults['last_scan'],
+                'scanned_files' => $allResults['scanned_files'],
+                'infected_files' => $allResults['infected_files'],
+            ]);
+            
             $clamav->reportToHub($allResults);
             
             $this->info('Scan completed successfully');
