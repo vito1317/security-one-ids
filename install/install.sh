@@ -306,6 +306,7 @@ php artisan migrate --force 2>/dev/null || echo -e "${YELLOW}⚠️  Migration s
 php artisan package:discover --ansi 2>/dev/null || true
 
 # Set permissions (macOS uses 'wheel' group, Linux uses 'root')
+echo -e "${CYAN}🔐 Setting permissions...${NC}"
 if [ "$OS" = "macos" ]; then
     chown -R root:wheel "$INSTALL_DIR"
 else
@@ -313,7 +314,16 @@ else
 fi
 chmod -R 755 "$INSTALL_DIR"
 chmod 600 "$INSTALL_DIR/.env"
+
+# Ensure writable directories have proper permissions
+chmod -R 777 "$INSTALL_DIR/storage"
+chmod -R 777 "$INSTALL_DIR/bootstrap/cache"
+chmod -R 777 "$INSTALL_DIR/database"
 chmod 666 "$INSTALL_DIR/database/database.sqlite"
+
+# Also set log directory permissions
+chmod -R 777 "$LOG_DIR"
+echo -e "${GREEN}✅ Permissions set${NC}"
 
 # Create systemd service (Linux) or launchd plist (macOS)
 echo -e "\n${CYAN}🔧 Creating system service...${NC}"
