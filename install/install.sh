@@ -307,8 +307,20 @@ php artisan package:discover --ansi 2>/dev/null || true
 
 # Set permissions (macOS uses 'wheel' group, Linux uses 'root')
 echo -e "${CYAN}🔐 Setting permissions...${NC}"
+
+# Get the actual user (not root when running with sudo)
+ACTUAL_USER="${SUDO_USER:-$USER}"
+
 if [ "$OS" = "macos" ]; then
+    # On macOS, make the actual user own the writable directories
+    # This prevents "readonly database" errors when running as the user
     chown -R root:wheel "$INSTALL_DIR"
+    
+    # Make writable directories owned by the actual user
+    chown -R "$ACTUAL_USER" "$INSTALL_DIR/storage"
+    chown -R "$ACTUAL_USER" "$INSTALL_DIR/database"  
+    chown -R "$ACTUAL_USER" "$INSTALL_DIR/bootstrap/cache"
+    chown -R "$ACTUAL_USER" "$LOG_DIR"
 else
     chown -R root:root "$INSTALL_DIR"
 fi
