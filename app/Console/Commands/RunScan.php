@@ -58,7 +58,21 @@ class RunScan extends Command
             } else {
                 // Quick scan - only critical areas
                 if ($platform === 'macos') {
-                    $scanPaths = ['/tmp', '/Users/' . get_current_user() . '/Downloads'];
+                    // Use /private/tmp (actual tmp location) and scan existing user Downloads
+                    $scanPaths = ['/private/tmp'];
+                    
+                    // Find actual user's Downloads folder
+                    $usersDir = '/Users';
+                    if (is_dir($usersDir)) {
+                        $users = array_diff(scandir($usersDir), ['.', '..', 'Shared', '.localized']);
+                        foreach ($users as $user) {
+                            $downloads = "{$usersDir}/{$user}/Downloads";
+                            if (is_dir($downloads) && is_readable($downloads)) {
+                                $scanPaths[] = $downloads;
+                                break; // Only scan first found user
+                            }
+                        }
+                    }
                 } else {
                     // Docker container: use mounted host directories if available
                     if (is_dir('/mnt/host-tmp') || is_dir('/mnt/host-www')) {
