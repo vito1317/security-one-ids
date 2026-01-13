@@ -103,8 +103,11 @@ class RunScan extends Command
                     $currentPath = $index + 1;
                     Log::info("Scanning directory ({$currentPath}/{$totalPaths}): {$path}");
                     
+                    // Translate Docker container paths to host paths for display
+                    $displayPath = $clamav->translateDockerPath($path);
+                    
                     // Save progress to cache file for heartbeat to read
-                    $progressText = "掃描中: {$path} ({$currentPath}/{$totalPaths})";
+                    $progressText = "掃描中: {$displayPath} ({$currentPath}/{$totalPaths})";
                     $clamav->saveScanProgress($progressText);
                     
                     // Report progress BEFORE starting scan (so user sees current directory)

@@ -18,6 +18,33 @@ class ClamavService
     }
 
     /**
+     * Translate Docker container mount paths to actual host paths
+     * /mnt/host-www -> /var/www, /mnt/host-tmp -> /tmp, etc.
+     */
+    public function translateDockerPath(string $path): string
+    {
+        // Only translate if running in Docker
+        if (!file_exists('/.dockerenv')) {
+            return $path;
+        }
+        
+        $translations = [
+            '/mnt/host-www' => '/var/www',
+            '/mnt/host-home' => '/home',
+            '/mnt/host-opt' => '/opt',
+            '/mnt/host-tmp' => '/tmp',
+        ];
+        
+        foreach ($translations as $containerPath => $hostPath) {
+            if (str_starts_with($path, $containerPath)) {
+                return str_replace($containerPath, $hostPath, $path);
+            }
+        }
+        
+        return $path;
+    }
+
+    /**
      * Check if ClamAV is installed
      */
     public function checkInstallation(): bool
@@ -391,12 +418,18 @@ class ClamavService
                 'infected_files' => max(count($infected), $infectedCount),
             ]);
 
+            // Translate Docker container paths to host paths for display
+            $translatedThreats = array_map(
+                fn($threat) => $this->translateDockerPath($threat),
+                $infected
+            );
+
             return [
                 'success' => true,
                 'status' => count($infected) > 0 ? 'warning' : 'healthy',
                 'scanned_files' => $scannedFiles,
                 'infected_files' => max(count($infected), $infectedCount),
-                'threats' => $infected,
+                'threats' => $translatedThreats,
             ];
         } catch (\Exception $e) {
             Log::error('ClamAV scan failed: ' . $e->getMessage());
