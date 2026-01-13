@@ -180,20 +180,20 @@ class WafSyncService
             Log::info("Scan now signal received (type: {$scanType}), dispatching to background...");
             
             // Run scan in background process so it doesn't block heartbeat
-            $artisanPath = base_path('artisan');
+            $basePath = base_path();
             $logPath = storage_path('logs/scan-output.log');
             $phpPath = PHP_BINARY ?: 'php';  // Use PHP_BINARY for correct PHP path
             
             // Platform-specific background execution
             if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: use nohup with explicit paths
-                $command = "nohup {$phpPath} {$artisanPath} ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
+                // macOS: use nohup with cd to ensure Laravel bootstraps correctly
+                $command = "cd {$basePath} && nohup {$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
             } elseif (file_exists('/.dockerenv')) {
-                // Docker: use nohup but log to container path
-                $command = "nohup {$phpPath} {$artisanPath} ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
+                // Docker: cd to container path for Laravel to work
+                $command = "cd /var/www/html && nohup {$phpPath} artisan ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
             } else {
-                // Linux: standard nohup
-                $command = "nohup {$phpPath} {$artisanPath} ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
+                // Linux: cd to base path for Laravel to work
+                $command = "cd {$basePath} && nohup {$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
             }
             
             Log::info('Executing background scan command', ['command' => $command]);
