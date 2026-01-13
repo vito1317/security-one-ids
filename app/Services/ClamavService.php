@@ -430,9 +430,14 @@ class ClamavService
                 'error_message' => $scanResult['message'] ?? null,
             ];
             
-            // Only include scan_status if not skipping (heartbeat skips to preserve active scan status)
-            if (empty($scanResult['skip_scan_status'])) {
-                $payload['scan_status'] = $scanResult['scan_status'] ?? 'idle';
+            // ALWAYS send real scan_status - detect if clamscan is running
+            // This replaces the old skip_scan_status logic which was unreliable
+            if (isset($scanResult['scan_status'])) {
+                // Explicit status from RunScan - use it
+                $payload['scan_status'] = $scanResult['scan_status'];
+            } else {
+                // Heartbeat - detect actual status by checking if clamscan is running
+                $payload['scan_status'] = $this->isScanRunning() ? 'scanning' : 'idle';
             }
 
             // Log full payload for debugging
@@ -440,7 +445,7 @@ class ClamavService
                 'scanned_files' => $payload['scanned_files'],
                 'infected_files' => $payload['infected_files'],
                 'last_scan' => $payload['last_scan'],
-                'scan_status' => $payload['scan_status'] ?? '(skipped)',
+                'scan_status' => $payload['scan_status'],
                 'scan_progress' => $payload['scan_progress'],
             ]);
 
@@ -510,5 +515,26 @@ class ClamavService
     public function isInstalled(): bool
     {
         return $this->isInstalled;
+    }
+
+    /**
+     * Check if a clamscan process is currently running
+     * This is used to detect real-time scan status
+     */
+    public function isScanRunning(): bool
+    {
+        try {
+            if (PHP_OS_FAMILY === 'Darwin') {
+                // macOS: use pgrep
+                $result = Process::run('pgrep -x clamscan');
+            } else {
+                // Linux: use pgrep or ps
+                $result = Process::run('pgrep clamscan || ps aux | grep -v grep | grep clamscan');
+            }
+            
+            return $result->successful() && !empty(trim($result->output()));
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 }
