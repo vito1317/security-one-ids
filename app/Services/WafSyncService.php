@@ -171,9 +171,16 @@ class WafSyncService
             $this->handleIdsUpdate();
         }
         
-        // Handle scan now signal
+        // Handle scan now signal - run in background to not block heartbeat
         if (!empty($config['addons']['scan_now'])) {
-            $this->handleScanNow();
+            Log::info('Scan now signal received, dispatching to background...');
+            
+            // Run scan in background process so it doesn't block heartbeat
+            $artisanPath = base_path('artisan');
+            $command = "php {$artisanPath} ids:scan >> /dev/null 2>&1 &";
+            exec($command);
+            
+            Log::info('Scan dispatched to background');
         }
     }
     
