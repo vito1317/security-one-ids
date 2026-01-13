@@ -314,7 +314,7 @@ class ClamavService
             
             // Run clamscan with recursive option and get summary
             $scanCmd = "{$pathPrefix}clamscan -r {$path} 2>/dev/null";
-            $result = Process::timeout(3600)->run($scanCmd);
+            $result = Process::timeout(7200)->run($scanCmd);
             
             $output = $result->output();
             $infected = [];

@@ -22,7 +22,7 @@ class RunScan extends Command
                 return 1;
             }
             
-            // Send "scanning" status to WAF Hub
+            // Send initial "scanning" status to WAF Hub
             $clamav->reportToHub(['scan_status' => 'scanning']);
             
             // Use platform-specific scan paths
@@ -36,6 +36,9 @@ class RunScan extends Command
             
             Log::info("Starting ClamAV scan on {$platform}", ['paths' => $scanPaths]);
             
+            $totalPaths = count($scanPaths);
+            $completedPaths = 0;
+            
             $allResults = [
                 'last_scan' => now()->toDateTimeString(),
                 'infected_files' => 0,
@@ -46,7 +49,9 @@ class RunScan extends Command
             
             foreach ($scanPaths as $path) {
                 if (is_dir($path)) {
-                    Log::info("Scanning directory: {$path}");
+                    $completedPaths++;
+                    Log::info("Scanning directory ({$completedPaths}/{$totalPaths}): {$path}");
+                    
                     $result = $clamav->scan($path);
                     
                     if ($result['success']) {
@@ -54,6 +59,21 @@ class RunScan extends Command
                         $allResults['infected_files'] += $result['infected_files'] ?? 0;
                         $allResults['threats'] = array_merge($allResults['threats'], $result['threats'] ?? []);
                     }
+                    
+                    // Report progress after each directory (still scanning)
+                    $progressResults = $allResults;
+                    $progressResults['scan_status'] = 'scanning';
+                    $progressResults['scan_progress'] = "{$completedPaths}/{$totalPaths} directories";
+                    $clamav->reportToHub($progressResults);
+                    
+                    Log::info("Progress: {$completedPaths}/{$totalPaths} directories completed", [
+                        'path' => $path,
+                        'scanned_files' => $allResults['scanned_files'],
+                        'infected_files' => $allResults['infected_files'],
+                    ]);
+                } else {
+                    $completedPaths++;
+                    Log::info("Skipping non-existent directory ({$completedPaths}/{$totalPaths}): {$path}");
                 }
             }
             
@@ -62,8 +82,9 @@ class RunScan extends Command
                 'infected_files' => $allResults['infected_files'],
             ]);
             
-            // Report completed results with idle status
+            // Report final results with idle status
             $allResults['scan_status'] = 'idle';
+            $allResults['status'] = $allResults['infected_files'] > 0 ? 'warning' : 'healthy';
             $clamav->reportToHub($allResults);
             
             $this->info('Scan completed successfully');
@@ -74,7 +95,7 @@ class RunScan extends Command
             
             try {
                 $clamav = app(\App\Services\ClamavService::class);
-                $clamav->reportToHub(['scan_status' => 'idle']);
+                $clamav->reportToHub(['scan_status' => 'idle', 'status' => 'error', 'error_message' => $e->getMessage()]);
             } catch (\Exception $ex) {
                 // Ignore
             }
