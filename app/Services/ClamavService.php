@@ -636,8 +636,9 @@ class ClamavService
             $cacheFile = storage_path('app/scan_progress.txt');
             if (file_exists($cacheFile)) {
                 $cachedTime = filemtime($cacheFile);
-                // Only use cache if it's less than 60 seconds old
-                if (time() - $cachedTime < 60) {
+                // Use cache if it's less than 5 minutes old (300 seconds)
+                // Long directory scans can take a while
+                if (time() - $cachedTime < 300) {
                     $progress = trim(file_get_contents($cacheFile));
                     if (!empty($progress)) {
                         return $progress;
