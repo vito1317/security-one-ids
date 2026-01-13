@@ -659,10 +659,12 @@ class ClamavService
                 // Parse command line to extract directory
                 // Example: "clamscan -r /Library" -> extract "/Library"
                 if (preg_match('/clamscan\s+(?:-\w+\s+)*-r\s+(\S+)/', $output, $matches)) {
-                    return "掃描中: " . $matches[1];
+                    $path = $this->translateDockerPath($matches[1]);
+                    return "掃描中: " . $path;
                 }
                 if (preg_match('/clamscan\s+(?:-\w+\s+)*(\S+)/', $output, $matches)) {
-                    return "掃描中: " . $matches[1];
+                    $path = $this->translateDockerPath($matches[1]);
+                    return "掃描中: " . $path;
                 }
                 return "掃描中...";
             }
