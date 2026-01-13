@@ -263,11 +263,15 @@ class WafSyncService
             
             Log::info("Starting ClamAV scan on {$platform}", ['paths' => $scanPaths]);
             
+            // Send "scanning" status to WAF Hub immediately
+            $clamav->reportToHub(['scan_status' => 'scanning']);
+            
             $allResults = [
                 'last_scan' => now()->toDateTimeString(),
                 'infected_files' => 0,
                 'scanned_files' => 0,
                 'threats' => [],
+                'scan_status' => 'scanning',
             ];
             
             foreach ($scanPaths as $path) {
@@ -288,11 +292,20 @@ class WafSyncService
                 'infected_files' => $allResults['infected_files'],
             ]);
             
-            // Report results to WAF Hub
+            // Report completed results to WAF Hub with idle status
+            $allResults['scan_status'] = 'idle';
             $clamav->reportToHub($allResults);
             
         } catch (\Exception $e) {
             Log::error('Scan now failed: ' . $e->getMessage());
+            
+            // Report error status
+            try {
+                $clamav = app(\App\Services\ClamavService::class);
+                $clamav->reportToHub(['scan_status' => 'idle']);
+            } catch (\Exception $ex) {
+                // Ignore
+            }
         }
     }
 

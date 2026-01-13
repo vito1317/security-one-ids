@@ -415,6 +415,7 @@ class ClamavService
                 'scanned_files' => $scanResult['scanned_files'] ?? 0,
                 'threats' => $scanResult['threats'] ?? [],
                 'status' => $status['status'],
+                'scan_status' => $scanResult['scan_status'] ?? 'idle',
                 'error_message' => $scanResult['message'] ?? null,
             ];
 
