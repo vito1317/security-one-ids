@@ -326,12 +326,22 @@ class ClamavService
         Log::info('Updating ClamAV virus definitions');
 
         try {
-            $result = Process::timeout(600)->run('sudo freshclam');
+            // Use freshclam without sudo in Docker, with sudo on native macOS/Linux
+            $cmd = file_exists('/.dockerenv') ? 'freshclam' : 'sudo freshclam';
+            
+            $result = Process::timeout(600)->run($cmd);
             
             if ($result->successful()) {
+                // Refresh definitions date after update
+                $this->definitionsDate = null;  // Clear cache
+                $newDefDate = $this->getDefinitionsDate();
+                
+                Log::info('ClamAV definitions updated', ['new_date' => $newDefDate]);
+                
                 return [
                     'success' => true,
                     'message' => 'Virus definitions updated successfully',
+                    'definitions_date' => $newDefDate,
                 ];
             }
 

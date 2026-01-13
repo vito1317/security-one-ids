@@ -160,6 +160,7 @@ class WafSyncService
             'ollama_model' => $config['ollama']['model'] ?? 'not set',
             'clamav_enabled' => $config['addons']['clamav_enabled'] ?? false,
             'update_ids' => $config['addons']['update_ids'] ?? false,
+            'update_definitions' => $config['addons']['update_definitions'] ?? false,
             'scan_now' => $config['addons']['scan_now'] ?? false,
             'scan_type' => $config['addons']['scan_type'] ?? 'quick',
         ]);
@@ -172,6 +173,11 @@ class WafSyncService
         // Handle IDS update signal
         if (!empty($config['addons']['update_ids'])) {
             $this->handleIdsUpdate();
+        }
+        
+        // Handle virus definitions update signal
+        if (!empty($config['addons']['update_definitions'])) {
+            $this->handleDefinitionsUpdate();
         }
         
         // Handle scan now signal - run in background to not block heartbeat
@@ -269,6 +275,43 @@ class WafSyncService
             
         } catch (\Exception $e) {
             Log::error('ClamAV addon handling failed: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle virus definitions update signal from Hub
+     */
+    private function handleDefinitionsUpdate(): void
+    {
+        try {
+            Log::info('Virus definitions update signal received, running freshclam...');
+            
+            $clamav = app(\App\Services\ClamavService::class);
+            
+            if (!$clamav->isInstalled()) {
+                Log::warning('ClamAV not installed, cannot update definitions');
+                return;
+            }
+            
+            // Run freshclam to update virus definitions
+            $result = $clamav->updateDefinitions();
+            
+            if ($result['success']) {
+                Log::info('Virus definitions updated successfully', [
+                    'definitions_date' => $result['definitions_date'] ?? 'unknown',
+                ]);
+                
+                // Report new definitions date to Hub
+                $clamav->reportToHub([
+                    'definitions_date' => $result['definitions_date'] ?? null,
+                    'status' => 'healthy',
+                ]);
+            } else {
+                Log::error('Virus definitions update failed: ' . ($result['message'] ?? 'Unknown error'));
+            }
+            
+        } catch (\Exception $e) {
+            Log::error('Definitions update failed: ' . $e->getMessage());
         }
     }
     
