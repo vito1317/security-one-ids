@@ -342,19 +342,30 @@ class ClamavService
                 : '';
             
             // Run clamscan with recursive option and get summary
-            // Capture stderr for debugging - some permission errors may occur but scan will continue
+            // Use exec instead of Process::run for better background execution compat
             $scanCmd = "{$pathPrefix}clamscan -r {$path} 2>&1";
-            $result = Process::timeout(7200)->run($scanCmd);
             
-            // Log if there was an error
-            if (!$result->successful()) {
-                Log::warning('ClamAV scan command returned non-zero', [
-                    'exit_code' => $result->exitCode(),
-                    'error_output' => substr($result->errorOutput(), 0, 500),
+            Log::info('Executing clamscan command', ['command' => $scanCmd]);
+            
+            // Use exec with output capture - more reliable in background processes
+            $output = '';
+            $returnCode = 0;
+            exec($scanCmd, $outputLines, $returnCode);
+            $output = implode("\n", $outputLines);
+            
+            Log::info('Clamscan execution completed', [
+                'return_code' => $returnCode,
+                'output_length' => strlen($output),
+                'output_preview' => substr($output, -500), // Last 500 chars (includes summary)
+            ]);
+            
+            // clamscan returns 0 for clean, 1 for infected found, 2 for error
+            if ($returnCode > 1) {
+                Log::warning('ClamAV scan command returned error', [
+                    'exit_code' => $returnCode,
+                    'error_output' => substr($output, 0, 500),
                 ]);
             }
-            
-            $output = $result->output();
             $infected = [];
             $scannedFiles = 0;
             $infectedCount = 0;
