@@ -244,12 +244,24 @@ class WafSyncService
                 return;
             }
             
-            // Perform scan on common directories
-            $scanPaths = [
-                '/home',
-                '/var/www',
-                '/tmp',
-            ];
+            // Use platform-specific scan paths
+            $platform = PHP_OS_FAMILY === 'Darwin' ? 'macos' : 'linux';
+            
+            if ($platform === 'macos') {
+                $scanPaths = [
+                    '/Users',
+                    '/Applications',
+                    '/tmp',
+                ];
+            } else {
+                $scanPaths = [
+                    '/home',
+                    '/var/www',
+                    '/tmp',
+                ];
+            }
+            
+            Log::info("Starting ClamAV scan on {$platform}", ['paths' => $scanPaths]);
             
             $allResults = [
                 'last_scan' => now()->toDateTimeString(),
