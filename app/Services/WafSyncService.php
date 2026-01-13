@@ -186,16 +186,23 @@ class WafSyncService
             
             // Platform-specific background execution
             if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: use bash -c with & and disown for better PHP compatibility
-                // nohup doesn't work well from PHP on macOS
+                // macOS: Create script with nohup and use shell_exec
+                // The script must be completely independent and output to file
                 $scriptPath = storage_path('tmp_scan.sh');
-                $scriptContent = "#!/bin/bash\ncd {$basePath}\n{$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1\n";
+                $scriptContent = <<<BASH
+#!/bin/bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
+cd {$basePath}
+nohup {$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1 &
+disown
+BASH;
                 file_put_contents($scriptPath, $scriptContent);
                 chmod($scriptPath, 0755);
-                // Use popen for true async execution on macOS
-                $command = "bash {$scriptPath}";
-                pclose(popen($command . ' &', 'r'));
-                Log::info('Scan dispatched via popen', ['script' => $scriptPath]);
+                
+                // Execute script in background with complete detachment
+                // Use > /dev/null to prevent shell_exec from waiting for output
+                shell_exec("nohup bash {$scriptPath} > /dev/null 2>&1 &");
+                Log::info('Scan dispatched via shell_exec', ['script' => $scriptPath]);
             } elseif (file_exists('/.dockerenv')) {
                 // Docker: cd to container path for Laravel to work
                 $command = "cd /var/www/html && nohup {$phpPath} artisan ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
