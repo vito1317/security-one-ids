@@ -186,24 +186,47 @@ class WafSyncService
             
             // Platform-specific background execution
             if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: Use Symfony Process for async execution
-                // exec() and shell_exec() with & don't work reliably on macOS PHP
+                // macOS: Use pcntl_fork for truly detached process
+                // Process::start() child dies when parent ends
                 $phpPath = PHP_BINARY ?: '/opt/homebrew/bin/php';
-                $artisanPath = $basePath . '/artisan';
                 
-                Log::info('Starting macOS async scan process', [
+                Log::info('Starting macOS async scan with fork', [
                     'php' => $phpPath,
-                    'artisan' => $artisanPath,
                     'type' => $scanType,
                 ]);
                 
-                // Use Symfony Process for async execution
-                $process = Process::path($basePath)
-                    ->env(['PATH' => '/opt/homebrew/bin:/usr/local/bin:' . getenv('PATH')])
-                    ->timeout(0)  // No timeout for background
-                    ->start("{$phpPath} artisan ids:scan --type={$scanType}");
-                
-                Log::info('Scan process started', ['pid' => $process->id()]);
+                if (function_exists('pcntl_fork')) {
+                    $pid = pcntl_fork();
+                    
+                    if ($pid == -1) {
+                        // Fork failed, fallback to direct exec
+                        Log::error('pcntl_fork failed, running scan directly');
+                        Artisan::call('ids:scan', ['--type' => $scanType]);
+                    } elseif ($pid == 0) {
+                        // Child process - run the scan
+                        // Detach from parent's session
+                        if (function_exists('posix_setsid')) {
+                            posix_setsid();
+                        }
+                        
+                        // Set PATH for homebrew
+                        putenv('PATH=/opt/homebrew/bin:/usr/local/bin:' . getenv('PATH'));
+                        
+                        // Run the scan (this will block in child)
+                        Artisan::call('ids:scan', ['--type' => $scanType]);
+                        
+                        // Exit child process when done
+                        exit(0);
+                    } else {
+                        // Parent process - just continue
+                        Log::info('Scan process forked', ['child_pid' => $pid]);
+                        // Don't wait for child
+                    }
+                } else {
+                    // pcntl not available - run in foreground as last resort
+                    Log::warning('pcntl_fork not available, running scan in foreground');
+                    Artisan::call('ids:scan', ['--type' => $scanType]);
+                }
             } elseif (file_exists('/.dockerenv')) {
                 // Docker: cd to container path for Laravel to work
                 $command = "cd /var/www/html && nohup {$phpPath} artisan ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
