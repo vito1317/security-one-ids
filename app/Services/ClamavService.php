@@ -431,7 +431,7 @@ class ClamavService
                 'scanned_files' => $payload['scanned_files'],
                 'infected_files' => $payload['infected_files'],
                 'last_scan' => $payload['last_scan'],
-                'scan_status' => $payload['scan_status'],
+                'scan_status' => $payload['scan_status'] ?? '(skipped)',
                 'scan_progress' => $payload['scan_progress'],
             ]);
 
