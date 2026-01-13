@@ -170,20 +170,62 @@ $EnvContent | Out-File -FilePath "$InstallDir\.env" -Encoding UTF8
 Write-Host "✅ Configuration saved" -ForegroundColor Green
 
 # Create SQLite database and run migrations
-Write-Host "`n🗄️  Setting up database..." -ForegroundColor Cyan
+Write-Host "`n🗄️  Setting up database...`n" -ForegroundColor Cyan
+
+# Create all required directories
+$RequiredDirs = @(
+    "$InstallDir\database",
+    "$InstallDir\storage\logs",
+    "$InstallDir\storage\framework\sessions",
+    "$InstallDir\storage\framework\views",
+    "$InstallDir\storage\framework\cache",
+    "$InstallDir\bootstrap\cache"
+)
+
+foreach ($dir in $RequiredDirs) {
+    if (-not (Test-Path $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+}
+
+# Create database file
 $DbPath = "$InstallDir\database\database.sqlite"
 if (-not (Test-Path $DbPath)) {
     New-Item -ItemType File -Path $DbPath -Force | Out-Null
 }
+
+# Set permissions (allow full control for SYSTEM and Administrators)
+Write-Host "🔐 Setting permissions..." -ForegroundColor Cyan
+$Acl = Get-Acl $InstallDir
+$Permission = "NT AUTHORITY\SYSTEM","FullControl","ContainerInherit,ObjectInherit","None","Allow"
+$AccessRule = New-Object System.Security.AccessControl.FileSystemAccessRule $Permission
+$Acl.SetAccessRule($AccessRule)
+Set-Acl $InstallDir $Acl
+
+# Set storage directory permissions
+$StorageDirs = @("$InstallDir\storage", "$InstallDir\database", "$InstallDir\bootstrap\cache", "$DataDir\logs")
+foreach ($dir in $StorageDirs) {
+    if (Test-Path $dir) {
+        $Acl = Get-Acl $dir
+        $Permission = "Everyone","FullControl","ContainerInherit,ObjectInherit","None","Allow"
+        $AccessRule = New-Object System.Security.AccessControl.FileSystemAccessRule $Permission
+        $Acl.SetAccessRule($AccessRule)
+        Set-Acl $dir $Acl
+    }
+}
+Write-Host "✅ Permissions set" -ForegroundColor Green
+
+# Run migrations
 Set-Location $InstallDir
 & php artisan migrate --force 2>$null
 & php artisan package:discover --ansi 2>$null
 Write-Host "✅ Database ready" -ForegroundColor Green
 
 # Create Windows Service
-Write-Host "`n🔧 Creating Windows Service..." -ForegroundColor Cyan
+Write-Host "`n🔧 Creating Windows Services..." -ForegroundColor Cyan
 
-$ServiceScript = @"
+# Create scan service script (runs every 5 minutes)
+$ScanServiceScript = @"
 `$ErrorActionPreference = 'Continue'
 Set-Location '$InstallDir'
 while (`$true) {
@@ -192,20 +234,42 @@ while (`$true) {
 }
 "@
 
-$ServiceScript | Out-File -FilePath "$InstallDir\run-service.ps1" -Encoding UTF8
+$ScanServiceScript | Out-File -FilePath "$InstallDir\run-scan-service.ps1" -Encoding UTF8
 
-# Register scheduled task as service alternative
-$TaskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\run-service.ps1`""
-$TaskTrigger = New-ScheduledTaskTrigger -AtStartup
-$TaskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$TaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+# Create sync service script (runs every minute for heartbeat)
+$SyncServiceScript = @"
+`$ErrorActionPreference = 'Continue'
+Set-Location '$InstallDir'
+while (`$true) {
+    php artisan waf:sync 2>&1 | Out-File -FilePath '$DataDir\logs\sync.log' -Append
+    Start-Sleep -Seconds 60
+}
+"@
 
-Register-ScheduledTask -TaskName $ServiceName -Action $TaskAction -Trigger $TaskTrigger -Principal $TaskPrincipal -Settings $TaskSettings -Force | Out-Null
-Write-Host "✅ Windows Service created" -ForegroundColor Green
+$SyncServiceScript | Out-File -FilePath "$InstallDir\run-sync-service.ps1" -Encoding UTF8
 
-# Start service
+# Register scan scheduled task (for desktop:scan)
+$ScanTaskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\run-scan-service.ps1`""
+$ScanTaskTrigger = New-ScheduledTaskTrigger -AtStartup
+$ScanTaskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$ScanTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+Register-ScheduledTask -TaskName "$ServiceName-Scan" -Action $ScanTaskAction -Trigger $ScanTaskTrigger -Principal $ScanTaskPrincipal -Settings $ScanTaskSettings -Force | Out-Null
+Write-Host "✅ Scan Service created ($ServiceName-Scan)" -ForegroundColor Green
+
+# Register sync scheduled task (for waf:sync heartbeat)
+$SyncTaskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\run-sync-service.ps1`""
+$SyncTaskTrigger = New-ScheduledTaskTrigger -AtStartup
+$SyncTaskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$SyncTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+Register-ScheduledTask -TaskName "$ServiceName-Sync" -Action $SyncTaskAction -Trigger $SyncTaskTrigger -Principal $SyncTaskPrincipal -Settings $SyncTaskSettings -Force | Out-Null
+Write-Host "✅ Sync Service created ($ServiceName-Sync)" -ForegroundColor Green
+
+# Start services
 Write-Host "`n🚀 Starting IDS Agent..." -ForegroundColor Cyan
-Start-ScheduledTask -TaskName $ServiceName
+Start-ScheduledTask -TaskName "$ServiceName-Scan" -ErrorAction SilentlyContinue
+Start-ScheduledTask -TaskName "$ServiceName-Sync" -ErrorAction SilentlyContinue
 
 # Register with WAF Hub
 Write-Host "`n📡 Registering with WAF Hub..." -ForegroundColor Cyan
@@ -222,12 +286,14 @@ Write-Host "`n
 ╠═══════════════════════════════════════════════════╣
 ║  Install Path: $InstallDir
 ║  Data Path:    $DataDir
-║  Service:      $ServiceName (Scheduled Task)
+║  Services:     $ServiceName-Scan (Scheduled Task)
+║                $ServiceName-Sync (Heartbeat)
 ║                                                   
 ║  Commands:                                        
 ║    Manual Scan:  php artisan desktop:scan        
 ║    Full Scan:    php artisan desktop:scan --full 
-║    Check Status: Get-ScheduledTask $ServiceName
+║    Manual Sync:  php artisan waf:sync
+║    Check Status: Get-ScheduledTask $ServiceName*
 ║                                                   
 ╚═══════════════════════════════════════════════════╝
 " -ForegroundColor Green
