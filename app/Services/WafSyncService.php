@@ -186,8 +186,12 @@ class WafSyncService
             
             // Platform-specific background execution
             if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: use nohup with cd to ensure Laravel bootstraps correctly
-                $command = "cd {$basePath} && nohup {$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
+                // macOS: use shell wrapper for better background execution
+                $scriptPath = storage_path('tmp_scan.sh');
+                $scriptContent = "#!/bin/bash\ncd {$basePath}\n{$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1\n";
+                file_put_contents($scriptPath, $scriptContent);
+                chmod($scriptPath, 0755);
+                $command = "nohup bash {$scriptPath} > /dev/null 2>&1 &";
             } elseif (file_exists('/.dockerenv')) {
                 // Docker: cd to container path for Laravel to work
                 $command = "cd /var/www/html && nohup {$phpPath} artisan ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
@@ -197,8 +201,9 @@ class WafSyncService
             }
             
             Log::info('Executing background scan command', ['command' => $command]);
-            exec($command, $output, $returnCode);
-            Log::info('Background scan dispatch result', ['return_code' => $returnCode, 'output' => $output]);
+            
+            // Use shell_exec for async execution (better than exec for background processes)
+            shell_exec($command);
             
             Log::info('Scan dispatched to background');
         }
