@@ -313,8 +313,17 @@ class ClamavService
                 : '';
             
             // Run clamscan with recursive option and get summary
-            $scanCmd = "{$pathPrefix}clamscan -r {$path} 2>/dev/null";
+            // Capture stderr for debugging - some permission errors may occur but scan will continue
+            $scanCmd = "{$pathPrefix}clamscan -r {$path} 2>&1";
             $result = Process::timeout(7200)->run($scanCmd);
+            
+            // Log if there was an error
+            if (!$result->successful()) {
+                Log::warning('ClamAV scan command returned non-zero', [
+                    'exit_code' => $result->exitCode(),
+                    'error_output' => substr($result->errorOutput(), 0, 500),
+                ]);
+            }
             
             $output = $result->output();
             $infected = [];
