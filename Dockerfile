@@ -1,6 +1,6 @@
 FROM php:8.3-fpm-alpine
 
-# Install system dependencies
+# Install system dependencies + ClamAV
 RUN apk add --no-cache \
     nginx \
     supervisor \
@@ -12,7 +12,9 @@ RUN apk add --no-cache \
     git \
     shadow \
     sqlite \
-    sqlite-dev
+    sqlite-dev \
+    clamav \
+    clamav-libunrar
 
 # Install PHP extensions
 RUN docker-php-ext-install pdo pdo_mysql pdo_sqlite bcmath gd xml
@@ -44,13 +46,19 @@ RUN mkdir -p /var/www/html/storage/logs \
     && mkdir -p /var/www/html/bootstrap/cache \
     && mkdir -p /var/www/html/database \
     && mkdir -p /var/log/supervisor \
+    && mkdir -p /var/lib/clamav \
     && touch /var/www/html/database/database.sqlite \
     && chown -R www-data:www-data /var/www/html \
     && chmod -R 775 /var/www/html/storage \
     && chmod -R 775 /var/www/html/bootstrap/cache \
     && chmod -R 755 /var/log/supervisor \
     && chmod 664 /var/www/html/database/database.sqlite \
-    && chmod -R 775 /var/www/html/database
+    && chmod -R 775 /var/www/html/database \
+    && chown -R clamav:clamav /var/lib/clamav \
+    && chmod -R 755 /var/lib/clamav
+
+# Configure ClamAV freshclam
+RUN sed -i 's/^Example/#Example/' /etc/clamav/freshclam.conf 2>/dev/null || true
 
 # Configure Nginx
 COPY docker/nginx.conf /etc/nginx/http.d/default.conf

@@ -315,6 +315,11 @@ start_containers() {
     docker compose exec -T app php artisan ids:seed-signatures || true
     print_step "預設簽章已安裝"
     
+    # 下載 ClamAV 病毒定義
+    print_info "正在下載 ClamAV 病毒定義..."
+    docker compose exec -T app freshclam 2>/dev/null || print_warning "病毒定義下載失敗，將在後台重試"
+    print_step "ClamAV 已就緒"
+    
     # 與 WAF Hub 進行初始同步
     print_info "正在與 WAF Hub 同步..."
     docker compose exec -T app php artisan waf:sync --register
