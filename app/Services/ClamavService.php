@@ -589,7 +589,20 @@ class ClamavService
     public function getScanProgress(): ?string
     {
         try {
-            // Get full command line of clamscan process
+            // First check if there's a cached progress from RunScan
+            $cacheFile = storage_path('app/scan_progress.txt');
+            if (file_exists($cacheFile)) {
+                $cachedTime = filemtime($cacheFile);
+                // Only use cache if it's less than 60 seconds old
+                if (time() - $cachedTime < 60) {
+                    $progress = trim(file_get_contents($cacheFile));
+                    if (!empty($progress)) {
+                        return $progress;
+                    }
+                }
+            }
+            
+            // Fallback to checking ps for clamscan process
             if (PHP_OS_FAMILY === 'Darwin') {
                 // macOS: use ps to get full command
                 $result = Process::run('ps aux | grep -v grep | grep "clamscan -r"');
@@ -611,9 +624,34 @@ class ClamavService
                 return "掃描中...";
             }
             
+            // No scan running - clean up cache file
+            if (file_exists($cacheFile)) {
+                @unlink($cacheFile);
+            }
+            
             return null;
         } catch (\Exception $e) {
             return null;
+        }
+    }
+    
+    /**
+     * Save scan progress to cache file for getScanProgress to read
+     */
+    public function saveScanProgress(string $progress): void
+    {
+        $cacheFile = storage_path('app/scan_progress.txt');
+        file_put_contents($cacheFile, $progress);
+    }
+    
+    /**
+     * Clear scan progress cache
+     */
+    public function clearScanProgress(): void
+    {
+        $cacheFile = storage_path('app/scan_progress.txt');
+        if (file_exists($cacheFile)) {
+            @unlink($cacheFile);
         }
     }
 }

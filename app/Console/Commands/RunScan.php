@@ -103,10 +103,14 @@ class RunScan extends Command
                     $currentPath = $index + 1;
                     Log::info("Scanning directory ({$currentPath}/{$totalPaths}): {$path}");
                     
+                    // Save progress to cache file for heartbeat to read
+                    $progressText = "掃描中: {$path} ({$currentPath}/{$totalPaths})";
+                    $clamav->saveScanProgress($progressText);
+                    
                     // Report progress BEFORE starting scan (so user sees current directory)
                     $clamav->reportToHub([
                         'scan_status' => 'scanning',
-                        'scan_progress' => "掃描中: {$path} ({$currentPath}/{$totalPaths})",
+                        'scan_progress' => $progressText,
                         'scanned_files' => $allResults['scanned_files'],
                         'infected_files' => $allResults['infected_files'],
                     ]);
@@ -148,6 +152,9 @@ class RunScan extends Command
                 'scanned_files' => $allResults['scanned_files'],
                 'infected_files' => $allResults['infected_files'],
             ]);
+            
+            // Clear progress cache before final report
+            $clamav->clearScanProgress();
             
             $clamav->reportToHub($allResults);
             
