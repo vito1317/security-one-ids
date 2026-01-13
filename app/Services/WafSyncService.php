@@ -207,8 +207,10 @@ class WafSyncService
                 }
             }
             
-            // Report status to Hub
-            $clamav->reportToHub($clamav->getStatus());
+            // Report status to Hub - but don't include scan_status to avoid overwriting active scan
+            $status = $clamav->getStatus();
+            $status['skip_scan_status'] = true;  // Flag to tell Hub to not update scan_status
+            $clamav->reportToHub($status);
             
         } catch (\Exception $e) {
             Log::error('ClamAV addon handling failed: ' . $e->getMessage());

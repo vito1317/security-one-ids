@@ -415,11 +415,16 @@ class ClamavService
                 'scanned_files' => $scanResult['scanned_files'] ?? 0,
                 'threats' => $scanResult['threats'] ?? [],
                 'status' => $scanResult['status'] ?? $status['status'],
-                'scan_status' => $scanResult['scan_status'] ?? 'idle',
                 'scan_progress' => $scanResult['scan_progress'] ?? null,
-                'scan_completed' => $scanResult['scan_completed'] ?? false,  // Explicit flag for final report
+                'scan_completed' => $scanResult['scan_completed'] ?? false,
+                'skip_scan_status' => $scanResult['skip_scan_status'] ?? false,  // Skip updating scan_status if true
                 'error_message' => $scanResult['message'] ?? null,
             ];
+            
+            // Only include scan_status if not skipping (heartbeat skips to preserve active scan status)
+            if (empty($scanResult['skip_scan_status'])) {
+                $payload['scan_status'] = $scanResult['scan_status'] ?? 'idle';
+            }
 
             // Log full payload for debugging
             Log::info('ClamAV reportToHub: sending payload', [
