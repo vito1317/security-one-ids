@@ -37,14 +37,37 @@ class RunScan extends Command
                 if ($platform === 'macos') {
                     $scanPaths = ['/Users', '/Applications', '/tmp', '/Library'];
                 } else {
-                    $scanPaths = ['/home', '/var/www', '/var/log', '/tmp', '/opt', '/etc'];
+                    // Docker container: use mounted host directories if available
+                    $scanPaths = [];
+                    $hostMounts = [
+                        '/mnt/host-home' => '/mnt/host-home',     // Host /home
+                        '/mnt/host-www' => '/mnt/host-www',       // Host /var/www
+                        '/mnt/host-opt' => '/mnt/host-opt',       // Host /opt
+                        '/mnt/host-tmp' => '/mnt/host-tmp',       // Host /tmp
+                    ];
+                    foreach ($hostMounts as $mount => $path) {
+                        if (is_dir($mount)) {
+                            $scanPaths[] = $path;
+                        }
+                    }
+                    // Fallback to container paths if no host mounts
+                    if (empty($scanPaths)) {
+                        $scanPaths = ['/home', '/var/www', '/var/log', '/tmp', '/opt', '/etc'];
+                    }
                 }
             } else {
                 // Quick scan - only critical areas
                 if ($platform === 'macos') {
                     $scanPaths = ['/tmp', '/Users/' . get_current_user() . '/Downloads'];
                 } else {
-                    $scanPaths = ['/tmp', '/var/www', '/home/' . get_current_user() . '/Downloads'];
+                    // Docker container: use mounted host directories if available
+                    if (is_dir('/mnt/host-tmp') || is_dir('/mnt/host-www')) {
+                        $scanPaths = [];
+                        if (is_dir('/mnt/host-tmp')) $scanPaths[] = '/mnt/host-tmp';
+                        if (is_dir('/mnt/host-www')) $scanPaths[] = '/mnt/host-www';
+                    } else {
+                        $scanPaths = ['/tmp', '/var/www', '/home/' . get_current_user() . '/Downloads'];
+                    }
                 }
             }
             

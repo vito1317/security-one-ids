@@ -31,6 +31,11 @@ services:
       - /var/log/messages:/var/log/host-messages:ro
       # UFW Firewall logs
       - /var/log/ufw.log:/var/log/host-ufw.log:ro
+      # Host filesystem for ClamAV scanning (read-only)
+      - /home:/mnt/host-home:ro
+      - /var/www:/mnt/host-www:ro
+      - /opt:/mnt/host-opt:ro
+      - /tmp:/mnt/host-tmp:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
