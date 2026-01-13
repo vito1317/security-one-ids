@@ -127,6 +127,8 @@ class ClamavService
             switch ($platform) {
                 case 'macos':
                     return $this->installMacos();
+                case 'alpine':
+                    return $this->installAlpine();
                 case 'linux':
                 case 'ubuntu':
                 case 'debian':
@@ -212,6 +214,33 @@ class ClamavService
         return [
             'success' => true,
             'message' => 'ClamAV installed successfully on Debian/Ubuntu',
+        ];
+    }
+
+    /**
+     * Install on Alpine Linux (Docker)
+     */
+    protected function installAlpine(): array
+    {
+        // Alpine uses apk package manager
+        $result = Process::timeout(300)->run('apk add --no-cache clamav clamav-libunrar');
+        
+        if (!$result->successful()) {
+            return [
+                'success' => false,
+                'message' => 'Failed to install ClamAV: ' . $result->errorOutput(),
+            ];
+        }
+
+        // Create database directory and update definitions
+        Process::run('mkdir -p /var/lib/clamav');
+        $this->updateDefinitions();
+
+        $this->isInstalled = true;
+        
+        return [
+            'success' => true,
+            'message' => 'ClamAV installed successfully on Alpine Linux',
         ];
     }
 
@@ -504,6 +533,10 @@ class ClamavService
 
         if (stripos(PHP_OS, 'Linux') !== false) {
             // Detect Linux distribution
+            // Check Alpine first (Docker containers typically use Alpine)
+            if (file_exists('/etc/alpine-release')) {
+                return 'alpine';
+            }
             if (file_exists('/etc/debian_version')) {
                 return 'debian';
             }
