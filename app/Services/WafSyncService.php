@@ -210,14 +210,57 @@ class WafSyncService
     private function handleIdsUpdate(): void
     {
         try {
-            Log::info('IDS update signal received, running update...');
+            Log::info('IDS update signal received, starting update...');
             
-            // Run the IDS update command
-            \Illuminate\Support\Facades\Artisan::call('ids:update');
+            // Report "updating" status to WAF Hub
+            $this->reportUpdateStatus('updating');
             
-            Log::info('IDS update completed');
+            // Get install directory
+            $installDir = base_path();
             
-            // Mark update as processed
+            // Run git pull to get latest code
+            Log::info('Pulling latest code from git...');
+            $gitResult = Process::path($installDir)
+                ->timeout(300)
+                ->run('git pull origin main 2>&1');
+            
+            if (!$gitResult->successful()) {
+                Log::error('Git pull failed: ' . $gitResult->output());
+                $this->reportUpdateStatus('error');
+                return;
+            }
+            
+            Log::info('Git pull successful', ['output' => $gitResult->output()]);
+            
+            // Run composer install
+            Log::info('Running composer install...');
+            $composerResult = Process::path($installDir)
+                ->timeout(600)
+                ->run('composer install --no-interaction --no-dev --optimize-autoloader 2>&1');
+            
+            if (!$composerResult->successful()) {
+                Log::warning('Composer install warning: ' . $composerResult->output());
+                // Continue anyway, might just be warnings
+            }
+            
+            // Run database migrations if any
+            Log::info('Running database migrations...');
+            Artisan::call('migrate', ['--force' => true]);
+            
+            // Clear caches
+            Log::info('Clearing caches...');
+            Artisan::call('config:clear');
+            Artisan::call('cache:clear');
+            
+            // Get new version from config
+            $newVersion = config('ids.version') ?? '1.0.0';
+            
+            Log::info('IDS update completed successfully', ['new_version' => $newVersion]);
+            
+            // Report "completed" status to WAF Hub with new version
+            $this->reportUpdateStatus('completed', $newVersion);
+            
+            // Mark update as processed locally
             $configPath = storage_path('app/waf_config.json');
             if (file_exists($configPath)) {
                 $config = json_decode(file_get_contents($configPath), true) ?: [];
@@ -226,6 +269,56 @@ class WafSyncService
             }
         } catch (\Exception $e) {
             Log::error('IDS update failed: ' . $e->getMessage());
+            $this->reportUpdateStatus('error');
+        }
+    }
+    
+    /**
+     * Report update status to WAF Hub
+     */
+    private function reportUpdateStatus(string $status, ?string $version = null): void
+    {
+        try {
+            $wafUrl = rtrim(config('ids.waf_url') ?? env('WAF_URL', ''), '/');
+            
+            // Read token from .env
+            $envPath = base_path('.env');
+            $token = env('AGENT_TOKEN', '');
+            
+            if (empty($token) && file_exists($envPath)) {
+                $envContent = file_get_contents($envPath);
+                if (preg_match('/^AGENT_TOKEN=(.*)$/m', $envContent, $matches)) {
+                    $token = trim($matches[1], '"\'');
+                }
+            }
+            
+            if (empty($wafUrl) || empty($token)) {
+                Log::warning('Cannot report update status: WAF not configured');
+                return;
+            }
+            
+            $payload = [
+                'update_status' => $status,
+            ];
+            
+            if ($version) {
+                $payload['version'] = $version;
+            }
+            
+            $response = Http::timeout(30)
+                ->withToken($token)
+                ->post("{$wafUrl}/api/ids/agents/update-status", $payload);
+            
+            if ($response->successful()) {
+                Log::info("Update status '{$status}' reported successfully");
+            } else {
+                Log::error('Failed to report update status', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+            }
+        } catch (\Exception $e) {
+            Log::error('Failed to report update status: ' . $e->getMessage());
         }
     }
     
