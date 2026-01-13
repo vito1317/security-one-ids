@@ -186,26 +186,29 @@ class WafSyncService
             
             // Platform-specific background execution
             if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: use shell wrapper for better background execution
+                // macOS: use bash -c with & and disown for better PHP compatibility
+                // nohup doesn't work well from PHP on macOS
                 $scriptPath = storage_path('tmp_scan.sh');
                 $scriptContent = "#!/bin/bash\ncd {$basePath}\n{$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1\n";
                 file_put_contents($scriptPath, $scriptContent);
                 chmod($scriptPath, 0755);
-                $command = "nohup bash {$scriptPath} > /dev/null 2>&1 &";
+                // Use popen for true async execution on macOS
+                $command = "bash {$scriptPath}";
+                pclose(popen($command . ' &', 'r'));
+                Log::info('Scan dispatched via popen', ['script' => $scriptPath]);
             } elseif (file_exists('/.dockerenv')) {
                 // Docker: cd to container path for Laravel to work
                 $command = "cd /var/www/html && nohup {$phpPath} artisan ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
+                Log::info('Executing background scan command', ['command' => $command]);
+                shell_exec($command);
+                Log::info('Scan dispatched to background');
             } else {
                 // Linux: cd to base path for Laravel to work
                 $command = "cd {$basePath} && nohup {$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
+                Log::info('Executing background scan command', ['command' => $command]);
+                shell_exec($command);
+                Log::info('Scan dispatched to background');
             }
-            
-            Log::info('Executing background scan command', ['command' => $command]);
-            
-            // Use shell_exec for async execution (better than exec for background processes)
-            shell_exec($command);
-            
-            Log::info('Scan dispatched to background');
         }
     }
     
