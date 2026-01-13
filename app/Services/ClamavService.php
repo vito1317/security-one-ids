@@ -483,11 +483,11 @@ class ClamavService
 
             // Log full payload for debugging
             Log::info('ClamAV reportToHub: sending payload', [
-                'scanned_files' => $payload['scanned_files'],
-                'infected_files' => $payload['infected_files'],
-                'last_scan' => $payload['last_scan'],
-                'scan_status' => $payload['scan_status'],
-                'scan_progress' => $payload['scan_progress'],
+                'scanned_files' => $payload['scanned_files'] ?? null,
+                'infected_files' => $payload['infected_files'] ?? null,
+                'last_scan' => $payload['last_scan'] ?? null,
+                'scan_status' => $payload['scan_status'] ?? null,
+                'scan_progress' => $payload['scan_progress'] ?? null,
             ]);
 
             $response = Http::timeout(30)
