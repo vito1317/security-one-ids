@@ -422,7 +422,7 @@ class ClamavService
             Log::info('ClamAV reportToHub: sending payload', [
                 'status' => $status['status'],
                 'version' => $status['version'],
-                'installed' => $status['installed'],
+                'scan_status' => $payload['scan_status'],
             ]);
 
             $response = Http::timeout(30)
