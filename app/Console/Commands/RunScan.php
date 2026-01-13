@@ -25,7 +25,9 @@ class RunScan extends Command
             }
             
             // Send initial "scanning" status to WAF Hub
-            $clamav->reportToHub(['scan_status' => 'scanning']);
+            $this->info("Sending initial 'scanning' status to WAF Hub...");
+            $result = $clamav->reportToHub(['scan_status' => 'scanning']);
+            $this->info("reportToHub result: " . ($result ? 'success' : 'failed'));
             
             // Use platform-specific scan paths based on scan type
             $platform = PHP_OS_FAMILY === 'Darwin' ? 'macos' : 'linux';
