@@ -180,8 +180,10 @@ class WafSyncService
             Log::info("Scan now signal received (type: {$scanType}), dispatching to background...");
             
             // Run scan in background process so it doesn't block heartbeat
+            // Use nohup to ensure process continues after PHP exits
             $artisanPath = base_path('artisan');
-            $command = "php {$artisanPath} ids:scan --type={$scanType} >> /dev/null 2>&1 &";
+            $logPath = storage_path('logs/scan-output.log');
+            $command = "nohup php {$artisanPath} ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
             exec($command);
             
             Log::info('Scan dispatched to background');
