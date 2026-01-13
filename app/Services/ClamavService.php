@@ -307,12 +307,19 @@ class ClamavService
         Log::info('Starting ClamAV scan on: ' . $path);
 
         try {
-            // Run clamscan with recursive option
-            $result = Process::timeout(3600)->run("clamscan -r --infected --no-summary {$path} 2>/dev/null | head -100");
+            // Build command with proper PATH for macOS Homebrew
+            $pathPrefix = $this->getPlatform() === 'macos' 
+                ? 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" && '
+                : '';
+            
+            // Run clamscan with recursive option and get summary
+            $scanCmd = "{$pathPrefix}clamscan -r {$path} 2>/dev/null";
+            $result = Process::timeout(3600)->run($scanCmd);
             
             $output = $result->output();
             $infected = [];
             $scannedFiles = 0;
+            $infectedCount = 0;
 
             // Parse output for infected files
             $lines = explode("\n", trim($output));
@@ -320,19 +327,26 @@ class ClamavService
                 if (str_contains($line, ' FOUND')) {
                     $infected[] = trim(str_replace(' FOUND', '', $line));
                 }
+                // Look for scan summary in output
+                if (preg_match('/Scanned files:\s*(\d+)/i', $line, $matches)) {
+                    $scannedFiles = (int) $matches[1];
+                }
+                if (preg_match('/Infected files:\s*(\d+)/i', $line, $matches)) {
+                    $infectedCount = (int) $matches[1];
+                }
             }
 
-            // Get scan summary
-            $summaryResult = Process::run("clamscan -r {$path} 2>/dev/null | tail -10");
-            if (preg_match('/Scanned files:\s*(\d+)/', $summaryResult->output(), $matches)) {
-                $scannedFiles = (int) $matches[1];
-            }
+            Log::info('ClamAV scan completed', [
+                'path' => $path,
+                'scanned_files' => $scannedFiles,
+                'infected_files' => max(count($infected), $infectedCount),
+            ]);
 
             return [
                 'success' => true,
                 'status' => count($infected) > 0 ? 'warning' : 'healthy',
                 'scanned_files' => $scannedFiles,
-                'infected_files' => count($infected),
+                'infected_files' => max(count($infected), $infectedCount),
                 'threats' => $infected,
             ];
         } catch (\Exception $e) {
