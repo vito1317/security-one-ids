@@ -4,6 +4,8 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Artisan;
 
 class WafSyncService
 {
@@ -159,6 +161,7 @@ class WafSyncService
             'clamav_enabled' => $config['addons']['clamav_enabled'] ?? false,
             'update_ids' => $config['addons']['update_ids'] ?? false,
             'scan_now' => $config['addons']['scan_now'] ?? false,
+            'scan_type' => $config['addons']['scan_type'] ?? 'quick',
         ]);
         
         // Handle ClamAV add-on
@@ -173,11 +176,12 @@ class WafSyncService
         
         // Handle scan now signal - run in background to not block heartbeat
         if (!empty($config['addons']['scan_now'])) {
-            Log::info('Scan now signal received, dispatching to background...');
+            $scanType = $config['addons']['scan_type'] ?? 'quick';
+            Log::info("Scan now signal received (type: {$scanType}), dispatching to background...");
             
             // Run scan in background process so it doesn't block heartbeat
             $artisanPath = base_path('artisan');
-            $command = "php {$artisanPath} ids:scan >> /dev/null 2>&1 &";
+            $command = "php {$artisanPath} ids:scan --type={$scanType} >> /dev/null 2>&1 &";
             exec($command);
             
             Log::info('Scan dispatched to background');

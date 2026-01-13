@@ -7,13 +7,14 @@ use Illuminate\Support\Facades\Log;
 
 class RunScan extends Command
 {
-    protected $signature = 'ids:scan';
+    protected $signature = 'ids:scan {--type=quick : Scan type (quick or full)}';
     protected $description = 'Run ClamAV scan in background';
 
     public function handle(): int
     {
         try {
-            Log::info('Background scan started');
+            $scanType = $this->option('type') ?: 'quick';
+            Log::info("Background scan started (type: {$scanType})");
             
             $clamav = app(\App\Services\ClamavService::class);
             
@@ -25,16 +26,26 @@ class RunScan extends Command
             // Send initial "scanning" status to WAF Hub
             $clamav->reportToHub(['scan_status' => 'scanning']);
             
-            // Use platform-specific scan paths
+            // Use platform-specific scan paths based on scan type
             $platform = PHP_OS_FAMILY === 'Darwin' ? 'macos' : 'linux';
             
-            if ($platform === 'macos') {
-                $scanPaths = ['/Users', '/Applications', '/tmp'];
+            if ($scanType === 'full') {
+                // Full scan - more comprehensive directories
+                if ($platform === 'macos') {
+                    $scanPaths = ['/Users', '/Applications', '/tmp', '/Library'];
+                } else {
+                    $scanPaths = ['/home', '/var/www', '/var/log', '/tmp', '/opt', '/etc'];
+                }
             } else {
-                $scanPaths = ['/home', '/var/www', '/tmp'];
+                // Quick scan - only critical areas
+                if ($platform === 'macos') {
+                    $scanPaths = ['/tmp', '/Users/' . get_current_user() . '/Downloads'];
+                } else {
+                    $scanPaths = ['/tmp', '/var/www', '/home/' . get_current_user() . '/Downloads'];
+                }
             }
             
-            Log::info("Starting ClamAV scan on {$platform}", ['paths' => $scanPaths]);
+            Log::info("Starting ClamAV {$scanType} scan on {$platform}", ['paths' => $scanPaths]);
             
             $totalPaths = count($scanPaths);
             $completedPaths = 0;
