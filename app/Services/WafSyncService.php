@@ -186,12 +186,24 @@ class WafSyncService
             
             // Platform-specific background execution
             if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: Direct execution with nohup and shell_exec
-                // Don't use script file - it adds complexity
-                $command = "cd {$basePath} && export PATH='/opt/homebrew/bin:/usr/local/bin:\$PATH' && nohup {$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
-                Log::info('Executing macOS background scan', ['command' => $command]);
-                exec($command);  // Use exec() - simpler than shell_exec for fire-and-forget
-                Log::info('Scan dispatched to background');
+                // macOS: Use Symfony Process for async execution
+                // exec() and shell_exec() with & don't work reliably on macOS PHP
+                $phpPath = PHP_BINARY ?: '/opt/homebrew/bin/php';
+                $artisanPath = $basePath . '/artisan';
+                
+                Log::info('Starting macOS async scan process', [
+                    'php' => $phpPath,
+                    'artisan' => $artisanPath,
+                    'type' => $scanType,
+                ]);
+                
+                // Use Symfony Process for async execution
+                $process = Process::path($basePath)
+                    ->env(['PATH' => '/opt/homebrew/bin:/usr/local/bin:' . getenv('PATH')])
+                    ->timeout(0)  // No timeout for background
+                    ->start("{$phpPath} artisan ids:scan --type={$scanType}");
+                
+                Log::info('Scan process started', ['pid' => $process->id()]);
             } elseif (file_exists('/.dockerenv')) {
                 // Docker: cd to container path for Laravel to work
                 $command = "cd /var/www/html && nohup {$phpPath} artisan ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
