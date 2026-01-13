@@ -12,6 +12,11 @@ class RunScan extends Command
 
     public function handle(): int
     {
+        // Disable PHP execution timeout for long scans
+        set_time_limit(0);
+        ini_set('max_execution_time', '0');
+        ini_set('memory_limit', '512M');
+        
         try {
             $scanType = $this->option('type') ?: 'quick';
             Log::info("Background scan started (type: {$scanType})");
