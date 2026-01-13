@@ -436,13 +436,14 @@ class ClamavService
                 // Explicit status from RunScan - use it
                 $payload['scan_status'] = $scanResult['scan_status'];
             } else {
-                // Heartbeat - detect actual status by checking if clamscan is running
-                $isScanning = $this->isScanRunning();
+                // Heartbeat - detect actual status and directory from clamscan process
+                $scanProgress = $this->getScanProgress();
+                $isScanning = $scanProgress !== null;
                 $payload['scan_status'] = $isScanning ? 'scanning' : 'idle';
                 
-                // Add progress indicator when scanning detected
+                // Use actual scan progress from ps command (shows current directory)
                 if ($isScanning && empty($payload['scan_progress'])) {
-                    $payload['scan_progress'] = 'Scanning in progress...';
+                    $payload['scan_progress'] = $scanProgress;
                 }
             }
 
@@ -529,18 +530,41 @@ class ClamavService
      */
     public function isScanRunning(): bool
     {
+        return $this->getScanProgress() !== null;
+    }
+
+    /**
+     * Get current scan progress by checking clamscan process
+     * Returns the directory being scanned, or null if not scanning
+     */
+    public function getScanProgress(): ?string
+    {
         try {
+            // Get full command line of clamscan process
             if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: use pgrep
-                $result = Process::run('pgrep -x clamscan');
+                // macOS: use ps to get full command
+                $result = Process::run('ps aux | grep -v grep | grep "clamscan -r"');
             } else {
-                // Linux: use pgrep or ps
-                $result = Process::run('pgrep clamscan || ps aux | grep -v grep | grep clamscan');
+                // Linux: use ps to get full command
+                $result = Process::run('ps aux | grep -v grep | grep "clamscan"');
             }
             
-            return $result->successful() && !empty(trim($result->output()));
+            if ($result->successful() && !empty(trim($result->output()))) {
+                $output = trim($result->output());
+                // Parse command line to extract directory
+                // Example: "clamscan -r /Library" -> extract "/Library"
+                if (preg_match('/clamscan\s+(?:-\w+\s+)*-r\s+(\S+)/', $output, $matches)) {
+                    return "掃描中: " . $matches[1];
+                }
+                if (preg_match('/clamscan\s+(?:-\w+\s+)*(\S+)/', $output, $matches)) {
+                    return "掃描中: " . $matches[1];
+                }
+                return "掃描中...";
+            }
+            
+            return null;
         } catch (\Exception $e) {
-            return false;
+            return null;
         }
     }
 }
