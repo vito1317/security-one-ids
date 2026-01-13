@@ -90,6 +90,10 @@ class RunScan extends Command
             $totalPaths = count($scanPaths);
             $completedPaths = 0;
             
+            // Save scan paths to cache for getScanProgress to calculate index
+            $pathsFile = storage_path('app/scan_paths.json');
+            file_put_contents($pathsFile, json_encode(['paths' => $scanPaths]));
+            
             $allResults = [
                 'last_scan' => now()->toDateTimeString(),
                 'infected_files' => 0,

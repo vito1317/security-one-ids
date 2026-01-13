@@ -637,7 +637,6 @@ class ClamavService
             if (file_exists($cacheFile)) {
                 $cachedTime = filemtime($cacheFile);
                 // Use cache if it's less than 5 minutes old (300 seconds)
-                // Long directory scans can take a while
                 if (time() - $cachedTime < 300) {
                     $progress = trim(file_get_contents($cacheFile));
                     if (!empty($progress)) {
@@ -648,29 +647,47 @@ class ClamavService
             
             // Fallback to checking ps for clamscan process
             if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: use ps to get full command
                 $result = Process::run('ps aux | grep -v grep | grep "clamscan -r"');
             } else {
-                // Linux: use ps to get full command
                 $result = Process::run('ps aux | grep -v grep | grep "clamscan"');
             }
             
             if ($result->successful() && !empty(trim($result->output()))) {
                 $output = trim($result->output());
+                $currentPath = null;
+                
                 // Parse command line to extract directory
-                // Example: "clamscan -r /Library" -> extract "/Library"
                 if (preg_match('/clamscan\s+(?:-\w+\s+)*-r\s+(\S+)/', $output, $matches)) {
-                    $path = $this->translateDockerPath($matches[1]);
-                    return "掃描中: " . $path;
+                    $currentPath = $matches[1];
+                } elseif (preg_match('/clamscan\s+(?:-\w+\s+)*(\S+)/', $output, $matches)) {
+                    $currentPath = $matches[1];
                 }
-                if (preg_match('/clamscan\s+(?:-\w+\s+)*(\S+)/', $output, $matches)) {
-                    $path = $this->translateDockerPath($matches[1]);
-                    return "掃描中: " . $path;
+                
+                if ($currentPath) {
+                    $displayPath = $this->translateDockerPath($currentPath);
+                    
+                    // Try to get index from scan paths cache
+                    $pathsFile = storage_path('app/scan_paths.json');
+                    if (file_exists($pathsFile)) {
+                        $pathsData = json_decode(file_get_contents($pathsFile), true);
+                        $scanPaths = $pathsData['paths'] ?? [];
+                        $total = count($scanPaths);
+                        
+                        // Find current path index
+                        $index = array_search($currentPath, $scanPaths);
+                        if ($index !== false) {
+                            $index++; // Convert to 1-based index
+                            return "掃描中: {$displayPath} ({$index}/{$total})";
+                        }
+                    }
+                    
+                    return "掃描中: " . $displayPath;
                 }
+                
                 return "掃描中...";
             }
             
-            // No scan running - clean up cache file
+            // No scan running - clean up cache files
             if (file_exists($cacheFile)) {
                 @unlink($cacheFile);
             }
@@ -698,6 +715,12 @@ class ClamavService
         $cacheFile = storage_path('app/scan_progress.txt');
         if (file_exists($cacheFile)) {
             @unlink($cacheFile);
+        }
+        
+        // Also clear scan paths cache
+        $pathsFile = storage_path('app/scan_paths.json');
+        if (file_exists($pathsFile)) {
+            @unlink($pathsFile);
         }
     }
 }
