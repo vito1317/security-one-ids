@@ -417,6 +417,7 @@ class ClamavService
                 'status' => $scanResult['status'] ?? $status['status'],
                 'scan_status' => $scanResult['scan_status'] ?? 'idle',
                 'scan_progress' => $scanResult['scan_progress'] ?? null,
+                'scan_completed' => $scanResult['scan_completed'] ?? false,  // Explicit flag for final report
                 'error_message' => $scanResult['message'] ?? null,
             ];
 

@@ -100,6 +100,7 @@ class RunScan extends Command
             $allResults['scan_progress'] = null;
             $allResults['last_scan'] = now()->toDateTimeString();
             $allResults['status'] = $allResults['infected_files'] > 0 ? 'warning' : 'healthy';
+            $allResults['scan_completed'] = true;  // Explicit flag to tell WAF Hub to accept idle
             
             Log::info('Sending final scan report', [
                 'last_scan' => $allResults['last_scan'],
