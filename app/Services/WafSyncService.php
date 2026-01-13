@@ -243,10 +243,16 @@ class WafSyncService
             
             Log::info('Git pull successful', ['output' => $gitResult->output()]);
             
-            // Run composer install
+            // Run composer install with proper HOME environment
             Log::info('Running composer install...');
+            $homeDir = getenv('HOME') ?: (PHP_OS_FAMILY === 'Darwin' ? '/Users/' . get_current_user() : '/home/' . get_current_user());
             $composerResult = Process::path($installDir)
                 ->timeout(600)
+                ->env([
+                    'HOME' => $homeDir,
+                    'COMPOSER_HOME' => $homeDir . '/.composer',
+                    'COMPOSER_ALLOW_SUPERUSER' => '1',
+                ])
                 ->run('composer install --no-interaction --no-dev --optimize-autoloader 2>&1');
             
             if (!$composerResult->successful()) {
