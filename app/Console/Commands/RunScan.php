@@ -47,12 +47,21 @@ class RunScan extends Command
                 'scan_status' => 'scanning',
             ];
             
-            foreach ($scanPaths as $path) {
+            foreach ($scanPaths as $index => $path) {
                 if (is_dir($path)) {
-                    $completedPaths++;
-                    Log::info("Scanning directory ({$completedPaths}/{$totalPaths}): {$path}");
+                    $currentPath = $index + 1;
+                    Log::info("Scanning directory ({$currentPath}/{$totalPaths}): {$path}");
+                    
+                    // Report progress BEFORE starting scan (so user sees current directory)
+                    $clamav->reportToHub([
+                        'scan_status' => 'scanning',
+                        'scan_progress' => "掃描中: {$path} ({$currentPath}/{$totalPaths})",
+                        'scanned_files' => $allResults['scanned_files'],
+                        'infected_files' => $allResults['infected_files'],
+                    ]);
                     
                     $result = $clamav->scan($path);
+                    $completedPaths++;
                     
                     if ($result['success']) {
                         $allResults['scanned_files'] += $result['scanned_files'] ?? 0;
@@ -60,20 +69,13 @@ class RunScan extends Command
                         $allResults['threats'] = array_merge($allResults['threats'], $result['threats'] ?? []);
                     }
                     
-                    // Report progress after each directory (still scanning)
-                    $progressResults = $allResults;
-                    $progressResults['scan_status'] = 'scanning';
-                    $progressResults['scan_progress'] = "{$completedPaths}/{$totalPaths} directories";
-                    $clamav->reportToHub($progressResults);
-                    
-                    Log::info("Progress: {$completedPaths}/{$totalPaths} directories completed", [
-                        'path' => $path,
+                    Log::info("Directory completed: {$path}", [
                         'scanned_files' => $allResults['scanned_files'],
                         'infected_files' => $allResults['infected_files'],
                     ]);
                 } else {
                     $completedPaths++;
-                    Log::info("Skipping non-existent directory ({$completedPaths}/{$totalPaths}): {$path}");
+                    Log::info("Skipping non-existent directory: {$path}");
                 }
             }
             
