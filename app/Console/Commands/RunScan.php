@@ -15,6 +15,7 @@ class RunScan extends Command
         try {
             $scanType = $this->option('type') ?: 'quick';
             Log::info("Background scan started (type: {$scanType})");
+            $this->info("Background scan started (type: {$scanType})");
             
             $clamav = app(\App\Services\ClamavService::class);
             
@@ -94,6 +95,7 @@ class RunScan extends Command
                 'scanned_files' => $allResults['scanned_files'],
                 'infected_files' => $allResults['infected_files'],
             ]);
+            $this->info("Scan completed: {$allResults['scanned_files']} files, {$allResults['infected_files']} infected");
             
             // Report final results with idle status
             $allResults['scan_status'] = 'idle';
