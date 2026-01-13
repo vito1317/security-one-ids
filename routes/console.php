@@ -15,16 +15,18 @@ Artisan::command('waf:heartbeat', function (WafSyncService $wafSync) {
     $wafSync->heartbeat();
 })->purpose('Send heartbeat to WAF Hub');
 
+// Fast heartbeat during scanning
+Artisan::command('waf:heartbeat-if-scanning', function (WafSyncService $wafSync, ClamavService $clamav) {
+    if ($clamav->isScanRunning()) {
+        $wafSync->heartbeat();
+    }
+})->purpose('Send heartbeat only if scan is running');
+
 // Send heartbeat to WAF every minute (normal mode)
 Schedule::command('waf:heartbeat')->everyMinute();
 
 // Fast heartbeat during scanning - every 10 seconds
-// This runs continuously but only sends if scan is in progress
-Schedule::call(function (WafSyncService $wafSync, ClamavService $clamav) {
-    if ($clamav->isScanRunning()) {
-        $wafSync->heartbeat();
-    }
-})->everyTenSeconds()->runInBackground();
+Schedule::command('waf:heartbeat-if-scanning')->everyTenSeconds();
 
 // Run security scan every 5 minutes and report threats to WAF Hub
 Schedule::command('desktop:scan --full')
