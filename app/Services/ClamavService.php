@@ -406,6 +406,7 @@ class ClamavService
             $infected = [];
             $scannedFiles = 0;
             $infectedCount = 0;
+            $scanErrors = 0;
 
             // Parse output for infected files
             $lines = explode("\n", trim($output));
@@ -420,12 +421,17 @@ class ClamavService
                 if (preg_match('/Infected files:\s*(\d+)/i', $line, $matches)) {
                     $infectedCount = (int) $matches[1];
                 }
+                // Parse Total errors count
+                if (preg_match('/Total errors:\s*(\d+)/i', $line, $matches)) {
+                    $scanErrors = (int) $matches[1];
+                }
             }
 
             Log::info('ClamAV scan completed', [
                 'path' => $path,
                 'scanned_files' => $scannedFiles,
                 'infected_files' => max(count($infected), $infectedCount),
+                'scan_errors' => $scanErrors,
             ]);
 
             // Translate Docker container paths to host paths for display
@@ -439,6 +445,7 @@ class ClamavService
                 'status' => count($infected) > 0 ? 'warning' : 'healthy',
                 'scanned_files' => $scannedFiles,
                 'infected_files' => max(count($infected), $infectedCount),
+                'scan_errors' => $scanErrors,
                 'threats' => $translatedThreats,
             ];
         } catch (\Exception $e) {

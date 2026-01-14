@@ -103,6 +103,7 @@ class RunScan extends Command
                 'last_scan' => now()->toDateTimeString(),
                 'infected_files' => 0,
                 'scanned_files' => 0,
+                'scan_errors' => 0,
                 'threats' => [],
                 'scan_status' => 'scanning',
             ];
@@ -133,6 +134,7 @@ class RunScan extends Command
                     if ($result['success']) {
                         $allResults['scanned_files'] += $result['scanned_files'] ?? 0;
                         $allResults['infected_files'] += $result['infected_files'] ?? 0;
+                        $allResults['scan_errors'] += $result['scan_errors'] ?? 0;
                         $allResults['threats'] = array_merge($allResults['threats'], $result['threats'] ?? []);
                     }
                     
