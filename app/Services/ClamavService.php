@@ -631,8 +631,7 @@ class ClamavService
                     $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
                 }
             } elseif ($platform === 'macos') {
-                // macOS: Use standard freshclam - install script should have fixed permissions
-                // The --config-file and --datadir flags cause signal 6 crashes on Homebrew ClamAV
+                // macOS: Fix permissions and run freshclam
                 
                 $freshclamPath = '/opt/homebrew/bin/freshclam';
                 if (!file_exists($freshclamPath)) {
@@ -646,22 +645,27 @@ class ClamavService
                     ];
                 }
                 
-                Log::info('Running freshclam', ['path' => $freshclamPath]);
+                // Fix permissions on ClamAV database directory first
+                $clamavDir = '/opt/homebrew/var/lib/clamav';
+                if (!is_dir($clamavDir)) {
+                    $clamavDir = '/usr/local/var/lib/clamav';
+                }
                 
-                // Just run freshclam directly - permissions should be set by install script
+                if (is_dir($clamavDir)) {
+                    // Make directory writable by current process (running as root via launchd)
+                    Log::info('Fixing ClamAV directory permissions', ['dir' => $clamavDir]);
+                    Process::run("chmod -R 777 {$clamavDir}");
+                } else {
+                    // Create directory if it doesn't exist
+                    @mkdir($clamavDir, 0777, true);
+                }
+                
+                Log::info('Running freshclam', ['path' => $freshclamPath]);
                 $result = Process::timeout(600)->run($freshclamPath);
                 
                 if (!$result->successful()) {
                     $errorOutput = $result->errorOutput() ?: $result->output();
                     Log::warning('freshclam failed', ['error' => $errorOutput]);
-                    
-                    // If permission error, suggest running install script
-                    if (strpos($errorOutput, "Can't create temporary directory") !== false) {
-                        return [
-                            'success' => false,
-                            'message' => 'Permission error. Please run: curl -fsSL https://raw.githubusercontent.com/vito1317/security-one-ids/main/install/install.sh | sudo bash',
-                        ];
-                    }
                 }
             } else {
                 // Use freshclam without sudo in Docker, with sudo on native Linux
