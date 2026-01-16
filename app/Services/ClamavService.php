@@ -560,26 +560,36 @@ class ClamavService
             $platform = $this->getPlatform();
             
             if ($platform === 'windows') {
-                // Windows: find freshclam in Program Files
-                $freshclamPaths = [
-                    'C:\\Program Files\\ClamAV\\freshclam.exe',
-                    'C:\\Program Files (x86)\\ClamAV\\freshclam.exe',
-                    'C:\\ProgramData\\chocolatey\\bin\\freshclam.exe',
+                // Windows: find freshclam and its config file
+                $possibleDirs = [
+                    'C:\\Program Files\\ClamAV',
                 ];
                 
+                // Check Chocolatey versioned paths
+                $chocoGlob = glob('C:\\ProgramData\\chocolatey\\lib\\clamav\\tools\\clamav-*');
+                if (!empty($chocoGlob)) {
+                    foreach ($chocoGlob as $p) {
+                        if (is_dir($p)) $possibleDirs[] = $p;
+                    }
+                }
+                
+                $clamavDir = null;
                 $freshclamPath = null;
-                foreach ($freshclamPaths as $path) {
-                    if (file_exists($path)) {
-                        $freshclamPath = $path;
+                
+                foreach ($possibleDirs as $dir) {
+                    if (is_dir($dir) && file_exists("{$dir}\\freshclam.exe")) {
+                        $clamavDir = $dir;
+                        $freshclamPath = "{$dir}\\freshclam.exe";
                         break;
                     }
                 }
                 
-                if (!$freshclamPath) {
-                    // Try using Get-Command
-                    $findResult = Process::run('powershell -Command "Get-Command freshclam -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source"');
-                    if ($findResult->successful() && !empty(trim($findResult->output()))) {
-                        $freshclamPath = trim($findResult->output());
+                // Fallback to bin path
+                if (!$freshclamPath && file_exists('C:\\ProgramData\\chocolatey\\bin\\freshclam.exe')) {
+                    $freshclamPath = 'C:\\ProgramData\\chocolatey\\bin\\freshclam.exe';
+                    // Try to find the actual directory for config
+                    if (!empty($chocoGlob)) {
+                        $clamavDir = $chocoGlob[0];
                     }
                 }
                 
@@ -590,7 +600,36 @@ class ClamavService
                     ];
                 }
                 
-                $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
+                Log::info('Found freshclam', ['path' => $freshclamPath, 'dir' => $clamavDir]);
+                
+                // Ensure config file exists
+                $confPath = $clamavDir ? "{$clamavDir}\\freshclam.conf" : null;
+                
+                if ($clamavDir && !file_exists($confPath)) {
+                    $samplePath = "{$clamavDir}\\freshclam.conf.sample";
+                    if (file_exists($samplePath)) {
+                        copy($samplePath, $confPath);
+                        // Comment out Example line
+                        $content = file_get_contents($confPath);
+                        $content = preg_replace('/^Example\s*$/m', '#Example', $content);
+                        file_put_contents($confPath, $content);
+                        Log::info('Created freshclam.conf from sample');
+                    } else {
+                        // Create minimal config
+                        $dbDir = "{$clamavDir}\\database";
+                        if (!is_dir($dbDir)) @mkdir($dbDir, 0755, true);
+                        $config = "DatabaseMirror database.clamav.net\r\nDatabaseDirectory {$dbDir}\r\n";
+                        file_put_contents($confPath, $config);
+                        Log::info('Created minimal freshclam.conf');
+                    }
+                }
+                
+                // Run freshclam with explicit config if available
+                if ($confPath && file_exists($confPath)) {
+                    $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}' --config-file='{$confPath}'\"");
+                } else {
+                    $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
+                }
             } elseif ($platform === 'macos') {
                 // macOS: Use a user-writable data directory to avoid permission issues
                 // The default /opt/homebrew/var/lib/clamav often has permission problems
