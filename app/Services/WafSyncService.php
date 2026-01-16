@@ -326,14 +326,24 @@ class WafSyncService
             // Report "updating" status to WAF Hub
             $this->reportUpdateStatus('updating');
             
-            // Get install directory
+            // Get install directory and detect platform
             $installDir = base_path();
+            $isWindows = PHP_OS_FAMILY === 'Windows';
+            $isDocker = file_exists('/.dockerenv') || getenv('DOCKER_CONTAINER');
             
             // Run git pull to get latest code
-            Log::info('Pulling latest code from git...');
-            $gitResult = Process::path($installDir)
-                ->timeout(300)
-                ->run('git pull origin main 2>&1');
+            Log::info('Pulling latest code from git...', ['platform' => $isWindows ? 'windows' : 'unix']);
+            
+            if ($isWindows) {
+                // Windows: Use PowerShell for git
+                $gitResult = Process::path($installDir)
+                    ->timeout(300)
+                    ->run('powershell -Command "git pull origin main 2>&1"');
+            } else {
+                $gitResult = Process::path($installDir)
+                    ->timeout(300)
+                    ->run('git pull origin main 2>&1');
+            }
             
             if (!$gitResult->successful()) {
                 Log::error('Git pull failed: ' . $gitResult->output());
@@ -343,17 +353,35 @@ class WafSyncService
             
             Log::info('Git pull successful', ['output' => $gitResult->output()]);
             
-            // Run composer install with proper HOME environment
+            // Run composer install
             Log::info('Running composer install...');
-            $homeDir = getenv('HOME') ?: (PHP_OS_FAMILY === 'Darwin' ? '/Users/' . get_current_user() : '/home/' . get_current_user());
-            $composerResult = Process::path($installDir)
-                ->timeout(600)
-                ->env([
-                    'HOME' => $homeDir,
-                    'COMPOSER_HOME' => $homeDir . '/.composer',
-                    'COMPOSER_ALLOW_SUPERUSER' => '1',
-                ])
-                ->run('composer install --no-interaction --no-dev --optimize-autoloader 2>&1');
+            
+            if ($isWindows) {
+                // Windows: Find composer and run with PowerShell
+                $composerCmd = 'composer';
+                
+                // Check if composer.phar exists in directory
+                if (file_exists($installDir . '/composer.phar')) {
+                    $composerCmd = 'php composer.phar';
+                } elseif (file_exists($installDir . '/composer.bat')) {
+                    $composerCmd = 'composer.bat';
+                }
+                
+                $composerResult = Process::path($installDir)
+                    ->timeout(600)
+                    ->env(['COMPOSER_ALLOW_SUPERUSER' => '1'])
+                    ->run("powershell -Command \"{$composerCmd} install --no-interaction --no-dev --optimize-autoloader 2>&1\"");
+            } else {
+                $homeDir = getenv('HOME') ?: (PHP_OS_FAMILY === 'Darwin' ? '/Users/' . get_current_user() : '/home/' . get_current_user());
+                $composerResult = Process::path($installDir)
+                    ->timeout(600)
+                    ->env([
+                        'HOME' => $homeDir,
+                        'COMPOSER_HOME' => $homeDir . '/.composer',
+                        'COMPOSER_ALLOW_SUPERUSER' => '1',
+                    ])
+                    ->run('composer install --no-interaction --no-dev --optimize-autoloader 2>&1');
+            }
             
             if (!$composerResult->successful()) {
                 Log::warning('Composer install warning: ' . $composerResult->output());
@@ -369,24 +397,23 @@ class WafSyncService
             Artisan::call('config:clear');
             Artisan::call('cache:clear');
             
-            // Check if running in Docker and trigger rebuild
-            if (file_exists('/.dockerenv') || getenv('DOCKER_CONTAINER')) {
+            // Handle environment-specific restart
+            if ($isDocker) {
                 Log::info('Docker environment detected, triggering container rebuild...');
                 
-                // The actual rebuild needs to happen outside the container
-                // Signal to webhook or use docker-compose restart
-                $dockerComposeDir = dirname($installDir);
-                
-                // Try to rebuild using docker-compose directly (requires volume mount)
                 $rebuildScript = $installDir . '/docker/rebuild.sh';
                 if (file_exists($rebuildScript)) {
                     Log::info('Running Docker rebuild script...');
                     exec("nohup bash {$rebuildScript} >> /var/www/html/storage/logs/docker-rebuild.log 2>&1 &");
                 } else {
-                    // Alternative: create a marker file for external monitoring
                     file_put_contents($installDir . '/storage/rebuild_requested', date('Y-m-d H:i:s'));
                     Log::info('Docker rebuild marker created, waiting for external rebuild...');
                 }
+            } elseif ($isWindows) {
+                // Windows: Restart PHP process or Windows service if applicable
+                Log::info('Windows update completed, no automatic restart required');
+                // Note: Windows Agent typically runs as a scheduled task or service
+                // The next heartbeat will pick up the new code
             }
             
             // Get new version from config

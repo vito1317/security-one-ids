@@ -403,10 +403,45 @@ class ClamavService
         Log::info('Updating ClamAV virus definitions');
 
         try {
-            // Use freshclam without sudo in Docker, with sudo on native macOS/Linux
-            $cmd = file_exists('/.dockerenv') ? 'freshclam' : 'sudo freshclam';
+            $platform = $this->getPlatform();
             
-            $result = Process::timeout(600)->run($cmd);
+            if ($platform === 'windows') {
+                // Windows: find freshclam in Program Files
+                $freshclamPaths = [
+                    'C:\\Program Files\\ClamAV\\freshclam.exe',
+                    'C:\\Program Files (x86)\\ClamAV\\freshclam.exe',
+                    'C:\\ProgramData\\chocolatey\\bin\\freshclam.exe',
+                ];
+                
+                $freshclamPath = null;
+                foreach ($freshclamPaths as $path) {
+                    if (file_exists($path)) {
+                        $freshclamPath = $path;
+                        break;
+                    }
+                }
+                
+                if (!$freshclamPath) {
+                    // Try using Get-Command
+                    $findResult = Process::run('powershell -Command "Get-Command freshclam -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source"');
+                    if ($findResult->successful() && !empty(trim($findResult->output()))) {
+                        $freshclamPath = trim($findResult->output());
+                    }
+                }
+                
+                if (!$freshclamPath) {
+                    return [
+                        'success' => false,
+                        'message' => 'freshclam.exe not found on Windows',
+                    ];
+                }
+                
+                $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
+            } else {
+                // Use freshclam without sudo in Docker, with sudo on native macOS/Linux
+                $cmd = file_exists('/.dockerenv') ? 'freshclam' : 'sudo freshclam';
+                $result = Process::timeout(600)->run($cmd);
+            }
             
             if ($result->successful()) {
                 // Refresh definitions date after update
@@ -450,22 +485,54 @@ class ClamavService
         Log::info('Starting ClamAV scan on: ' . $path);
 
         try {
-            // Build command with proper PATH for macOS Homebrew
-            $pathPrefix = $this->getPlatform() === 'macos' 
-                ? 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" && '
-                : '';
-            
-            // Run clamscan with recursive option and get summary
-            // Use exec instead of Process::run for better background execution compat
-            $scanCmd = "{$pathPrefix}clamscan -r {$path} 2>&1";
-            
-            Log::info('Executing clamscan command', ['command' => $scanCmd]);
-            
-            // Use exec with output capture - more reliable in background processes
+            $platform = $this->getPlatform();
             $output = '';
             $returnCode = 0;
-            exec($scanCmd, $outputLines, $returnCode);
-            $output = implode("\n", $outputLines);
+            
+            if ($platform === 'windows') {
+                // Windows: find clamscan.exe and run with PowerShell
+                $clamscanPaths = [
+                    'C:\\Program Files\\ClamAV\\clamscan.exe',
+                    'C:\\Program Files (x86)\\ClamAV\\clamscan.exe',
+                    'C:\\ProgramData\\chocolatey\\bin\\clamscan.exe',
+                ];
+                
+                $clamscanPath = null;
+                foreach ($clamscanPaths as $exePath) {
+                    if (file_exists($exePath)) {
+                        $clamscanPath = $exePath;
+                        break;
+                    }
+                }
+                
+                if (!$clamscanPath) {
+                    return [
+                        'success' => false,
+                        'status' => 'not_installed',
+                        'message' => 'clamscan.exe not found on Windows',
+                    ];
+                }
+                
+                // Windows path escaping
+                $escapedPath = str_replace('/', '\\', $path);
+                $scanCmd = "powershell -Command \"& '{$clamscanPath}' -r '{$escapedPath}'\"";
+                
+                Log::info('Executing Windows clamscan command', ['command' => $scanCmd]);
+                exec($scanCmd, $outputLines, $returnCode);
+                $output = implode("\n", $outputLines);
+            } else {
+                // Unix: Build command with proper PATH for macOS Homebrew
+                $pathPrefix = $platform === 'macos' 
+                    ? 'export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" && '
+                    : '';
+                
+                // Run clamscan with recursive option and get summary
+                $scanCmd = "{$pathPrefix}clamscan -r {$path} 2>&1";
+                
+                Log::info('Executing clamscan command', ['command' => $scanCmd]);
+                exec($scanCmd, $outputLines, $returnCode);
+                $output = implode("\n", $outputLines);
+            }
             
             Log::info('Clamscan execution completed', [
                 'return_code' => $returnCode,
