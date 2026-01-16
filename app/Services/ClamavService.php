@@ -550,8 +550,25 @@ class ClamavService
                 }
                 
                 $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
+            } elseif ($platform === 'macos') {
+                // macOS: Fix permissions on ClamAV data directory before running freshclam
+                $clamavDataDir = '/opt/homebrew/var/lib/clamav';
+                $clamavUser = get_current_user();
+                
+                if (is_dir($clamavDataDir)) {
+                    Log::info('Fixing ClamAV data directory permissions on macOS...');
+                    Process::run("sudo chown -R {$clamavUser}:admin {$clamavDataDir}");
+                    Process::run("sudo chmod -R 755 {$clamavDataDir}");
+                } else {
+                    Log::info('Creating ClamAV data directory on macOS...');
+                    Process::run("sudo mkdir -p {$clamavDataDir}");
+                    Process::run("sudo chown -R {$clamavUser}:admin {$clamavDataDir}");
+                    Process::run("sudo chmod -R 755 {$clamavDataDir}");
+                }
+                
+                $result = Process::timeout(600)->run('sudo freshclam');
             } else {
-                // Use freshclam without sudo in Docker, with sudo on native macOS/Linux
+                // Use freshclam without sudo in Docker, with sudo on native Linux
                 $cmd = file_exists('/.dockerenv') ? 'freshclam' : 'sudo freshclam';
                 $result = Process::timeout(600)->run($cmd);
             }
