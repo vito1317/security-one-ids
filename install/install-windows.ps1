@@ -63,18 +63,60 @@ New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 New-Item -ItemType Directory -Path "$DataDir\logs" -Force | Out-Null
 New-Item -ItemType Directory -Path "$DataDir\storage" -Force | Out-Null
 
-# Download IDS Agent
-Write-Host "`n📥 Downloading Security One IDS Agent..." -ForegroundColor Cyan
-$RepoUrl = "https://github.com/vito1317/security-one-ids/archive/refs/heads/main.zip"
-$ZipPath = "$env:TEMP\security-one-ids.zip"
+# Download IDS Agent via git clone (required for updates)
+Write-Host "`n📥 Downloading Security One IDS Agent via Git...`n" -ForegroundColor Cyan
 
-Invoke-WebRequest -Uri $RepoUrl -OutFile $ZipPath -UseBasicParsing
-Expand-Archive -Path $ZipPath -DestinationPath "$env:TEMP\security-one-ids-extract" -Force
-Copy-Item -Path "$env:TEMP\security-one-ids-extract\security-one-ids-main\*" -Destination $InstallDir -Recurse -Force
-Remove-Item -Path $ZipPath -Force
-Remove-Item -Path "$env:TEMP\security-one-ids-extract" -Recurse -Force
+# Check if git is installed
+$gitPath = Get-Command git -ErrorAction SilentlyContinue
+if (-not $gitPath) {
+    Write-Host "Installing Git..." -ForegroundColor Yellow
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        & choco install git -y
+    } elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+        & winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements
+    } else {
+        # Install chocolatey first, then git
+        Write-Host "Installing Chocolatey package manager..." -ForegroundColor Yellow
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        & 'C:\ProgramData\chocolatey\bin\choco.exe' install git -y
+    }
+    # Refresh PATH
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+}
+Write-Host "✅ Git is installed" -ForegroundColor Green
 
-Write-Host "✅ IDS Agent downloaded" -ForegroundColor Green
+# Clone or update repository
+$RepoUrl = "https://github.com/vito1317/security-one-ids.git"
+
+if (Test-Path "$InstallDir\.git") {
+    Write-Host "📂 Existing git repository found, updating..." -ForegroundColor Yellow
+    Set-Location $InstallDir
+    & git fetch origin
+    & git reset --hard origin/main
+} else {
+    # Remove existing directory if it's not a git repo
+    if (Test-Path $InstallDir) {
+        # Backup .env if exists
+        $envBackup = $null
+        if (Test-Path "$InstallDir\.env") {
+            $envBackup = Get-Content "$InstallDir\.env" -Raw
+        }
+        Remove-Item -Path $InstallDir -Recurse -Force
+    }
+    
+    # Clone the repository
+    & git clone $RepoUrl $InstallDir
+    
+    # Restore .env if it was backed up
+    if ($envBackup) {
+        $envBackup | Out-File -FilePath "$InstallDir\.env" -Encoding UTF8
+    }
+}
+
+Write-Host "✅ IDS Agent downloaded via Git" -ForegroundColor Green
 
 # Install Composer dependencies
 Write-Host "`n📦 Installing dependencies..." -ForegroundColor Cyan
