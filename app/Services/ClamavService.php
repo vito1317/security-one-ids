@@ -631,50 +631,36 @@ class ClamavService
                     $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
                 }
             } elseif ($platform === 'macos') {
-                // macOS: Use a user-writable data directory to avoid permission issues
-                // The default /opt/homebrew/var/lib/clamav often has permission problems
+                // macOS: Use standard freshclam - install script should have fixed permissions
+                // The --config-file and --datadir flags cause signal 6 crashes on Homebrew ClamAV
                 
-                $homeDir = getenv('HOME') ?: '/Users/' . get_current_user();
-                $userDataDir = "{$homeDir}/.clamav";
-                
-                // Create user-writable clamav directory
-                if (!is_dir($userDataDir)) {
-                    @mkdir($userDataDir, 0755, true);
-                    Log::info('Created user ClamAV data directory', ['path' => $userDataDir]);
-                }
-                
-                // Create minimal freshclam config pointing to user directory
-                $userConfPath = "{$userDataDir}/freshclam.conf";
-                // Delete old config first (may contain old settings like UpdateLogFile)
-                if (file_exists($userConfPath)) {
-                    @unlink($userConfPath);
-                }
-                // Create fresh config
-                $config = "DatabaseMirror database.clamav.net\n" .
-                          "DatabaseDirectory {$userDataDir}\n";
-                file_put_contents($userConfPath, $config);
-                Log::info('Created fresh user freshclam.conf', ['path' => $userConfPath]);
-                
-                // Run freshclam with user config (no sudo needed)
                 $freshclamPath = '/opt/homebrew/bin/freshclam';
                 if (!file_exists($freshclamPath)) {
                     $freshclamPath = '/usr/local/bin/freshclam';
                 }
                 
-                // Use both --config-file and --datadir to ensure correct directory
-                $cmd = "{$freshclamPath} --config-file=\"{$userConfPath}\" --datadir=\"{$userDataDir}\"";
-                Log::info('Running freshclam', ['command' => $cmd]);
-                $result = Process::timeout(600)->run($cmd);
+                if (!file_exists($freshclamPath)) {
+                    return [
+                        'success' => false,
+                        'message' => 'freshclam not found. Please install ClamAV: brew install clamav',
+                    ];
+                }
+                
+                Log::info('Running freshclam', ['path' => $freshclamPath]);
+                
+                // Just run freshclam directly - permissions should be set by install script
+                $result = Process::timeout(600)->run($freshclamPath);
                 
                 if (!$result->successful()) {
                     $errorOutput = $result->errorOutput() ?: $result->output();
-                    Log::warning('User-dir freshclam failed', ['error' => $errorOutput]);
+                    Log::warning('freshclam failed', ['error' => $errorOutput]);
                     
-                    // If still failing, try to fix homebrew directory permissions manually
-                    $homebrewDir = '/opt/homebrew/var/lib/clamav';
-                    if (is_dir($homebrewDir) && is_writable($homebrewDir)) {
-                        Log::info('Trying with homebrew directory');
-                        $result = Process::timeout(600)->run("{$freshclamPath}");
+                    // If permission error, suggest running install script
+                    if (strpos($errorOutput, "Can't create temporary directory") !== false) {
+                        return [
+                            'success' => false,
+                            'message' => 'Permission error. Please run: curl -fsSL https://raw.githubusercontent.com/vito1317/security-one-ids/main/install/install.sh | sudo bash',
+                        ];
                     }
                 }
             } else {
