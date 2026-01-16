@@ -659,12 +659,21 @@ class ClamavService
                     $freshclamPath = '/usr/local/bin/freshclam';
                 }
                 
-                $result = Process::timeout(600)->run("{$freshclamPath} --config-file={$userConfPath}");
+                // Use both --config-file and --datadir to ensure correct directory
+                $cmd = "{$freshclamPath} --config-file=\"{$userConfPath}\" --datadir=\"{$userDataDir}\"";
+                Log::info('Running freshclam', ['command' => $cmd]);
+                $result = Process::timeout(600)->run($cmd);
                 
                 if (!$result->successful()) {
-                    // Fallback: try with sudo if user dir approach fails
-                    Log::warning('User-dir freshclam failed, trying with sudo');
-                    $result = Process::timeout(600)->run("sudo {$freshclamPath}");
+                    $errorOutput = $result->errorOutput() ?: $result->output();
+                    Log::warning('User-dir freshclam failed', ['error' => $errorOutput]);
+                    
+                    // If still failing, try to fix homebrew directory permissions manually
+                    $homebrewDir = '/opt/homebrew/var/lib/clamav';
+                    if (is_dir($homebrewDir) && is_writable($homebrewDir)) {
+                        Log::info('Trying with homebrew directory');
+                        $result = Process::timeout(600)->run("{$freshclamPath}");
+                    }
                 }
             } else {
                 // Use freshclam without sudo in Docker, with sudo on native Linux
