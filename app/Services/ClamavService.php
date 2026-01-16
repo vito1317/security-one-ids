@@ -71,6 +71,25 @@ class ClamavService
                 // Also try which command with Homebrew PATH
                 $result = Process::run('export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH" && which clamscan');
                 $this->isInstalled = $result->successful() && !empty(trim($result->output()));
+            } elseif ($platform === 'windows') {
+                // Check Windows ClamAV paths
+                $paths = [
+                    'C:\\Program Files\\ClamAV\\clamscan.exe',
+                    'C:\\Program Files (x86)\\ClamAV\\clamscan.exe',
+                    'C:\\ProgramData\\chocolatey\\bin\\clamscan.exe',
+                ];
+                
+                foreach ($paths as $path) {
+                    if (file_exists($path)) {
+                        $this->isInstalled = true;
+                        $this->getVersion();
+                        return true;
+                    }
+                }
+                
+                // Also try where command on Windows
+                $result = Process::run('powershell -Command "Get-Command clamscan -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source"');
+                $this->isInstalled = $result->successful() && !empty(trim($result->output()));
             } else {
                 $result = Process::run('which clamscan 2>/dev/null || command -v clamscan 2>/dev/null');
                 $this->isInstalled = $result->successful() && !empty(trim($result->output()));
@@ -154,6 +173,8 @@ class ClamavService
             switch ($platform) {
                 case 'macos':
                     return $this->installMacos();
+                case 'windows':
+                    return $this->installWindows();
                 case 'alpine':
                     return $this->installAlpine();
                 case 'linux':
@@ -295,6 +316,62 @@ class ClamavService
         return [
             'success' => true,
             'message' => 'ClamAV installed successfully on RHEL/CentOS',
+        ];
+    }
+
+    /**
+     * Install on Windows using winget or chocolatey
+     */
+    protected function installWindows(): array
+    {
+        Log::info('Installing ClamAV on Windows');
+        
+        // First, check if ClamAV is already installed
+        $checkPath = 'C:\\Program Files\\ClamAV\\clamscan.exe';
+        if (file_exists($checkPath)) {
+            $this->isInstalled = true;
+            return [
+                'success' => true,
+                'message' => 'ClamAV is already installed on Windows',
+            ];
+        }
+
+        // Try winget first (Windows 10/11)
+        $wingetCheck = Process::run('powershell -Command "Get-Command winget -ErrorAction SilentlyContinue"');
+        if ($wingetCheck->successful() && !empty(trim($wingetCheck->output()))) {
+            Log::info('Installing ClamAV via winget');
+            $result = Process::timeout(600)->run('powershell -Command "winget install -e --id CLAMAV.ClamAV --accept-package-agreements --accept-source-agreements"');
+            
+            if ($result->successful()) {
+                $this->isInstalled = true;
+                return [
+                    'success' => true,
+                    'message' => 'ClamAV installed successfully via winget',
+                ];
+            }
+            Log::warning('winget installation failed, trying chocolatey: ' . $result->errorOutput());
+        }
+
+        // Try chocolatey as fallback
+        $chocoCheck = Process::run('powershell -Command "Get-Command choco -ErrorAction SilentlyContinue"');
+        if ($chocoCheck->successful() && !empty(trim($chocoCheck->output()))) {
+            Log::info('Installing ClamAV via chocolatey');
+            $result = Process::timeout(600)->run('powershell -Command "choco install clamav -y"');
+            
+            if ($result->successful()) {
+                $this->isInstalled = true;
+                return [
+                    'success' => true,
+                    'message' => 'ClamAV installed successfully via chocolatey',
+                ];
+            }
+            Log::warning('chocolatey installation failed: ' . $result->errorOutput());
+        }
+
+        // If no package manager available, provide manual installation guidance
+        return [
+            'success' => false,
+            'message' => 'Unable to install ClamAV automatically. Please install winget or chocolatey, or download ClamAV manually from https://www.clamav.net/downloads',
         ];
     }
 
@@ -595,6 +672,11 @@ class ClamavService
     {
         if (stripos(PHP_OS, 'Darwin') !== false) {
             return 'macos';
+        }
+
+        // Windows detection
+        if (stripos(PHP_OS, 'WIN') === 0 || stripos(PHP_OS_FAMILY, 'Windows') !== false) {
+            return 'windows';
         }
 
         if (stripos(PHP_OS, 'Linux') !== false) {
