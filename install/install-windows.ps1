@@ -107,10 +107,13 @@ if (Test-Path "$InstallDir\.git") {
         # Wait a moment for processes to terminate
         Start-Sleep -Seconds 2
         
-        # Kill any remaining PHP processes that might be running from that directory
-        Get-Process -Name php -ErrorAction SilentlyContinue | Where-Object {
-            $_.Path -like "*SecurityOneIDS*"
-        } | Stop-Process -Force -ErrorAction SilentlyContinue
+        # Kill ALL PHP processes (more aggressive)
+        Write-Host "🔪 Terminating PHP processes..." -ForegroundColor Yellow
+        Get-Process -Name php -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Get-Process -Name php-cgi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        
+        # Wait for file handles to be released
+        Start-Sleep -Seconds 3
         
         # Backup .env if exists
         $envBackup = $null
@@ -118,13 +121,22 @@ if (Test-Path "$InstallDir\.git") {
             $envBackup = Get-Content "$InstallDir\.env" -Raw
         }
         
-        # Try to remove directory
-        try {
-            Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction Stop
-        } catch {
-            Write-Host "⚠️ Could not remove directory, trying again..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 3
-            Remove-Item -Path $InstallDir -Recurse -Force
+        # Try to remove directory with multiple attempts
+        $maxAttempts = 3
+        $attempt = 1
+        while ($attempt -le $maxAttempts) {
+            try {
+                Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction Stop
+                break
+            } catch {
+                Write-Host "⚠️ Attempt $attempt/$maxAttempts - Could not remove directory: $($_.Exception.Message)" -ForegroundColor Yellow
+                if ($attempt -eq $maxAttempts) {
+                    Write-Host "❌ Failed to remove directory. Please close any applications using files in $InstallDir and try again." -ForegroundColor Red
+                    exit 1
+                }
+                $attempt++
+                Start-Sleep -Seconds 5
+            }
         }
     }
     
