@@ -592,22 +592,41 @@ class ClamavService
                 
                 $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
             } elseif ($platform === 'macos') {
-                // macOS: Fix permissions on ClamAV data directory before running freshclam
-                $clamavDataDir = '/opt/homebrew/var/lib/clamav';
-                $clamavUser = get_current_user();
+                // macOS: Use a user-writable data directory to avoid permission issues
+                // The default /opt/homebrew/var/lib/clamav often has permission problems
                 
-                if (is_dir($clamavDataDir)) {
-                    Log::info('Fixing ClamAV data directory permissions on macOS...');
-                    Process::run("sudo chown -R {$clamavUser}:admin {$clamavDataDir}");
-                    Process::run("sudo chmod -R 755 {$clamavDataDir}");
-                } else {
-                    Log::info('Creating ClamAV data directory on macOS...');
-                    Process::run("sudo mkdir -p {$clamavDataDir}");
-                    Process::run("sudo chown -R {$clamavUser}:admin {$clamavDataDir}");
-                    Process::run("sudo chmod -R 755 {$clamavDataDir}");
+                $homeDir = getenv('HOME') ?: '/Users/' . get_current_user();
+                $userDataDir = "{$homeDir}/.clamav";
+                
+                // Create user-writable clamav directory
+                if (!is_dir($userDataDir)) {
+                    @mkdir($userDataDir, 0755, true);
+                    Log::info('Created user ClamAV data directory', ['path' => $userDataDir]);
                 }
                 
-                $result = Process::timeout(600)->run('sudo freshclam');
+                // Create minimal freshclam config pointing to user directory
+                $userConfPath = "{$userDataDir}/freshclam.conf";
+                if (!file_exists($userConfPath)) {
+                    $config = "DatabaseMirror database.clamav.net\n" .
+                              "DatabaseDirectory {$userDataDir}\n" .
+                              "UpdateLogFile {$userDataDir}/freshclam.log\n";
+                    file_put_contents($userConfPath, $config);
+                    Log::info('Created user freshclam.conf');
+                }
+                
+                // Run freshclam with user config (no sudo needed)
+                $freshclamPath = '/opt/homebrew/bin/freshclam';
+                if (!file_exists($freshclamPath)) {
+                    $freshclamPath = '/usr/local/bin/freshclam';
+                }
+                
+                $result = Process::timeout(600)->run("{$freshclamPath} --config-file={$userConfPath}");
+                
+                if (!$result->successful()) {
+                    // Fallback: try with sudo if user dir approach fails
+                    Log::warning('User-dir freshclam failed, trying with sudo');
+                    $result = Process::timeout(600)->run("sudo {$freshclamPath}");
+                }
             } else {
                 // Use freshclam without sudo in Docker, with sudo on native Linux
                 $cmd = file_exists('/.dockerenv') ? 'freshclam' : 'sudo freshclam';
