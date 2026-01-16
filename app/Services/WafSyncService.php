@@ -335,10 +335,18 @@ class WafSyncService
             Log::info('Pulling latest code from git...', ['platform' => $isWindows ? 'windows' : 'unix']);
             
             if ($isWindows) {
-                // Windows: Use PowerShell for git
+                // Windows: Use cmd.exe for better output capturing
+                // PowerShell sometimes doesn't capture git output correctly
                 $gitResult = Process::path($installDir)
                     ->timeout(300)
-                    ->run('powershell -Command "git pull origin main 2>&1"');
+                    ->run('cmd /c "git pull origin main 2>&1"');
+                
+                // Log both output and error for debugging
+                Log::info('Git command completed', [
+                    'output' => $gitResult->output(),
+                    'error' => $gitResult->errorOutput(),
+                    'exitCode' => $gitResult->exitCode(),
+                ]);
             } else {
                 $gitResult = Process::path($installDir)
                     ->timeout(300)
@@ -346,7 +354,8 @@ class WafSyncService
             }
             
             if (!$gitResult->successful()) {
-                Log::error('Git pull failed: ' . $gitResult->output());
+                $errorMsg = $gitResult->output() ?: $gitResult->errorOutput() ?: 'Unknown error (exit code: ' . $gitResult->exitCode() . ')';
+                Log::error('Git pull failed: ' . $errorMsg);
                 $this->reportUpdateStatus('error');
                 return;
             }
