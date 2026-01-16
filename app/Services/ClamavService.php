@@ -460,31 +460,72 @@ class ClamavService
     {
         Log::info('Initializing freshclam on Windows...');
         
-        $configPaths = [
-            'C:\\Program Files\\ClamAV\\freshclam.conf',
-            'C:\\Program Files\\ClamAV\\freshclam.conf.sample',
+        // Find ClamAV installation directory (different for Chocolatey vs MSI)
+        $possiblePaths = [
+            'C:\\Program Files\\ClamAV',
         ];
         
-        $confPath = $configPaths[0];
-        $samplePath = $configPaths[1];
+        // Check Chocolatey versioned paths
+        $chocoGlob = glob('C:\\ProgramData\\chocolatey\\lib\\clamav\\tools\\clamav-*');
+        if (!empty($chocoGlob)) {
+            foreach ($chocoGlob as $p) {
+                if (is_dir($p)) $possiblePaths[] = $p;
+            }
+        }
         
-        // Copy sample config if needed
-        if (!file_exists($confPath) && file_exists($samplePath)) {
-            copy($samplePath, $confPath);
-            
-            // Remove or comment out Example line
-            if (file_exists($confPath)) {
-                $content = file_get_contents($confPath);
-                $content = preg_replace('/^Example$/m', '#Example', $content);
+        $clamavDir = null;
+        $freshclamPath = null;
+        
+        foreach ($possiblePaths as $path) {
+            if (is_dir($path) && file_exists("{$path}\\freshclam.exe")) {
+                $clamavDir = $path;
+                $freshclamPath = "{$path}\\freshclam.exe";
+                break;
+            }
+        }
+        
+        if (!$clamavDir) {
+            Log::warning('Could not find ClamAV installation directory');
+            return;
+        }
+        
+        Log::info('Found ClamAV directory', ['path' => $clamavDir]);
+        
+        $confPath = "{$clamavDir}\\freshclam.conf";
+        $samplePath = "{$clamavDir}\\freshclam.conf.sample";
+        
+        // Create or fix config file
+        if (!file_exists($confPath)) {
+            if (file_exists($samplePath)) {
+                copy($samplePath, $confPath);
+                Log::info('Copied freshclam.conf from sample');
+            } else {
+                // Create minimal config
+                $dbDir = "{$clamavDir}\\database";
+                if (!is_dir($dbDir)) @mkdir($dbDir, 0755, true);
+                
+                $config = "DatabaseMirror database.clamav.net\nDatabaseDirectory {$dbDir}\n";
+                file_put_contents($confPath, $config);
+                Log::info('Created minimal freshclam.conf');
+            }
+        }
+        
+        // Comment out Example line
+        if (file_exists($confPath)) {
+            $content = file_get_contents($confPath);
+            if (preg_match('/^Example\s*$/m', $content)) {
+                $content = preg_replace('/^Example\s*$/m', '#Example', $content);
                 file_put_contents($confPath, $content);
             }
         }
         
-        // Run initial freshclam to download virus definitions
+        // Run freshclam with explicit config
         Log::info('Downloading initial virus definitions...');
-        $freshclamPath = 'C:\\Program Files\\ClamAV\\freshclam.exe';
-        if (file_exists($freshclamPath)) {
-            Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
+        $result = Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}' --config-file='{$confPath}'\"");
+        if ($result->successful()) {
+            Log::info('Initial virus definitions downloaded');
+        } else {
+            Log::warning('freshclam failed', ['error' => $result->errorOutput()]);
         }
     }
 
