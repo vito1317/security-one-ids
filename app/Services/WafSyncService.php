@@ -233,6 +233,17 @@ class WafSyncService
                     Log::warning('pcntl_fork not available, running scan in foreground');
                     Artisan::call('ids:scan', ['--type' => $scanType]);
                 }
+            } elseif (PHP_OS_FAMILY === 'Windows') {
+                // Windows: Use PowerShell Start-Process for background execution
+                $logPath = str_replace('/', '\\', $logPath);
+                $basePath = str_replace('/', '\\', $basePath);
+                
+                // Build PowerShell command to run scan in background
+                $command = "powershell -Command \"Start-Process -FilePath '{$phpPath}' -ArgumentList 'artisan','ids:scan','--type={$scanType}' -WorkingDirectory '{$basePath}' -WindowStyle Hidden -RedirectStandardOutput '{$logPath}'\"";
+                
+                Log::info('Executing Windows background scan command', ['command' => $command]);
+                pclose(popen($command, 'r'));
+                Log::info('Scan dispatched to background');
             } elseif (file_exists('/.dockerenv')) {
                 // Docker: cd to container path for Laravel to work
                 $command = "cd /var/www/html && nohup {$phpPath} artisan ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
