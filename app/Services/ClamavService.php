@@ -361,8 +361,14 @@ class ClamavService
         }
 
         // Try chocolatey
-        $chocoCheck = Process::run('powershell -Command "Get-Command choco -ErrorAction SilentlyContinue"');
-        $hasChocolatey = $chocoCheck->successful() && !empty(trim($chocoCheck->output()));
+        $chocoPath = 'C:\\ProgramData\\chocolatey\\bin\\choco.exe';
+        $hasChocolatey = file_exists($chocoPath);
+        
+        // Also check via command if path check fails
+        if (!$hasChocolatey) {
+            $chocoCheck = Process::run('powershell -Command "Get-Command choco -ErrorAction SilentlyContinue"');
+            $hasChocolatey = $chocoCheck->successful() && !empty(trim($chocoCheck->output()));
+        }
         
         // If chocolatey not installed, install it first
         if (!$hasChocolatey) {
@@ -372,13 +378,21 @@ class ClamavService
             if (!$installResult['success']) {
                 return $installResult;
             }
-            $hasChocolatey = true;
+            // After installation, chocolatey should be at this path
+            $chocoPath = 'C:\\ProgramData\\chocolatey\\bin\\choco.exe';
+            $hasChocolatey = file_exists($chocoPath);
         }
         
-        // Now install ClamAV via chocolatey
+        // Now install ClamAV via chocolatey using full path
         if ($hasChocolatey) {
-            Log::info('Installing ClamAV via chocolatey');
-            $result = Process::timeout(600)->run('powershell -Command "choco install clamav -y"');
+            Log::info('Installing ClamAV via chocolatey', ['choco_path' => $chocoPath]);
+            
+            // Use full path to choco.exe since PATH may not be updated in current process
+            $chocoCmd = file_exists($chocoPath) 
+                ? "& '{$chocoPath}' install clamav -y"
+                : 'choco install clamav -y';
+            
+            $result = Process::timeout(600)->run("powershell -Command \"{$chocoCmd}\"");
             
             if ($result->successful()) {
                 $this->isInstalled = true;
