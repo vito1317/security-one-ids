@@ -97,14 +97,35 @@ if (Test-Path "$InstallDir\.git") {
     & git fetch origin
     & git reset --hard origin/main
 } else {
-    # Remove existing directory if it's not a git repo
+# Remove existing directory if it's not a git repo
     if (Test-Path $InstallDir) {
+        # Stop any running scheduled tasks first
+        Write-Host "🛑 Stopping existing services..." -ForegroundColor Yellow
+        Stop-ScheduledTask -TaskName "SecurityOneIDS-Scan" -ErrorAction SilentlyContinue
+        Stop-ScheduledTask -TaskName "SecurityOneIDS-Sync" -ErrorAction SilentlyContinue
+        
+        # Wait a moment for processes to terminate
+        Start-Sleep -Seconds 2
+        
+        # Kill any remaining PHP processes that might be running from that directory
+        Get-Process -Name php -ErrorAction SilentlyContinue | Where-Object {
+            $_.Path -like "*SecurityOneIDS*"
+        } | Stop-Process -Force -ErrorAction SilentlyContinue
+        
         # Backup .env if exists
         $envBackup = $null
         if (Test-Path "$InstallDir\.env") {
             $envBackup = Get-Content "$InstallDir\.env" -Raw
         }
-        Remove-Item -Path $InstallDir -Recurse -Force
+        
+        # Try to remove directory
+        try {
+            Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction Stop
+        } catch {
+            Write-Host "⚠️ Could not remove directory, trying again..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 3
+            Remove-Item -Path $InstallDir -Recurse -Force
+        }
     }
     
     # Clone the repository
