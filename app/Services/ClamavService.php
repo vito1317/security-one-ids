@@ -645,13 +645,11 @@ class ClamavService
                 
                 // Create minimal freshclam config pointing to user directory
                 $userConfPath = "{$userDataDir}/freshclam.conf";
-                if (!file_exists($userConfPath)) {
-                    $config = "DatabaseMirror database.clamav.net\n" .
-                              "DatabaseDirectory {$userDataDir}\n" .
-                              "UpdateLogFile {$userDataDir}/freshclam.log\n";
-                    file_put_contents($userConfPath, $config);
-                    Log::info('Created user freshclam.conf');
-                }
+                // Always recreate config to ensure it's correct
+                $config = "DatabaseMirror database.clamav.net\n" .
+                          "DatabaseDirectory {$userDataDir}\n";
+                file_put_contents($userConfPath, $config);
+                Log::info('Created/updated user freshclam.conf');
                 
                 // Run freshclam with user config (no sudo needed)
                 $freshclamPath = '/opt/homebrew/bin/freshclam';
