@@ -41,6 +41,33 @@ class RunScan extends Command
                 // Full scan - more comprehensive directories
                 if ($platform === 'macos') {
                     $scanPaths = ['/Users', '/Applications', '/tmp', '/Library'];
+                } elseif ($platform === 'windows') {
+                    // Windows: scan common user and application directories
+                    $scanPaths = [];
+                    
+                    // Users directory
+                    if (is_dir('C:\\Users')) {
+                        $scanPaths[] = 'C:\\Users';
+                    }
+                    // Temp directories
+                    $tempPath = getenv('TEMP') ?: 'C:\\Windows\\Temp';
+                    if (is_dir($tempPath)) {
+                        $scanPaths[] = $tempPath;
+                    }
+                    // Program Files - but only scan certain subdirectories to avoid slow scans
+                    if (is_dir('C:\\ProgramData')) {
+                        $scanPaths[] = 'C:\\ProgramData';
+                    }
+                    // Downloads from current user
+                    $userProfile = getenv('USERPROFILE');
+                    if ($userProfile && is_dir("{$userProfile}\\Downloads")) {
+                        $scanPaths[] = "{$userProfile}\\Downloads";
+                    }
+                    
+                    // Fallback if nothing found
+                    if (empty($scanPaths)) {
+                        $scanPaths = ['C:\\'];
+                    }
                 } else {
                     // Docker container: use mounted host directories if available
                     $scanPaths = [];
@@ -77,6 +104,26 @@ class RunScan extends Command
                                 break; // Only scan first found user
                             }
                         }
+                    }
+                } elseif ($platform === 'windows') {
+                    // Windows quick scan: temp and downloads
+                    $scanPaths = [];
+                    
+                    // Temp directory
+                    $tempPath = getenv('TEMP') ?: 'C:\\Windows\\Temp';
+                    if (is_dir($tempPath)) {
+                        $scanPaths[] = $tempPath;
+                    }
+                    
+                    // Current user's Downloads
+                    $userProfile = getenv('USERPROFILE');
+                    if ($userProfile && is_dir("{$userProfile}\\Downloads")) {
+                        $scanPaths[] = "{$userProfile}\\Downloads";
+                    }
+                    
+                    // Fallback
+                    if (empty($scanPaths)) {
+                        $scanPaths = ['C:\\Windows\\Temp'];
                     }
                 } else {
                     // Docker container: use mounted host directories if available
