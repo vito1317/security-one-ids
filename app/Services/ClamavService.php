@@ -327,13 +327,20 @@ class ClamavService
         Log::info('Installing ClamAV on Windows');
         
         // First, check if ClamAV is already installed
-        $checkPath = 'C:\\Program Files\\ClamAV\\clamscan.exe';
-        if (file_exists($checkPath)) {
-            $this->isInstalled = true;
-            return [
-                'success' => true,
-                'message' => 'ClamAV is already installed on Windows',
-            ];
+        $checkPaths = [
+            'C:\\Program Files\\ClamAV\\clamscan.exe',
+            'C:\\Program Files (x86)\\ClamAV\\clamscan.exe',
+            'C:\\ProgramData\\chocolatey\\bin\\clamscan.exe',
+        ];
+        
+        foreach ($checkPaths as $checkPath) {
+            if (file_exists($checkPath)) {
+                $this->isInstalled = true;
+                return [
+                    'success' => true,
+                    'message' => 'ClamAV is already installed on Windows',
+                ];
+            }
         }
 
         // Try winget first (Windows 10/11)
@@ -344,6 +351,7 @@ class ClamavService
             
             if ($result->successful()) {
                 $this->isInstalled = true;
+                $this->initializeFreshclamWindows();
                 return [
                     'success' => true,
                     'message' => 'ClamAV installed successfully via winget',
@@ -352,27 +360,118 @@ class ClamavService
             Log::warning('winget installation failed, trying chocolatey: ' . $result->errorOutput());
         }
 
-        // Try chocolatey as fallback
+        // Try chocolatey
         $chocoCheck = Process::run('powershell -Command "Get-Command choco -ErrorAction SilentlyContinue"');
-        if ($chocoCheck->successful() && !empty(trim($chocoCheck->output()))) {
+        $hasChocolatey = $chocoCheck->successful() && !empty(trim($chocoCheck->output()));
+        
+        // If chocolatey not installed, install it first
+        if (!$hasChocolatey) {
+            Log::info('Chocolatey not found, installing...');
+            $installResult = $this->installChocolatey();
+            
+            if (!$installResult['success']) {
+                return $installResult;
+            }
+            $hasChocolatey = true;
+        }
+        
+        // Now install ClamAV via chocolatey
+        if ($hasChocolatey) {
             Log::info('Installing ClamAV via chocolatey');
             $result = Process::timeout(600)->run('powershell -Command "choco install clamav -y"');
             
             if ($result->successful()) {
                 $this->isInstalled = true;
+                $this->initializeFreshclamWindows();
                 return [
                     'success' => true,
                     'message' => 'ClamAV installed successfully via chocolatey',
                 ];
             }
-            Log::warning('chocolatey installation failed: ' . $result->errorOutput());
+            Log::warning('chocolatey ClamAV installation failed: ' . $result->errorOutput());
         }
 
-        // If no package manager available, provide manual installation guidance
+        // Final fallback - provide manual installation guidance
         return [
             'success' => false,
-            'message' => 'Unable to install ClamAV automatically. Please install winget or chocolatey, or download ClamAV manually from https://www.clamav.net/downloads',
+            'message' => 'Unable to install ClamAV automatically. Please download ClamAV manually from https://www.clamav.net/downloads',
         ];
+    }
+
+    /**
+     * Install Chocolatey package manager on Windows
+     */
+    protected function installChocolatey(): array
+    {
+        Log::info('Installing Chocolatey package manager...');
+        
+        try {
+            // The official chocolatey installation command
+            $installCmd = 'powershell -Command "Set-ExecutionPolicy Bypass -Scope Process -Force; ' .
+                '[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; ' .
+                'iex ((New-Object System.Net.WebClient).DownloadString(\'https://community.chocolatey.org/install.ps1\'))"';
+            
+            $result = Process::timeout(300)->run($installCmd);
+            
+            if ($result->successful()) {
+                Log::info('Chocolatey installed successfully');
+                
+                // Refresh environment to pick up choco
+                Process::run('powershell -Command "refreshenv"');
+                
+                return [
+                    'success' => true,
+                    'message' => 'Chocolatey installed successfully',
+                ];
+            }
+            
+            Log::error('Chocolatey installation failed: ' . $result->errorOutput());
+            return [
+                'success' => false,
+                'message' => 'Failed to install Chocolatey: ' . $result->errorOutput(),
+            ];
+        } catch (\Exception $e) {
+            Log::error('Chocolatey installation exception: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'message' => 'Chocolatey installation failed: ' . $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Initialize freshclam configuration on Windows
+     */
+    protected function initializeFreshclamWindows(): void
+    {
+        Log::info('Initializing freshclam on Windows...');
+        
+        $configPaths = [
+            'C:\\Program Files\\ClamAV\\freshclam.conf',
+            'C:\\Program Files\\ClamAV\\freshclam.conf.sample',
+        ];
+        
+        $confPath = $configPaths[0];
+        $samplePath = $configPaths[1];
+        
+        // Copy sample config if needed
+        if (!file_exists($confPath) && file_exists($samplePath)) {
+            copy($samplePath, $confPath);
+            
+            // Remove or comment out Example line
+            if (file_exists($confPath)) {
+                $content = file_get_contents($confPath);
+                $content = preg_replace('/^Example$/m', '#Example', $content);
+                file_put_contents($confPath, $content);
+            }
+        }
+        
+        // Run initial freshclam to download virus definitions
+        Log::info('Downloading initial virus definitions...');
+        $freshclamPath = 'C:\\Program Files\\ClamAV\\freshclam.exe';
+        if (file_exists($freshclamPath)) {
+            Process::timeout(600)->run("powershell -Command \"& '{$freshclamPath}'\"");
+        }
     }
 
     /**
