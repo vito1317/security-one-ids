@@ -35,7 +35,11 @@ class RunScan extends Command
             $this->info("reportToHub result: " . ($result ? 'success' : 'failed'));
             
             // Use platform-specific scan paths based on scan type
-            $platform = PHP_OS_FAMILY === 'Darwin' ? 'macos' : 'linux';
+            $platform = match(PHP_OS_FAMILY) {
+                'Darwin' => 'macos',
+                'Windows' => 'windows',
+                default => 'linux',
+            };
             
             if ($scanType === 'full') {
                 // Full scan - more comprehensive directories
