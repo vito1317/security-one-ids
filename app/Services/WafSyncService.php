@@ -26,6 +26,30 @@ class WafSyncService
     }
 
     /**
+     * Get HTTP client with SSL configuration for Windows
+     */
+    protected function getHttpClient(int $timeout = 30): \Illuminate\Http\Client\PendingRequest
+    {
+        $http = Http::timeout($timeout)
+            ->withHeaders([
+                'Content-Type' => 'application/json; charset=utf-8',
+                'Accept' => 'application/json',
+            ]);
+        
+        // On Windows, configure SSL certificate path at runtime
+        if (PHP_OS_FAMILY === 'Windows') {
+            $cacertPath = $this->getCaCertPath();
+            if ($cacertPath) {
+                $http = $http->withOptions([
+                    'verify' => $cacertPath,
+                ]);
+            }
+        }
+        
+        return $http;
+    }
+
+    /**
      * Register this agent with the central WAF
      */
     public function register(): bool
@@ -48,27 +72,7 @@ class WafSyncService
         }
 
         try {
-            // Build HTTP client with SSL certificate support for Windows
-            $http = Http::timeout(30)
-                ->withHeaders([
-                    'Content-Type' => 'application/json; charset=utf-8',
-                    'Accept' => 'application/json',
-                ]);
-            
-            // On Windows, configure SSL certificate path at runtime
-            if (PHP_OS_FAMILY === 'Windows') {
-                $cacertPath = $this->getCaCertPath();
-                if ($cacertPath) {
-                    $http = $http->withOptions([
-                        'verify' => $cacertPath,
-                    ]);
-                } else {
-                    // Fallback: disable SSL verification if no cert found (not recommended for production)
-                    Log::warning('No CA certificate found, SSL verification may fail');
-                }
-            }
-            
-            $response = $http->post("{$this->wafUrl}/api/ids/agents/register", [
+            $response = $this->getHttpClient(30)->post("{$this->wafUrl}/api/ids/agents/register", [
                 'token' => $this->agentToken,
                 'name' => $this->agentName,
                 'ip_address' => $this->getPublicIp(),
@@ -121,7 +125,7 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(10)->post("{$this->wafUrl}/api/ids/agents/heartbeat", [
+            $response = $this->getHttpClient(10)->post("{$this->wafUrl}/api/ids/agents/heartbeat", [
                 'token' => $this->agentToken,
                 'name' => $this->agentName,
                 'system_info' => $this->getSystemInfo(),
