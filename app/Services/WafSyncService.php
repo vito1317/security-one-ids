@@ -78,10 +78,14 @@ class WafSyncService
             Log::error('Failed to register with WAF', [
                 'status' => $response->status(),
                 'body' => $response->body(),
+                'headers' => $response->headers(),
             ]);
             return false;
         } catch (\Exception $e) {
-            Log::error('Exception during WAF registration: ' . $e->getMessage());
+            Log::error('Exception during WAF registration', [
+                'message' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
             return false;
         }
     }

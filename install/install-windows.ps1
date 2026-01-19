@@ -356,8 +356,10 @@ LOG_CHANNEL=daily
 LOG_LEVEL=info
 "@
 
-$EnvContent | Out-File -FilePath "$InstallDir\.env" -Encoding UTF8
-Write-Host "✅ Configuration saved" -ForegroundColor Green
+# Write .env file with UTF8 encoding WITHOUT BOM (important for Laravel)
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[System.IO.File]::WriteAllText("$InstallDir\.env", $EnvContent, $Utf8NoBom)
+Write-Host "✅ Configuration saved (UTF8 no BOM)" -ForegroundColor Green
 
 # Create SQLite database and run migrations
 Write-Host "`n🗄️  Setting up database...`n" -ForegroundColor Cyan
