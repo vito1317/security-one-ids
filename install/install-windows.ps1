@@ -242,8 +242,17 @@ if (Test-Path "$InstallDir\composer.lock") {
     Write-Host "Removed old composer.lock" -ForegroundColor Yellow
 }
 
-# Use composer update instead of install to regenerate lock file
-$composerOutput = & composer update --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs 2>&1 | Out-String
+# Verify PHP has fileinfo enabled now
+Write-Host "Verifying PHP extensions..." -ForegroundColor Yellow
+$phpExtensions = & php -m 2>$null
+if ($phpExtensions -contains 'fileinfo') {
+    Write-Host "✅ PHP fileinfo extension is enabled" -ForegroundColor Green
+} else {
+    Write-Host "⚠️ PHP fileinfo extension not detected, using platform override" -ForegroundColor Yellow
+}
+
+# Use composer update with platform override to ensure it works
+$composerOutput = & composer update --no-dev --optimize-autoloader --no-interaction --ignore-platform-req=ext-fileinfo 2>&1 | Out-String
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✅ Dependencies installed" -ForegroundColor Green
 } else {
