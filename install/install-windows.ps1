@@ -116,9 +116,55 @@ if ($phpIniPath -and (Test-Path $phpIniPath)) {
         }
     }
     
+    # Download and configure CA certificates for SSL
+    Write-Host "`n🔐 Configuring SSL certificates..." -ForegroundColor Cyan
+    $phpDir = Split-Path $phpIniPath -Parent
+    $cacertPath = "$phpDir\cacert.pem"
+    
+    if (-not (Test-Path $cacertPath)) {
+        Write-Host "Downloading CA certificates bundle..." -ForegroundColor Yellow
+        try {
+            # Download Mozilla's CA certificate bundle
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri "https://curl.se/ca/cacert.pem" -OutFile $cacertPath -UseBasicParsing
+            Write-Host "  ✅ Downloaded cacert.pem" -ForegroundColor Green
+        } catch {
+            Write-Host "  ⚠️ Could not download CA certificates: $_" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  ✓ CA certificates already exist" -ForegroundColor Gray
+    }
+    
+    # Configure php.ini to use the CA bundle
+    if (Test-Path $cacertPath) {
+        $cacertPathEscaped = $cacertPath -replace '\\', '\\\\'
+        
+        # Check if curl.cainfo is already set
+        if ($content -match "curl\.cainfo\s*=") {
+            # Update existing setting
+            $content = $content -replace "curl\.cainfo\s*=.*", "curl.cainfo = `"$cacertPath`""
+            $modified = $true
+        } elseif ($content -notmatch "curl\.cainfo") {
+            # Add new setting
+            $content = $content + "`n[curl]`ncurl.cainfo = `"$cacertPath`""
+            $modified = $true
+        }
+        
+        # Also set openssl.cafile
+        if ($content -match "openssl\.cafile\s*=") {
+            $content = $content -replace "openssl\.cafile\s*=.*", "openssl.cafile = `"$cacertPath`""
+            $modified = $true
+        } elseif ($content -notmatch "openssl\.cafile") {
+            $content = $content + "`n[openssl]`nopenssl.cafile = `"$cacertPath`""
+            $modified = $true
+        }
+        
+        Write-Host "  ✅ Configured SSL certificates in php.ini" -ForegroundColor Green
+    }
+    
     if ($modified) {
         Set-Content $phpIniPath $content -Force
-        Write-Host "✅ PHP extensions configured" -ForegroundColor Green
+        Write-Host "✅ PHP configuration updated" -ForegroundColor Green
     }
 } else {
     Write-Host "⚠️ Could not find php.ini - extensions may need manual configuration" -ForegroundColor Yellow
