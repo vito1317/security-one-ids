@@ -517,7 +517,7 @@ class WafSyncService
                 $payload['version'] = $version;
             }
             
-            $response = Http::timeout(30)
+            $response = $this->getHttpClient(30)
                 ->withToken($token)
                 ->post("{$wafUrl}/api/ids/agents/update-status", $payload);
             
@@ -638,7 +638,7 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(30)->post("{$this->wafUrl}/api/ids/agents/alerts", [
+            $response = $this->getHttpClient(30)->post("{$this->wafUrl}/api/ids/agents/alerts", [
                 'token' => $this->agentToken,
                 'alerts' => $alerts,
             ]);
@@ -660,7 +660,7 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(30)->get("{$this->wafUrl}/api/ids/agents/rules", [
+            $response = $this->getHttpClient(30)->get("{$this->wafUrl}/api/ids/agents/rules", [
                 'token' => $this->agentToken,
             ]);
 
@@ -735,7 +735,7 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(60)->post("{$this->wafUrl}/api/ids/agents/sync-rules", [
+            $response = $this->getHttpClient(60)->post("{$this->wafUrl}/api/ids/agents/sync-rules", [
                 'token' => $token,
                 'signatures' => $signatures->map(fn($sig) => [
                     'name' => $sig->name,
@@ -909,12 +909,7 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(10)
-                ->withHeaders([
-                    'Accept' => 'application/json',
-                    'Content-Type' => 'application/json',
-                    'X-Requested-With' => 'XMLHttpRequest',  // Makes Laravel treat as AJAX
-                ])
+            $response = $this->getHttpClient(10)
                 ->withToken($this->agentToken)
                 ->post("{$this->wafUrl}/api/ids/alerts", [
                     'agent_id' => $this->getAgentId(),
@@ -979,7 +974,7 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(10)
+            $response = $this->getHttpClient(10)
                 ->withToken($this->agentToken)
                 ->post("{$this->wafUrl}/api/ids/block-ip", [
                     'agent_id' => $this->getAgentId(),
@@ -1016,7 +1011,7 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(10)
+            $response = $this->getHttpClient(10)
                 ->withToken($this->agentToken)
                 ->post("{$this->wafUrl}/api/ids/unblock-ip", [
                     'agent_id' => $this->getAgentId(),
@@ -1047,7 +1042,7 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(10)
+            $response = $this->getHttpClient(10)
                 ->withToken($this->agentToken)
                 ->get("{$this->wafUrl}/api/ids/agents/config");
 
