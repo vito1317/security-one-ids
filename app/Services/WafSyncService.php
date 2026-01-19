@@ -48,21 +48,35 @@ class WafSyncService
         }
 
         try {
-            // Explicitly set UTF-8 encoding for Chinese character support
-            $response = Http::timeout(30)
+            // Build HTTP client with SSL certificate support for Windows
+            $http = Http::timeout(30)
                 ->withHeaders([
                     'Content-Type' => 'application/json; charset=utf-8',
                     'Accept' => 'application/json',
-                ])
-                ->post("{$this->wafUrl}/api/ids/agents/register", [
-                    'token' => $this->agentToken,
-                    'name' => $this->agentName,
-                    'ip_address' => $this->getPublicIp(),
-                    'hostname' => gethostname(),
-                    'version' => config('app.version', '1.0.0'),
-                    'platform' => $this->detectPlatform(),
-                    'system_info' => $this->getSystemInfo(),
                 ]);
+            
+            // On Windows, configure SSL certificate path at runtime
+            if (PHP_OS_FAMILY === 'Windows') {
+                $cacertPath = $this->getCaCertPath();
+                if ($cacertPath) {
+                    $http = $http->withOptions([
+                        'verify' => $cacertPath,
+                    ]);
+                } else {
+                    // Fallback: disable SSL verification if no cert found (not recommended for production)
+                    Log::warning('No CA certificate found, SSL verification may fail');
+                }
+            }
+            
+            $response = $http->post("{$this->wafUrl}/api/ids/agents/register", [
+                'token' => $this->agentToken,
+                'name' => $this->agentName,
+                'ip_address' => $this->getPublicIp(),
+                'hostname' => gethostname(),
+                'version' => config('app.version', '1.0.0'),
+                'platform' => $this->detectPlatform(),
+                'system_info' => $this->getSystemInfo(),
+            ]);
 
             if ($response->successful()) {
                 $data = $response->json();
@@ -814,6 +828,67 @@ class WafSyncService
         }
 
         return '0.0.0.0';
+    }
+
+    /**
+     * Get CA certificate path for Windows SSL verification
+     */
+    protected function getCaCertPath(): ?string
+    {
+        // Check common locations for cacert.pem on Windows
+        $possiblePaths = [];
+        
+        // Get PHP directory
+        $phpBinary = PHP_BINARY;
+        if ($phpBinary) {
+            $phpDir = dirname($phpBinary);
+            $possiblePaths[] = $phpDir . '\\cacert.pem';
+            $possiblePaths[] = $phpDir . '\\extras\\ssl\\cacert.pem';
+        }
+        
+        // Check common PHP installation locations
+        $possiblePaths = array_merge($possiblePaths, [
+            'C:\\tools\\php85\\cacert.pem',
+            'C:\\tools\\php\\cacert.pem',
+            'C:\\php\\cacert.pem',
+            'C:\\xampp\\php\\extras\\ssl\\cacert.pem',
+            'C:\\xampp-new\\php\\extras\\ssl\\cacert.pem',
+            'C:\\Program Files\\PHP\\cacert.pem',
+            'C:\\ProgramData\\ComposerSetup\\bin\\cacert.pem',
+        ]);
+        
+        foreach ($possiblePaths as $path) {
+            if (file_exists($path)) {
+                Log::debug('Found CA certificate at: ' . $path);
+                return $path;
+            }
+        }
+        
+        // If not found, try to download it
+        $downloadPath = sys_get_temp_dir() . '\\cacert.pem';
+        if (!file_exists($downloadPath)) {
+            try {
+                // Download from curl.se (using file_get_contents with SSL disabled for bootstrap)
+                $context = stream_context_create([
+                    'ssl' => [
+                        'verify_peer' => false,
+                        'verify_peer_name' => false,
+                    ],
+                ]);
+                $cacert = @file_get_contents('https://curl.se/ca/cacert.pem', false, $context);
+                if ($cacert) {
+                    file_put_contents($downloadPath, $cacert);
+                    Log::info('Downloaded CA certificate to: ' . $downloadPath);
+                    return $downloadPath;
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to download CA certificate: ' . $e->getMessage());
+            }
+        } elseif (file_exists($downloadPath)) {
+            return $downloadPath;
+        }
+        
+        return null;
     }
 
     /**
