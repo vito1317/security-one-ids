@@ -167,14 +167,27 @@ if (-not $composerPath) {
 
 # Run composer with ignore-platform-reqs to bypass missing extensions like ext-fileinfo
 Write-Host "Running composer install (this may take a moment)..." -ForegroundColor Yellow
-$composerOutput = & composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs 2>&1 | Out-String
+
+# Remove old composer.lock as it may have dependencies requiring missing extensions
+if (Test-Path "$InstallDir\composer.lock") {
+    Remove-Item "$InstallDir\composer.lock" -Force
+    Write-Host "Removed old composer.lock" -ForegroundColor Yellow
+}
+
+# Use composer update instead of install to regenerate lock file
+$composerOutput = & composer update --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs 2>&1 | Out-String
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✅ Dependencies installed" -ForegroundColor Green
 } else {
     Write-Host "⚠️ Composer had issues, trying with more options..." -ForegroundColor Yellow
     # Retry with even more permissive options
-    & composer install --no-dev --no-interaction --ignore-platform-reqs --no-scripts 2>&1 | Out-Null
-    Write-Host "✅ Dependencies installed (with fallback)" -ForegroundColor Green
+    & composer update --no-dev --no-interaction --ignore-platform-reqs --no-scripts 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "✅ Dependencies installed (with fallback)" -ForegroundColor Green
+    } else {
+        Write-Host "❌ Composer failed. Please ensure PHP has required extensions." -ForegroundColor Red
+        Write-Host "   Try enabling fileinfo extension in php.ini" -ForegroundColor Yellow
+    }
 }
 
 # Configure environment
