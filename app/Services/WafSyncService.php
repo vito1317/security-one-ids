@@ -48,15 +48,21 @@ class WafSyncService
         }
 
         try {
-            $response = Http::timeout(30)->post("{$this->wafUrl}/api/ids/agents/register", [
-                'token' => $this->agentToken,
-                'name' => $this->agentName,
-                'ip_address' => $this->getPublicIp(),
-                'hostname' => gethostname(),
-                'version' => config('app.version', '1.0.0'),
-                'platform' => $this->detectPlatform(),
-                'system_info' => $this->getSystemInfo(),
-            ]);
+            // Explicitly set UTF-8 encoding for Chinese character support
+            $response = Http::timeout(30)
+                ->withHeaders([
+                    'Content-Type' => 'application/json; charset=utf-8',
+                    'Accept' => 'application/json',
+                ])
+                ->post("{$this->wafUrl}/api/ids/agents/register", [
+                    'token' => $this->agentToken,
+                    'name' => $this->agentName,
+                    'ip_address' => $this->getPublicIp(),
+                    'hostname' => gethostname(),
+                    'version' => config('app.version', '1.0.0'),
+                    'platform' => $this->detectPlatform(),
+                    'system_info' => $this->getSystemInfo(),
+                ]);
 
             if ($response->successful()) {
                 $data = $response->json();
