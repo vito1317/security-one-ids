@@ -56,6 +56,74 @@ if (-not $phpPath) {
 
 Write-Host "✅ PHP is installed" -ForegroundColor Green
 
+# Enable required PHP extensions
+Write-Host "🔧 Enabling required PHP extensions..." -ForegroundColor Cyan
+
+# Find php.ini location
+$phpIniPath = & php -i 2>$null | Select-String "Loaded Configuration File" | ForEach-Object { $_.ToString().Split("=>")[1].Trim() }
+if (-not $phpIniPath -or $phpIniPath -eq "(none)") {
+    # Try to find php.ini in common locations
+    $phpDir = Split-Path (Get-Command php).Source -Parent
+    $possiblePaths = @(
+        "$phpDir\php.ini",
+        "$phpDir\php.ini-development",
+        "$phpDir\php.ini-production",
+        "C:\php\php.ini",
+        "C:\tools\php\php.ini",
+        "C:\xampp\php\php.ini",
+        "C:\xampp-new\php\php.ini"
+    )
+    
+    foreach ($p in $possiblePaths) {
+        if (Test-Path $p) {
+            $phpIniPath = $p
+            break
+        }
+    }
+    
+    # If still no php.ini, copy from sample
+    if (-not $phpIniPath -or -not (Test-Path $phpIniPath)) {
+        $sampleIni = Get-ChildItem -Path $phpDir -Filter "php.ini-*" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($sampleIni) {
+            Copy-Item $sampleIni.FullName "$phpDir\php.ini"
+            $phpIniPath = "$phpDir\php.ini"
+            Write-Host "Created php.ini from sample" -ForegroundColor Yellow
+        }
+    }
+}
+
+if ($phpIniPath -and (Test-Path $phpIniPath)) {
+    Write-Host "Found php.ini: $phpIniPath" -ForegroundColor Yellow
+    
+    # Extensions to enable
+    $extensions = @("fileinfo", "curl", "mbstring", "openssl", "pdo_sqlite", "sqlite3")
+    $content = Get-Content $phpIniPath -Raw
+    $modified = $false
+    
+    foreach ($ext in $extensions) {
+        # Check if extension is commented out
+        if ($content -match ";\s*extension\s*=\s*$ext") {
+            $content = $content -replace ";\s*extension\s*=\s*$ext", "extension=$ext"
+            $modified = $true
+            Write-Host "  ✅ Enabled extension: $ext" -ForegroundColor Green
+        } elseif ($content -notmatch "extension\s*=\s*$ext") {
+            # Extension not found, add it
+            $content = $content + "`nextension=$ext"
+            $modified = $true
+            Write-Host "  ✅ Added extension: $ext" -ForegroundColor Green
+        } else {
+            Write-Host "  ✓ Extension already enabled: $ext" -ForegroundColor Gray
+        }
+    }
+    
+    if ($modified) {
+        Set-Content $phpIniPath $content -Force
+        Write-Host "✅ PHP extensions configured" -ForegroundColor Green
+    }
+} else {
+    Write-Host "⚠️ Could not find php.ini - extensions may need manual configuration" -ForegroundColor Yellow
+}
+
 # Create directories
 Write-Host "`n📂 Creating directories..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
