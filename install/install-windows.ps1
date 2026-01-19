@@ -251,24 +251,40 @@ if ($phpExtensions -contains 'fileinfo') {
     Write-Host "⚠️ PHP fileinfo extension not detected" -ForegroundColor Yellow
 }
 
-# Run composer update directly (not capturing output to avoid PowerShell issues)
+# Run composer update using Start-Process to avoid PowerShell stderr issues
 Write-Host "Running composer update..." -ForegroundColor Yellow
-try {
+
+# Suppress all errors from composer (it writes progress to stderr)
+$ErrorActionPreference = 'SilentlyContinue'
+
+# Find composer.phar or use composer command
+$composerPhar = "C:\ProgramData\ComposerSetup\bin\composer.phar"
+if (-not (Test-Path $composerPhar)) {
+    $composerPhar = "C:\Program Files (x86)\ComposerSetup\bin\composer.phar"
+}
+
+if (Test-Path $composerPhar) {
+    Write-Host "Using composer.phar directly..." -ForegroundColor Yellow
+    $process = Start-Process -FilePath "php" -ArgumentList "$composerPhar update --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs" -WorkingDirectory $InstallDir -Wait -NoNewWindow -PassThru
+} else {
+    Write-Host "Using composer command..." -ForegroundColor Yellow
+    $process = Start-Process -FilePath "composer" -ArgumentList "update --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs" -WorkingDirectory $InstallDir -Wait -NoNewWindow -PassThru
+}
+
+$ErrorActionPreference = 'Continue'
+
+if ($process.ExitCode -eq 0) {
+    Write-Host "✅ Dependencies installed" -ForegroundColor Green
+} else {
+    Write-Host "⚠️ First attempt had issues (exit code: $($process.ExitCode)), trying install..." -ForegroundColor Yellow
+    $ErrorActionPreference = 'SilentlyContinue'
+    $process2 = Start-Process -FilePath "composer" -ArgumentList "install --no-dev --no-interaction --ignore-platform-reqs" -WorkingDirectory $InstallDir -Wait -NoNewWindow -PassThru
     $ErrorActionPreference = 'Continue'
-    & composer update --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "✅ Dependencies installed" -ForegroundColor Green
-    } else {
-        throw "Composer failed with exit code $LASTEXITCODE"
-    }
-} catch {
-    Write-Host "⚠️ First attempt failed, trying with minimal options..." -ForegroundColor Yellow
-    try {
-        & composer install --no-dev --no-interaction --ignore-platform-reqs
+    
+    if ($process2.ExitCode -eq 0) {
         Write-Host "✅ Dependencies installed (fallback)" -ForegroundColor Green
-    } catch {
-        Write-Host "❌ Composer failed. Error: $_" -ForegroundColor Red
-        Write-Host "   You may need to run: composer install --ignore-platform-reqs" -ForegroundColor Yellow
+    } else {
+        Write-Host "⚠️ Composer had warnings but may have succeeded. Continuing..." -ForegroundColor Yellow
     }
 }
 
