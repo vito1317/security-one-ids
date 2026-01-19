@@ -18,6 +18,87 @@ class ClamavService
     }
 
     /**
+     * Get HTTP client with SSL configuration for Windows
+     */
+    protected function getHttpClient(int $timeout = 30): \Illuminate\Http\Client\PendingRequest
+    {
+        $http = Http::timeout($timeout)
+            ->withHeaders([
+                'Content-Type' => 'application/json; charset=utf-8',
+                'Accept' => 'application/json',
+            ]);
+        
+        // On Windows, configure SSL certificate path at runtime
+        if (PHP_OS_FAMILY === 'Windows') {
+            $cacertPath = $this->getCaCertPath();
+            if ($cacertPath) {
+                $http = $http->withOptions([
+                    'verify' => $cacertPath,
+                ]);
+            }
+        }
+        
+        return $http;
+    }
+
+    /**
+     * Get CA certificate path for Windows SSL verification
+     */
+    protected function getCaCertPath(): ?string
+    {
+        // Check common locations for cacert.pem on Windows
+        $possiblePaths = [];
+        
+        // Get PHP directory
+        $phpBinary = PHP_BINARY;
+        if ($phpBinary) {
+            $phpDir = dirname($phpBinary);
+            $possiblePaths[] = $phpDir . '\\cacert.pem';
+            $possiblePaths[] = $phpDir . '\\extras\\ssl\\cacert.pem';
+        }
+        
+        // Check common PHP installation locations
+        $possiblePaths = array_merge($possiblePaths, [
+            'C:\\tools\\php85\\cacert.pem',
+            'C:\\tools\\php\\cacert.pem',
+            'C:\\php\\cacert.pem',
+            'C:\\xampp\\php\\extras\\ssl\\cacert.pem',
+            'C:\\Program Files\\PHP\\cacert.pem',
+            'C:\\ProgramData\\ComposerSetup\\bin\\cacert.pem',
+        ]);
+        
+        foreach ($possiblePaths as $path) {
+            if (file_exists($path)) {
+                return $path;
+            }
+        }
+        
+        // If not found, try to download it
+        $downloadPath = sys_get_temp_dir() . '\\cacert.pem';
+        if (!file_exists($downloadPath)) {
+            try {
+                $context = stream_context_create([
+                    'ssl' => [
+                        'verify_peer' => false,
+                        'verify_peer_name' => false,
+                    ],
+                ]);
+                $cacert = @file_get_contents('https://curl.se/ca/cacert.pem', false, $context);
+                if ($cacert) {
+                    file_put_contents($downloadPath, $cacert);
+                    return $downloadPath;
+                }
+            } catch (\Exception $e) {
+                // Ignore
+            }
+        } elseif (file_exists($downloadPath)) {
+            return $downloadPath;
+        }
+        
+        return null;
+    }
+
+    /**
      * Translate Docker container mount paths to actual host paths
      * /mnt/host-www -> /var/www, /mnt/host-tmp -> /tmp, etc.
      */
@@ -925,7 +1006,7 @@ class ClamavService
                 'scan_progress' => $payload['scan_progress'] ?? null,
             ]);
 
-            $response = Http::timeout(30)
+            $response = $this->getHttpClient(30)
                 ->withToken($token)
                 ->post("{$wafUrl}/api/ids/agents/clamav-status", $payload);
 
