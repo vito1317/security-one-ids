@@ -248,22 +248,27 @@ $phpExtensions = & php -m 2>$null
 if ($phpExtensions -contains 'fileinfo') {
     Write-Host "✅ PHP fileinfo extension is enabled" -ForegroundColor Green
 } else {
-    Write-Host "⚠️ PHP fileinfo extension not detected, using platform override" -ForegroundColor Yellow
+    Write-Host "⚠️ PHP fileinfo extension not detected" -ForegroundColor Yellow
 }
 
-# Use composer update with platform override to ensure it works
-$composerOutput = & composer update --no-dev --optimize-autoloader --no-interaction --ignore-platform-req=ext-fileinfo 2>&1 | Out-String
-if ($LASTEXITCODE -eq 0) {
-    Write-Host "✅ Dependencies installed" -ForegroundColor Green
-} else {
-    Write-Host "⚠️ Composer had issues, trying with more options..." -ForegroundColor Yellow
-    # Retry with even more permissive options
-    & composer update --no-dev --no-interaction --ignore-platform-reqs --no-scripts 2>&1 | Out-Null
+# Run composer update directly (not capturing output to avoid PowerShell issues)
+Write-Host "Running composer update..." -ForegroundColor Yellow
+try {
+    $ErrorActionPreference = 'Continue'
+    & composer update --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "✅ Dependencies installed (with fallback)" -ForegroundColor Green
+        Write-Host "✅ Dependencies installed" -ForegroundColor Green
     } else {
-        Write-Host "❌ Composer failed. Please ensure PHP has required extensions." -ForegroundColor Red
-        Write-Host "   Try enabling fileinfo extension in php.ini" -ForegroundColor Yellow
+        throw "Composer failed with exit code $LASTEXITCODE"
+    }
+} catch {
+    Write-Host "⚠️ First attempt failed, trying with minimal options..." -ForegroundColor Yellow
+    try {
+        & composer install --no-dev --no-interaction --ignore-platform-reqs
+        Write-Host "✅ Dependencies installed (fallback)" -ForegroundColor Green
+    } catch {
+        Write-Host "❌ Composer failed. Error: $_" -ForegroundColor Red
+        Write-Host "   You may need to run: composer install --ignore-platform-reqs" -ForegroundColor Yellow
     }
 }
 
