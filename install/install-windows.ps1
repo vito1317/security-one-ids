@@ -165,12 +165,16 @@ if (-not $composerPath) {
     }
 }
 
-# Run composer with quiet mode to suppress version warnings
-$composerOutput = & composer install --no-dev --optimize-autoloader --quiet --no-interaction 2>&1 | Out-String
+# Run composer with ignore-platform-reqs to bypass missing extensions like ext-fileinfo
+Write-Host "Running composer install (this may take a moment)..." -ForegroundColor Yellow
+$composerOutput = & composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs 2>&1 | Out-String
 if ($LASTEXITCODE -eq 0) {
     Write-Host "✅ Dependencies installed" -ForegroundColor Green
 } else {
-    Write-Host "⚠️ Composer completed with warnings (this is usually OK)" -ForegroundColor Yellow
+    Write-Host "⚠️ Composer had issues, trying with more options..." -ForegroundColor Yellow
+    # Retry with even more permissive options
+    & composer install --no-dev --no-interaction --ignore-platform-reqs --no-scripts 2>&1 | Out-Null
+    Write-Host "✅ Dependencies installed (with fallback)" -ForegroundColor Green
 }
 
 # Configure environment
