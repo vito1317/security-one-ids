@@ -474,12 +474,24 @@ while (`$true) {
 
 $ScanServiceScript | Out-File -FilePath "$InstallDir\run-scan-service.ps1" -Encoding UTF8
 
-# Create sync service script (runs every minute for heartbeat)
+# Create sync service script (runs every minute for heartbeat with error handling)
 $SyncServiceScript = @"
 `$ErrorActionPreference = 'Continue'
 Set-Location '$InstallDir'
+
+# Log startup
+Add-Content -Path '$DataDir\logs\sync.log' -Value "`n[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sync service starting..."
+
 while (`$true) {
-    php artisan waf:sync 2>&1 | Out-File -FilePath '$DataDir\logs\sync.log' -Append
+    try {
+        # Run sync command
+        `$output = & php artisan waf:sync 2>&1 | Out-String
+        if (`$output.Trim()) {
+            Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$output"
+        }
+    } catch {
+        Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ERROR: `$_"
+    }
     Start-Sleep -Seconds 60
 }
 "@
@@ -490,19 +502,25 @@ $SyncServiceScript | Out-File -FilePath "$InstallDir\run-sync-service.ps1" -Enco
 $ScanTaskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\run-scan-service.ps1`""
 $ScanTaskTrigger = New-ScheduledTaskTrigger -AtStartup
 $ScanTaskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$ScanTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+$ScanTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Hours 0)
 
 Register-ScheduledTask -TaskName "$ServiceName-Scan" -Action $ScanTaskAction -Trigger $ScanTaskTrigger -Principal $ScanTaskPrincipal -Settings $ScanTaskSettings -Force | Out-Null
 Write-Host "✅ Scan Service created ($ServiceName-Scan)" -ForegroundColor Green
 
-# Register sync scheduled task (for waf:sync heartbeat)
+# Register sync scheduled task with BOTH startup and repetition triggers
 $SyncTaskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$InstallDir\run-sync-service.ps1`""
-$SyncTaskTrigger = New-ScheduledTaskTrigger -AtStartup
-$SyncTaskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-$SyncTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 
-Register-ScheduledTask -TaskName "$ServiceName-Sync" -Action $SyncTaskAction -Trigger $SyncTaskTrigger -Principal $SyncTaskPrincipal -Settings $SyncTaskSettings -Force | Out-Null
-Write-Host "✅ Sync Service created ($ServiceName-Sync)" -ForegroundColor Green
+# Create two triggers: AtStartup + Every minute repetition as backup
+$SyncTaskTrigger1 = New-ScheduledTaskTrigger -AtStartup
+$SyncTaskTrigger2 = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 9999)
+
+$SyncTaskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+# Settings: No execution time limit, restart on failure, run even if already running
+$SyncTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Hours 0) -MultipleInstances IgnoreNew
+
+Register-ScheduledTask -TaskName "$ServiceName-Sync" -Action $SyncTaskAction -Trigger @($SyncTaskTrigger1, $SyncTaskTrigger2) -Principal $SyncTaskPrincipal -Settings $SyncTaskSettings -Force | Out-Null
+Write-Host "✅ Sync Service created ($ServiceName-Sync) with auto-restart" -ForegroundColor Green
 
 # Start services
 Write-Host "`n🚀 Starting IDS Agent..." -ForegroundColor Cyan
