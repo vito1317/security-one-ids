@@ -9,21 +9,36 @@ use Illuminate\Support\Facades\Http;
 /**
  * AI Detection Engine
  * 
- * Uses Ollama API for intelligent threat detection
+ * Supports multiple AI backends: Ollama, vLLM, and OpenAI-compatible APIs
  */
 class AiEngine
 {
+    private string $aiProvider;  // 'ollama', 'vllm', 'openai'
     private string $ollamaUrl;
     private string $ollamaModel;
+    private string $vllmUrl;
+    private string $vllmModel;
+    private ?string $openaiApiKey;
     private string $sensitivity;
     private bool $enabled;
     private int $timeout;
 
     public function __construct()
     {
-        // First load from environment
+        // Load AI provider setting
+        $this->aiProvider = env('AI_PROVIDER', 'ollama');
+        
+        // Ollama settings
         $this->ollamaUrl = env('OLLAMA_URL', 'https://ollama.futron-life.com');
         $this->ollamaModel = env('OLLAMA_MODEL', 'sentinel-security');
+        
+        // vLLM settings (OpenAI-compatible)
+        $this->vllmUrl = env('VLLM_URL', 'http://localhost:8000');
+        $this->vllmModel = env('VLLM_MODEL', 'meta-llama/Llama-2-7b-chat-hf');
+        
+        // OpenAI API key (for vLLM/OpenAI providers if needed)
+        $this->openaiApiKey = env('OPENAI_API_KEY');
+        
         $this->sensitivity = env('AI_SENSITIVITY', 'medium');
         $this->timeout = (int) env('AI_TIMEOUT', 15);
         $this->enabled = filter_var(env('AI_DETECTION_ENABLED', false), FILTER_VALIDATE_BOOLEAN);
@@ -34,16 +49,30 @@ class AiEngine
             $remoteConfig = $wafSync->getCachedConfig();
             
             if (!empty($remoteConfig)) {
+                // AI Provider
+                if (isset($remoteConfig['ai_provider'])) {
+                    $this->aiProvider = $remoteConfig['ai_provider'];
+                }
+                
+                // Ollama settings
                 if (isset($remoteConfig['ollama']['url'])) {
                     $this->ollamaUrl = $remoteConfig['ollama']['url'];
                 }
                 if (isset($remoteConfig['ollama']['model'])) {
                     $this->ollamaModel = $remoteConfig['ollama']['model'];
                 }
+                
+                // vLLM settings
+                if (isset($remoteConfig['vllm']['url'])) {
+                    $this->vllmUrl = $remoteConfig['vllm']['url'];
+                }
+                if (isset($remoteConfig['vllm']['model'])) {
+                    $this->vllmModel = $remoteConfig['vllm']['model'];
+                }
+                
                 if (isset($remoteConfig['ai_detection_enabled'])) {
                     $this->enabled = filter_var($remoteConfig['ai_detection_enabled'], FILTER_VALIDATE_BOOLEAN);
                 } elseif (isset($remoteConfig['log_sync_enabled'])) {
-                    // Fallback to log_sync_enabled if specifically not set
                     $this->enabled = filter_var($remoteConfig['log_sync_enabled'], FILTER_VALIDATE_BOOLEAN);
                 }
             }
@@ -85,8 +114,8 @@ class AiEngine
                 return $cached === 'safe' ? null : $cached;
             }
 
-            // Call Ollama API
-            $result = $this->callOllamaApi($requestString);
+            // Call AI API based on provider
+            $result = $this->callAiApi($requestString);
             
             if ($result === null) {
                 // API error, fail open
@@ -164,6 +193,72 @@ class AiEngine
         }
 
         return false;
+    }
+
+    /**
+     * Route AI API call based on provider setting
+     */
+    private function callAiApi(string $requestString): ?array
+    {
+        return match ($this->aiProvider) {
+            'vllm', 'openai' => $this->callVllmApi($requestString),
+            default => $this->callOllamaApi($requestString),
+        };
+    }
+
+    /**
+     * Call vLLM/OpenAI-compatible API for threat detection
+     */
+    private function callVllmApi(string $requestString): ?array
+    {
+        try {
+            $prompt = $this->buildPrompt($requestString);
+            
+            $headers = [
+                'Content-Type' => 'application/json',
+            ];
+            
+            // Add API key if configured
+            if (!empty($this->openaiApiKey)) {
+                $headers['Authorization'] = 'Bearer ' . $this->openaiApiKey;
+            }
+            
+            $response = Http::timeout($this->timeout)
+                ->withHeaders($headers)
+                ->post(rtrim($this->vllmUrl, '/') . '/v1/chat/completions', [
+                    'model' => $this->vllmModel,
+                    'messages' => [
+                        [
+                            'role' => 'system',
+                            'content' => 'You are a security analyzer for an IDS system. Respond only in JSON format.'
+                        ],
+                        [
+                            'role' => 'user',
+                            'content' => $prompt
+                        ]
+                    ],
+                    'max_tokens' => 150,
+                    'temperature' => 0.1,
+                ]);
+
+            if (!$response->successful()) {
+                Log::warning('vLLM/OpenAI API error', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+                return null;
+            }
+
+            $data = $response->json();
+            $aiResponse = trim($data['choices'][0]['message']['content'] ?? '');
+            
+            Log::debug('vLLM/OpenAI Response', ['response' => $aiResponse]);
+
+            return $this->parseAiResponse($aiResponse);
+        } catch (\Exception $e) {
+            Log::error('vLLM/OpenAI API call failed: ' . $e->getMessage());
+            return null;
+        }
     }
 
     /**
@@ -309,8 +404,11 @@ PROMPT;
     {
         return [
             'enabled' => $this->enabled,
+            'provider' => $this->aiProvider,
             'ollama_url' => $this->ollamaUrl,
             'ollama_model' => $this->ollamaModel,
+            'vllm_url' => $this->vllmUrl,
+            'vllm_model' => $this->vllmModel,
             'sensitivity' => $this->sensitivity,
             'timeout' => $this->timeout,
         ];
