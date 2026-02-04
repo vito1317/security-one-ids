@@ -421,28 +421,46 @@ class WafSyncService
             sleep(2);
             
             if (PHP_OS_FAMILY === 'Windows') {
-                // Windows: Use full path to shutdown.exe for scheduled task compatibility
-                // Running as SYSTEM account, use exec() which works better in non-interactive sessions
+                // Windows: Create a one-time scheduled task to reboot
+                // This is more reliable than direct exec() in scheduled task context
                 echo "🔄 Executing Windows restart command...\n";
                 Log::info('Executing Windows restart command...');
-                file_put_contents($logFile, "[{$timestamp}] Executing Windows restart...\n", FILE_APPEND);
+                file_put_contents($logFile, "[{$timestamp}] Executing Windows restart via schtasks...\n", FILE_APPEND);
                 
-                // Use full path and exec() for better compatibility in scheduled task
-                $shutdownPath = 'C:\\Windows\\System32\\shutdown.exe';
-                $command = "\"{$shutdownPath}\" /r /t 10 /f /c \"Security One IDS Agent: Reboot requested by WAF Hub\"";
-                
-                // Try multiple methods to ensure shutdown executes
                 $output = [];
                 $returnCode = 0;
-                exec($command . ' 2>&1', $output, $returnCode);
                 
-                file_put_contents($logFile, "[{$timestamp}] Shutdown command executed. Return code: {$returnCode}. Output: " . implode(' ', $output) . "\n", FILE_APPEND);
+                // Method 1: Create a one-time scheduled task to run shutdown
+                // This bypasses any exec() restrictions in the current scheduled task context
+                $taskName = 'SecurityOneIDS-Reboot-' . time();
+                $rebootTime = date('H:i', strtotime('+1 minute'));
+                $rebootDate = date('Y/m/d');
                 
+                // Create task
+                $createCommand = "schtasks /create /tn \"{$taskName}\" /tr \"shutdown /r /t 5 /f /c \\\"Security One IDS: Remote Reboot\\\"\" /sc once /st {$rebootTime} /sd {$rebootDate} /f /ru SYSTEM";
+                exec($createCommand . ' 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] schtasks create result: code={$returnCode}, output=" . implode(' ', $output) . "\n", FILE_APPEND);
+                
+                if ($returnCode === 0) {
+                    // Run the task immediately
+                    $output = [];
+                    exec("schtasks /run /tn \"{$taskName}\" 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] schtasks run result: code={$returnCode}, output=" . implode(' ', $output) . "\n", FILE_APPEND);
+                }
+                
+                // Fallback: try direct shutdown if schtasks failed
                 if ($returnCode !== 0) {
-                    // Fallback: try using PowerShell
-                    file_put_contents($logFile, "[{$timestamp}] Trying PowerShell fallback...\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] schtasks failed, trying direct shutdown...\n", FILE_APPEND);
+                    $output = [];
+                    exec('C:\\Windows\\System32\\shutdown.exe /r /t 10 /f 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] Direct shutdown result: code={$returnCode}, output=" . implode(' ', $output) . "\n", FILE_APPEND);
+                }
+                
+                // Last resort: PowerShell
+                if ($returnCode !== 0) {
+                    file_put_contents($logFile, "[{$timestamp}] Trying PowerShell...\n", FILE_APPEND);
                     exec('powershell -Command "Restart-Computer -Force" 2>&1', $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] PowerShell result: {$returnCode}\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] PowerShell result: code={$returnCode}\n", FILE_APPEND);
                 }
                 
             } elseif (PHP_OS_FAMILY === 'Darwin') {
