@@ -544,42 +544,51 @@ class WafSyncService
             if (PHP_OS_FAMILY === 'Windows') {
                 // Windows: Lock workstation
                 // Note: rundll32.exe LockWorkStation doesn't work from Session 0 (service)
-                // We need to use alternative methods that work from service context
                 echo "🔒 Executing Windows lock command...\n";
                 Log::info('Executing Windows lock command...');
                 file_put_contents($logFile, "[{$timestamp}] Executing Windows lock...\n", FILE_APPEND);
                 
                 $output = [];
-                $returnCode = 0;
+                $returnCode = 1;
                 
-                // Method 1: Use tsdiscon to disconnect the console session (locks screen)
-                exec('tsdiscon console 2>&1', $output, $returnCode);
-                file_put_contents($logFile, "[{$timestamp}] tsdiscon result: code={$returnCode}\n", FILE_APPEND);
+                // Method 1: Create a scheduled task with INTERACTIVE flag
+                // This runs in the logged-in user's session
+                $lockScript = 'C:\\ProgramData\\SecurityOneIDS\\lock.ps1';
+                $psContent = 'Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class LockScreen {
+    [DllImport("user32.dll")]
+    public static extern bool LockWorkStation();
+}
+"@
+[LockScreen]::LockWorkStation()';
+                file_put_contents($lockScript, $psContent);
                 
+                // Create scheduled task that runs as current interactive user
+                $createCmd = 'schtasks /Create /TN "SecurityOneLockNow" /TR "powershell -ExecutionPolicy Bypass -File \"' . $lockScript . '\"" /SC ONCE /ST 00:00 /F /RL HIGHEST';
+                exec($createCmd . ' 2>&1', $output, $rc1);
+                file_put_contents($logFile, "[{$timestamp}] schtasks create: code={$rc1}\n", FILE_APPEND);
+                
+                $runCmd = 'schtasks /Run /TN "SecurityOneLockNow"';
+                exec($runCmd . ' 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] schtasks run: code={$returnCode}\n", FILE_APPEND);
+                
+                // Cleanup
+                sleep(2);
+                exec('schtasks /Delete /TN "SecurityOneLockNow" /F 2>&1');
+                @unlink($lockScript);
+                
+                // Method 2: Try direct rundll32 (may work if service has desktop access)
                 if ($returnCode !== 0) {
-                    // Method 2: Create a scheduled task that runs immediately in user session
-                    $taskXml = '<?xml version="1.0"?>
-<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <Triggers><TimeTrigger><StartBoundary>1970-01-01T00:00:00</StartBoundary></TimeTrigger></Triggers>
-  <Actions><Exec><Command>rundll32.exe</Command><Arguments>user32.dll,LockWorkStation</Arguments></Exec></Actions>
-  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy></Settings>
-</Task>';
-                    $tempFile = 'C:\\ProgramData\\SecurityOneIDS\\lock_task.xml';
-                    file_put_contents($tempFile, $taskXml);
-                    
-                    // Create and run task
-                    exec('schtasks /Create /TN "SecurityOneLock" /XML "' . $tempFile . '" /F 2>&1', $output, $returnCode);
-                    exec('schtasks /Run /TN "SecurityOneLock" 2>&1', $output, $returnCode);
-                    exec('schtasks /Delete /TN "SecurityOneLock" /F 2>&1', $output, $returnCode);
-                    @unlink($tempFile);
-                    file_put_contents($logFile, "[{$timestamp}] schtasks result: code={$returnCode}\n", FILE_APPEND);
+                    exec('rundll32.exe user32.dll,LockWorkStation 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] rundll32 result: code={$returnCode}\n", FILE_APPEND);
                 }
                 
+                // Method 3: Use tsdiscon (works on Windows with Remote Desktop Services)
                 if ($returnCode !== 0) {
-                    // Method 3: Use PowerShell to directly call Win32 API
-                    $psCommand = 'powershell -Command "Add-Type -TypeDefinition \'using System; using System.Runtime.InteropServices; public class Lock { [DllImport(\"user32.dll\")] public static extern bool LockWorkStation(); }\'; [Lock]::LockWorkStation()"';
-                    exec($psCommand . ' 2>&1', $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] PowerShell lock result: code={$returnCode}\n", FILE_APPEND);
+                    exec('tsdiscon console 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] tsdiscon result: code={$returnCode}\n", FILE_APPEND);
                 }
                 
             } elseif (PHP_OS_FAMILY === 'Darwin') {
