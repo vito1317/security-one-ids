@@ -30,9 +30,15 @@ class RunScan extends Command
             }
             
             // Send initial "scanning" status to WAF Hub
+            // Wrap in try-catch to prevent network failures from stopping scan
             $this->info("Sending initial 'scanning' status to WAF Hub...");
-            $result = $clamav->reportToHub(['scan_status' => 'scanning']);
-            $this->info("reportToHub result: " . ($result ? 'success' : 'failed'));
+            try {
+                $result = $clamav->reportToHub(['scan_status' => 'scanning']);
+                $this->info("reportToHub result: " . ($result ? 'success' : 'failed'));
+            } catch (\Exception $e) {
+                $this->warn("Could not report initial status (network issue?): " . $e->getMessage());
+                Log::warning('Failed to report initial scan status: ' . $e->getMessage());
+            }
             
             // Use platform-specific scan paths based on scan type
             $platform = match(PHP_OS_FAMILY) {
@@ -172,12 +178,18 @@ class RunScan extends Command
                     $clamav->saveScanProgress($progressText);
                     
                     // Report progress BEFORE starting scan (so user sees current directory)
-                    $clamav->reportToHub([
-                        'scan_status' => 'scanning',
-                        'scan_progress' => $progressText,
-                        'scanned_files' => $allResults['scanned_files'],
-                        'infected_files' => $allResults['infected_files'],
-                    ]);
+                    // Wrap in try-catch to prevent network failures from interrupting scan
+                    try {
+                        $clamav->reportToHub([
+                            'scan_status' => 'scanning',
+                            'scan_progress' => $progressText,
+                            'scanned_files' => $allResults['scanned_files'],
+                            'infected_files' => $allResults['infected_files'],
+                        ]);
+                    } catch (\Exception $e) {
+                        Log::warning('Failed to report scan progress (network issue?): ' . $e->getMessage());
+                        // Continue scanning even if report fails
+                    }
                     
                     $result = $clamav->scan($path);
                     $completedPaths++;
