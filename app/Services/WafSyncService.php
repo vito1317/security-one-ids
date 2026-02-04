@@ -305,6 +305,28 @@ class WafSyncService
         if (!empty($config['addons']['reboot'])) {
             echo "🔴 REBOOT SIGNAL DETECTED in config!\n";
             Log::warning('Reboot signal received from WAF Hub, initiating system restart...');
+            
+            // Check for reboot cooldown to prevent infinite reboot loops
+            $cooldownFile = PHP_OS_FAMILY === 'Windows' 
+                ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\last_reboot.txt'
+                : base_path('storage/logs/last_reboot.txt');
+            
+            $cooldownMinutes = 5; // Prevent reboot if last reboot was within 5 minutes
+            
+            if (file_exists($cooldownFile)) {
+                $lastRebootTime = (int) file_get_contents($cooldownFile);
+                $elapsed = time() - $lastRebootTime;
+                
+                if ($elapsed < ($cooldownMinutes * 60)) {
+                    echo "⏸️ REBOOT SKIPPED - System was rebooted {$elapsed} seconds ago (cooldown: {$cooldownMinutes} min)\n";
+                    Log::warning("Reboot skipped due to cooldown. Last reboot was {$elapsed} seconds ago.");
+                    return; // Skip this section, don't reboot
+                }
+            }
+            
+            // Record this reboot time
+            file_put_contents($cooldownFile, time());
+            
             $this->handleSystemReboot();
         } else {
             // Debug: show what addons we received
@@ -388,20 +410,53 @@ class WafSyncService
             echo "⚠️ REBOOT SIGNAL RECEIVED FROM WAF HUB!\n";
             Log::warning('System reboot initiated by WAF Hub remote command');
             
+            // Write to a file log that works even in scheduled task context
+            $logFile = PHP_OS_FAMILY === 'Windows' 
+                ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\reboot.log'
+                : base_path('storage/logs/reboot.log');
+            $timestamp = date('Y-m-d H:i:s');
+            file_put_contents($logFile, "[{$timestamp}] Reboot signal received from WAF Hub\n", FILE_APPEND);
+            
             // Small delay to allow log to be written
             sleep(2);
             
             if (PHP_OS_FAMILY === 'Windows') {
-                // Windows: Use shutdown command with 5 second delay
-                // /r = restart, /t 5 = 5 second timeout, /f = force apps to close
+                // Windows: Use full path to shutdown.exe for scheduled task compatibility
+                // Running as SYSTEM account, use exec() which works better in non-interactive sessions
                 echo "🔄 Executing Windows restart command...\n";
                 Log::info('Executing Windows restart command...');
-                pclose(popen('shutdown /r /t 5 /f /c "Security One IDS Agent: Reboot requested by WAF Hub"', 'r'));
+                file_put_contents($logFile, "[{$timestamp}] Executing Windows restart...\n", FILE_APPEND);
+                
+                // Use full path and exec() for better compatibility in scheduled task
+                $shutdownPath = 'C:\\Windows\\System32\\shutdown.exe';
+                $command = "\"{$shutdownPath}\" /r /t 10 /f /c \"Security One IDS Agent: Reboot requested by WAF Hub\"";
+                
+                // Try multiple methods to ensure shutdown executes
+                $output = [];
+                $returnCode = 0;
+                exec($command . ' 2>&1', $output, $returnCode);
+                
+                file_put_contents($logFile, "[{$timestamp}] Shutdown command executed. Return code: {$returnCode}. Output: " . implode(' ', $output) . "\n", FILE_APPEND);
+                
+                if ($returnCode !== 0) {
+                    // Fallback: try using PowerShell
+                    file_put_contents($logFile, "[{$timestamp}] Trying PowerShell fallback...\n", FILE_APPEND);
+                    exec('powershell -Command "Restart-Computer -Force" 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] PowerShell result: {$returnCode}\n", FILE_APPEND);
+                }
+                
             } elseif (PHP_OS_FAMILY === 'Darwin') {
                 // macOS: Use osascript or sudo shutdown
                 echo "🔄 Executing macOS restart command...\n";
                 Log::info('Executing macOS restart command...');
-                exec('osascript -e \'tell app "System Events" to restart\' 2>&1 || sudo shutdown -r +1 "Security One IDS reboot"');
+                file_put_contents($logFile, "[{$timestamp}] Executing macOS restart...\n", FILE_APPEND);
+                
+                // Try AppleScript first, then sudo shutdown as fallback
+                $result = exec('osascript -e \'tell app "System Events" to restart\' 2>&1');
+                if (empty($result) || strpos($result, 'error') !== false) {
+                    exec('sudo shutdown -r +1 "Security One IDS reboot" 2>&1 &');
+                }
+                
             } else {
                 // Linux: Use shutdown command
                 echo "🔄 Executing Linux restart command...\n";
@@ -411,6 +466,7 @@ class WafSyncService
             
             echo "✅ Reboot command dispatched\n";
             Log::info('Reboot command dispatched');
+            file_put_contents($logFile, "[{$timestamp}] Reboot command dispatched successfully\n", FILE_APPEND);
             
         } catch (\Exception $e) {
             echo "❌ Failed to execute reboot: " . $e->getMessage() . "\n";
