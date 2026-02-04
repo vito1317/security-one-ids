@@ -543,7 +543,8 @@ class WafSyncService
             
             if (PHP_OS_FAMILY === 'Windows') {
                 // Windows: Lock workstation
-                // Note: rundll32.exe LockWorkStation doesn't work from Session 0 (service)
+                // Note: LockWorkStation() API doesn't work from Session 0 (service)
+                // We need to run the lock command in the user's interactive session
                 echo "🔒 Executing Windows lock command...\n";
                 Log::info('Executing Windows lock command...');
                 file_put_contents($logFile, "[{$timestamp}] Executing Windows lock...\n", FILE_APPEND);
@@ -551,44 +552,61 @@ class WafSyncService
                 $output = [];
                 $returnCode = 1;
                 
-                // Method 1: Create a scheduled task with INTERACTIVE flag
-                // This runs in the logged-in user's session
-                $lockScript = 'C:\\ProgramData\\SecurityOneIDS\\lock.ps1';
-                $psContent = 'Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public class LockScreen {
-    [DllImport("user32.dll")]
-    public static extern bool LockWorkStation();
-}
-"@
-[LockScreen]::LockWorkStation()';
-                file_put_contents($lockScript, $psContent);
+                // Step 1: Find the currently logged-in user
+                $userOutput = [];
+                exec('query user 2>&1', $userOutput, $rc);
+                file_put_contents($logFile, "[{$timestamp}] query user output: " . implode("\n", $userOutput) . "\n", FILE_APPEND);
                 
-                // Create scheduled task that runs as current interactive user
-                $createCmd = 'schtasks /Create /TN "SecurityOneLockNow" /TR "powershell -ExecutionPolicy Bypass -File \"' . $lockScript . '\"" /SC ONCE /ST 00:00 /F /RL HIGHEST';
-                exec($createCmd . ' 2>&1', $output, $rc1);
-                file_put_contents($logFile, "[{$timestamp}] schtasks create: code={$rc1}\n", FILE_APPEND);
-                
-                $runCmd = 'schtasks /Run /TN "SecurityOneLockNow"';
-                exec($runCmd . ' 2>&1', $output, $returnCode);
-                file_put_contents($logFile, "[{$timestamp}] schtasks run: code={$returnCode}\n", FILE_APPEND);
-                
-                // Cleanup
-                sleep(2);
-                exec('schtasks /Delete /TN "SecurityOneLockNow" /F 2>&1');
-                @unlink($lockScript);
-                
-                // Method 2: Try direct rundll32 (may work if service has desktop access)
-                if ($returnCode !== 0) {
-                    exec('rundll32.exe user32.dll,LockWorkStation 2>&1', $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] rundll32 result: code={$returnCode}\n", FILE_APPEND);
+                $username = null;
+                foreach ($userOutput as $line) {
+                    // Parse the query user output to find active session
+                    // Format: USERNAME  SESSIONNAME  ID  STATE  IDLE TIME  LOGON TIME
+                    if (preg_match('/^>?(\S+)\s+\S+\s+\d+\s+Active/i', trim($line), $matches)) {
+                        $username = $matches[1];
+                        break;
+                    }
                 }
                 
-                // Method 3: Use tsdiscon (works on Windows with Remote Desktop Services)
+                file_put_contents($logFile, "[{$timestamp}] Found active user: " . ($username ?? 'none') . "\n", FILE_APPEND);
+                
+                if ($username) {
+                    // Method 1: Create scheduled task that runs as the interactive user
+                    $lockScript = 'C:\\ProgramData\\SecurityOneIDS\\lock.vbs';
+                    // Use VBScript which can interact with the desktop
+                    $vbsContent = 'CreateObject("Wscript.Shell").Run "rundll32.exe user32.dll,LockWorkStation", 0, False';
+                    file_put_contents($lockScript, $vbsContent);
+                    
+                    // Create task that runs as INTERACTIVE user (the one currently logged in)
+                    $createCmd = 'schtasks /Create /TN "SecurityOneLock" /TR "wscript.exe \"' . $lockScript . '\"" /SC ONCE /ST 00:00 /F /RU "' . $username . '" /IT';
+                    exec($createCmd . ' 2>&1', $output, $rc1);
+                    file_put_contents($logFile, "[{$timestamp}] schtasks create for user '{$username}': code={$rc1}, output=" . implode(" ", array_slice($output, -3)) . "\n", FILE_APPEND);
+                    
+                    if ($rc1 === 0) {
+                        // Run the task
+                        exec('schtasks /Run /TN "SecurityOneLock" 2>&1', $output, $returnCode);
+                        file_put_contents($logFile, "[{$timestamp}] schtasks run: code={$returnCode}\n", FILE_APPEND);
+                        
+                        // Wait and cleanup
+                        sleep(3);
+                        exec('schtasks /Delete /TN "SecurityOneLock" /F 2>&1');
+                    }
+                    @unlink($lockScript);
+                }
+                
+                // Method 2: Try using logoff (more drastic but reliable)
                 if ($returnCode !== 0) {
-                    exec('tsdiscon console 2>&1', $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] tsdiscon result: code={$returnCode}\n", FILE_APPEND);
+                    // Use msg command to notify then lock - this reaches interactive session
+                    exec('msg * /TIME:1 "System will lock in 1 second..." 2>&1', $output, $rc);
+                    sleep(1);
+                    // Create a batch file and run via scheduled task with SYSTEM and /IT
+                    $batchFile = 'C:\\ProgramData\\SecurityOneIDS\\lock.bat';
+                    file_put_contents($batchFile, '@echo off' . "\r\n" . 'rundll32.exe user32.dll,LockWorkStation');
+                    exec('schtasks /Create /TN "SysLock" /TR "' . $batchFile . '" /SC ONCE /ST 00:00 /F /RU SYSTEM /IT 2>&1', $output, $rc1);
+                    exec('schtasks /Run /TN "SysLock" 2>&1', $output, $returnCode);
+                    sleep(2);
+                    exec('schtasks /Delete /TN "SysLock" /F 2>&1');
+                    @unlink($batchFile);
+                    file_put_contents($logFile, "[{$timestamp}] SYSTEM scheduled task result: code={$returnCode}\n", FILE_APPEND);
                 }
                 
             } elseif (PHP_OS_FAMILY === 'Darwin') {
