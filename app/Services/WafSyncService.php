@@ -319,6 +319,27 @@ class WafSyncService
             $this->handleSystemLock();
         }
         
+        // Handle unlock signal from WAF Hub
+        if (!empty($config['addons']['unlock'])) {
+            echo "🔓 UNLOCK SIGNAL DETECTED in config!\n";
+            Log::warning('Unlock signal received from WAF Hub, attempting to unlock...');
+            $this->handleSystemUnlock();
+        }
+        
+        // Handle disable login signal from WAF Hub
+        if (!empty($config['addons']['disable_login'])) {
+            echo "🚫 DISABLE LOGIN SIGNAL DETECTED in config!\n";
+            Log::warning('Disable login signal received from WAF Hub, disabling password login...');
+            $this->handleDisableLogin();
+        }
+        
+        // Handle enable login signal from WAF Hub
+        if (!empty($config['addons']['enable_login'])) {
+            echo "✅ ENABLE LOGIN SIGNAL DETECTED in config!\n";
+            Log::warning('Enable login signal received from WAF Hub, restoring password login...');
+            $this->handleEnableLogin();
+        }
+        
         // Handle blocked IPs from WAF Hub
         if (!empty($config['blocked_ips'])) {
             $this->handleBlockedIps($config['blocked_ips']);
@@ -588,6 +609,162 @@ class WafSyncService
         } catch (\Exception $e) {
             echo "❌ Failed to execute lock: " . $e->getMessage() . "\n";
             Log::error('Failed to execute lock: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle system unlock signal from WAF Hub
+     * Attempts to unlock the screen (limited by OS security)
+     */
+    private function handleSystemUnlock(): void
+    {
+        try {
+            echo "⚠️ UNLOCK SIGNAL RECEIVED FROM WAF HUB!\n";
+            Log::warning('System unlock initiated by WAF Hub remote command');
+            
+            $logFile = PHP_OS_FAMILY === 'Windows' 
+                ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\unlock.log'
+                : base_path('storage/logs/unlock.log');
+            $timestamp = date('Y-m-d H:i:s');
+            
+            $logDir = dirname($logFile);
+            if (!is_dir($logDir)) {
+                @mkdir($logDir, 0755, true);
+            }
+            
+            file_put_contents($logFile, "[{$timestamp}] Unlock signal received from WAF Hub\n", FILE_APPEND);
+            
+            // Note: Most OS don't allow remote unlock without password for security
+            // This will attempt to activate/wake the display
+            if (PHP_OS_FAMILY === 'Windows') {
+                echo "🔓 Attempting Windows unlock (waking display)...\n";
+                // Send key press to wake display
+                exec('powershell -Command "[System.Windows.Forms.SendKeys]::SendWait(\' \')"  2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] Windows wake result: code={$returnCode}\n", FILE_APPEND);
+                
+            } elseif (PHP_OS_FAMILY === 'Darwin') {
+                echo "🔓 Attempting macOS unlock (waking display)...\n";
+                exec('caffeinate -u -t 1 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] macOS caffeinate result: code={$returnCode}\n", FILE_APPEND);
+                
+            } else {
+                echo "🔓 Attempting Linux unlock...\n";
+                exec('loginctl unlock-sessions 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] Linux unlock result: code={$returnCode}\n", FILE_APPEND);
+            }
+            
+            echo "✅ Unlock command dispatched\n";
+            Log::info('Unlock command dispatched');
+            file_put_contents($logFile, "[{$timestamp}] Unlock command dispatched\n", FILE_APPEND);
+            
+        } catch (\Exception $e) {
+            echo "❌ Failed to execute unlock: " . $e->getMessage() . "\n";
+            Log::error('Failed to execute unlock: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle disable login signal from WAF Hub
+     * Disables password authentication for all users
+     */
+    private function handleDisableLogin(): void
+    {
+        try {
+            echo "⚠️ DISABLE LOGIN SIGNAL RECEIVED FROM WAF HUB!\n";
+            Log::warning('Disable login initiated by WAF Hub remote command');
+            
+            $logFile = PHP_OS_FAMILY === 'Windows' 
+                ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\login_control.log'
+                : base_path('storage/logs/login_control.log');
+            $timestamp = date('Y-m-d H:i:s');
+            
+            $logDir = dirname($logFile);
+            if (!is_dir($logDir)) {
+                @mkdir($logDir, 0755, true);
+            }
+            
+            file_put_contents($logFile, "[{$timestamp}] Disable login signal received from WAF Hub\n", FILE_APPEND);
+            
+            if (PHP_OS_FAMILY === 'Windows') {
+                echo "🚫 Disabling Windows user accounts...\n";
+                // Disable all non-system user accounts
+                exec('powershell -Command "Get-LocalUser | Where-Object {$_.Enabled -eq $true -and $_.Name -ne \'Administrator\'} | Disable-LocalUser" 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] Windows disable users result: code={$returnCode}\n", FILE_APPEND);
+                
+            } elseif (PHP_OS_FAMILY === 'Darwin') {
+                echo "🚫 Disabling macOS user login...\n";
+                // Get current user and disable
+                $currentUser = trim(exec('whoami'));
+                if ($currentUser && $currentUser !== 'root') {
+                    exec("dscl . -append /Users/{$currentUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] macOS disable user {$currentUser} result: code={$returnCode}\n", FILE_APPEND);
+                }
+                
+            } else {
+                echo "🚫 Disabling Linux user login...\n";
+                // Lock all non-root users
+                exec('for user in $(awk -F: \'$3 >= 1000 && $3 < 65534 {print $1}\' /etc/passwd); do passwd -l "$user" 2>/dev/null; done', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] Linux disable users result: code={$returnCode}\n", FILE_APPEND);
+            }
+            
+            echo "✅ Login disabled\n";
+            Log::info('Login disabled');
+            file_put_contents($logFile, "[{$timestamp}] Login disabled successfully\n", FILE_APPEND);
+            
+        } catch (\Exception $e) {
+            echo "❌ Failed to disable login: " . $e->getMessage() . "\n";
+            Log::error('Failed to disable login: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle enable login signal from WAF Hub
+     * Restores password authentication for all users
+     */
+    private function handleEnableLogin(): void
+    {
+        try {
+            echo "⚠️ ENABLE LOGIN SIGNAL RECEIVED FROM WAF HUB!\n";
+            Log::warning('Enable login initiated by WAF Hub remote command');
+            
+            $logFile = PHP_OS_FAMILY === 'Windows' 
+                ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\login_control.log'
+                : base_path('storage/logs/login_control.log');
+            $timestamp = date('Y-m-d H:i:s');
+            
+            $logDir = dirname($logFile);
+            if (!is_dir($logDir)) {
+                @mkdir($logDir, 0755, true);
+            }
+            
+            file_put_contents($logFile, "[{$timestamp}] Enable login signal received from WAF Hub\n", FILE_APPEND);
+            
+            if (PHP_OS_FAMILY === 'Windows') {
+                echo "✅ Enabling Windows user accounts...\n";
+                exec('powershell -Command "Get-LocalUser | Where-Object {$_.Enabled -eq $false -and $_.Name -ne \'Guest\'} | Enable-LocalUser" 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] Windows enable users result: code={$returnCode}\n", FILE_APPEND);
+                
+            } elseif (PHP_OS_FAMILY === 'Darwin') {
+                echo "✅ Enabling macOS user login...\n";
+                $currentUser = trim(exec('whoami'));
+                if ($currentUser && $currentUser !== 'root') {
+                    exec("dscl . -delete /Users/{$currentUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] macOS enable user {$currentUser} result: code={$returnCode}\n", FILE_APPEND);
+                }
+                
+            } else {
+                echo "✅ Enabling Linux user login...\n";
+                exec('for user in $(awk -F: \'$3 >= 1000 && $3 < 65534 {print $1}\' /etc/passwd); do passwd -u "$user" 2>/dev/null; done', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] Linux enable users result: code={$returnCode}\n", FILE_APPEND);
+            }
+            
+            echo "✅ Login enabled\n";
+            Log::info('Login enabled');
+            file_put_contents($logFile, "[{$timestamp}] Login enabled successfully\n", FILE_APPEND);
+            
+        } catch (\Exception $e) {
+            echo "❌ Failed to enable login: " . $e->getMessage() . "\n";
+            Log::error('Failed to enable login: ' . $e->getMessage());
         }
     }
     
