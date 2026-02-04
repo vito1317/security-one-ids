@@ -59,13 +59,69 @@ Write-Host "✅ PHP is installed" -ForegroundColor Green
 # Enable required PHP extensions
 Write-Host "🔧 Enabling required PHP extensions..." -ForegroundColor Cyan
 
+# First, check for "Module already loaded" warnings and auto-fix
+Write-Host "🔍 Checking for duplicate extension warnings..." -ForegroundColor Yellow
+$phpWarnings = @()
+try {
+    # Capture PHP warnings - these indicate duplicate extensions
+    $tempErrFile = [System.IO.Path]::GetTempFileName()
+    $process = Start-Process -FilePath "php" -ArgumentList "-m" -RedirectStandardError $tempErrFile -RedirectStandardOutput "$tempErrFile.out" -Wait -NoNewWindow -PassThru
+    if (Test-Path $tempErrFile) {
+        $phpWarnings = Get-Content $tempErrFile | Where-Object { $_ -match "Module .+ is already loaded" }
+        Remove-Item $tempErrFile -Force -ErrorAction SilentlyContinue
+        Remove-Item "$tempErrFile.out" -Force -ErrorAction SilentlyContinue
+    }
+} catch {
+    # Ignore errors
+}
+
+if ($phpWarnings.Count -gt 0) {
+    Write-Host "  ⚠️ Found $($phpWarnings.Count) duplicate extension warning(s)" -ForegroundColor Yellow
+    foreach ($warn in $phpWarnings) {
+        Write-Host "    → $warn" -ForegroundColor Gray
+    }
+    
+    # Auto-fix: Find php.ini and comment out duplicate extensions
+    Write-Host "  🔧 Auto-fixing php.ini..." -ForegroundColor Cyan
+    $phpDir = Split-Path (Get-Command php).Source -Parent
+    $iniPath = "$phpDir\php.ini"
+    
+    if (Test-Path $iniPath) {
+        $iniContent = Get-Content $iniPath -Raw
+        $modified = $false
+        
+        foreach ($warn in $phpWarnings) {
+            if ($warn -match 'Module "(.+)" is already loaded') {
+                $extName = $matches[1]
+                # Comment out the extension line
+                if ($iniContent -match "(?m)^(\s*)extension\s*=\s*$extName") {
+                    $iniContent = $iniContent -replace "(?m)^(\s*)extension(\s*=\s*$extName)", "`$1;extension`$2"
+                    Write-Host "    ✅ Commented out duplicate: extension=$extName" -ForegroundColor Green
+                    $modified = $true
+                }
+            }
+        }
+        
+        if ($modified) {
+            Set-Content $iniPath $iniContent -Force
+            Write-Host "  ✅ php.ini fixed - duplicate extensions disabled" -ForegroundColor Green
+        }
+    }
+}
+
 # Get list of already loaded (compiled-in) extensions to avoid duplicate loading
 Write-Host "Detecting already loaded extensions..." -ForegroundColor Yellow
 $loadedExtensions = @()
 try {
-    # Use 2>&1 to capture both stdout and stderr, then filter
-    $phpModulesOutput = & php -m 2>&1
-    $loadedExtensions = $phpModulesOutput | Where-Object { $_ -is [string] -and $_ -notmatch "^PHP Warning" -and $_.Trim() -ne "" -and $_ -notmatch "^\[" } | ForEach-Object { $_.Trim().ToLower() }
+    # Use temp file to avoid PowerShell stderr issues
+    $tempOutFile = [System.IO.Path]::GetTempFileName()
+    $process = Start-Process -FilePath "php" -ArgumentList "-m" -RedirectStandardOutput $tempOutFile -RedirectStandardError "$tempOutFile.err" -Wait -NoNewWindow -PassThru
+    if (Test-Path $tempOutFile) {
+        $phpModulesOutput = Get-Content $tempOutFile
+        $loadedExtensions = $phpModulesOutput | Where-Object { $_ -and $_.Trim() -ne "" -and $_ -notmatch "^\[" } | ForEach-Object { $_.Trim().ToLower() }
+        Remove-Item $tempOutFile -Force -ErrorAction SilentlyContinue
+        Remove-Item "$tempOutFile.err" -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "  Found $($loadedExtensions.Count) loaded extensions" -ForegroundColor Gray
 } catch {
     Write-Host "  ⚠️ Could not detect loaded extensions, will check php.ini only" -ForegroundColor Yellow
