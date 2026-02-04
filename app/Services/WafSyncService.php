@@ -312,9 +312,21 @@ class WafSyncService
             echo "📋 Addons reboot value: " . json_encode($rebootValue) . "\n";
         }
         
+        // DEBUG: Log all addons to sync.log
+        $syncLogFile = PHP_OS_FAMILY === 'Windows' 
+            ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\sync.log'
+            : base_path('storage/logs/sync.log');
+        $timestamp = date('Y-m-d H:i:s');
+        $addonsJson = json_encode($config['addons'] ?? []);
+        file_put_contents($syncLogFile, "[{$timestamp}] Received addons: {$addonsJson}\n", FILE_APPEND);
+        
         // Handle lock signal from WAF Hub
+        $lockValue = $config['addons']['lock'] ?? false;
+        file_put_contents($syncLogFile, "[{$timestamp}] Lock value: " . json_encode($lockValue) . "\n", FILE_APPEND);
+        
         if (!empty($config['addons']['lock'])) {
             echo "🔒 LOCK SIGNAL DETECTED in config!\n";
+            file_put_contents($syncLogFile, "[{$timestamp}] LOCK TRIGGERED!\n", FILE_APPEND);
             Log::warning('Lock signal received from WAF Hub, locking system...');
             $this->handleSystemLock();
         }
