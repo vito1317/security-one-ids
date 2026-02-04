@@ -71,9 +71,25 @@ try {
     Write-Host "  ⚠️ Could not detect loaded extensions, will check php.ini only" -ForegroundColor Yellow
 }
 
-# Find php.ini location
-$phpIniPath = & php -i 2>$null | Select-String "Loaded Configuration File" | ForEach-Object { $_.ToString().Split("=>")[1].Trim() }
-if (-not $phpIniPath -or $phpIniPath -eq "(none)") {
+# Find php.ini location (using temp file to avoid stderr issues)
+$phpIniPath = $null
+try {
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    $process = Start-Process -FilePath "php" -ArgumentList "-i" -RedirectStandardOutput $tempFile -RedirectStandardError "$tempFile.err" -Wait -NoNewWindow -PassThru
+    if (Test-Path $tempFile) {
+        $phpInfo = Get-Content $tempFile -Raw
+        if ($phpInfo -match "Loaded Configuration File\s*=>\s*(.+)") {
+            $phpIniPath = $matches[1].Trim()
+            if ($phpIniPath -eq "(none)") { $phpIniPath = $null }
+        }
+        Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+        Remove-Item "$tempFile.err" -Force -ErrorAction SilentlyContinue
+    }
+} catch {
+    Write-Host "  ⚠️ Could not run php -i: $_" -ForegroundColor Yellow
+}
+
+if (-not $phpIniPath) {
     # Try to find php.ini in common locations
     $phpDir = Split-Path (Get-Command php).Source -Parent
     $possiblePaths = @(
