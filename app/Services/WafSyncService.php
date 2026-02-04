@@ -610,21 +610,35 @@ class WafSyncService
                 }
                 
             } elseif (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: Lock screen
+                // macOS: Lock screen properly (not just sleep display)
                 echo "🔒 Executing macOS lock command...\n";
                 Log::info('Executing macOS lock command...');
                 file_put_contents($logFile, "[{$timestamp}] Executing macOS lock...\n", FILE_APPEND);
                 
-                // Method 1: Use pmset to sleep display (effectively locks)
                 $output = [];
-                $returnCode = 0;
-                exec('pmset displaysleepnow 2>&1', $output, $returnCode);
-                file_put_contents($logFile, "[{$timestamp}] pmset result: code={$returnCode}\n", FILE_APPEND);
+                $returnCode = 1;
+                
+                // Method 1: CGSession -suspend - this is the proper lock command
+                // This immediately locks the screen and requires password to unlock
+                exec('/System/Library/CoreServices/Menu\ Extras/User.menu/Contents/Resources/CGSession -suspend 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] CGSession -suspend result: code={$returnCode}\n", FILE_APPEND);
                 
                 if ($returnCode !== 0) {
-                    // Method 2: Use osascript to trigger screen saver (which locks)
+                    // Method 2: Use osascript to simulate Ctrl+Command+Q (lock screen shortcut)
+                    exec('osascript -e \'tell application "System Events" to keystroke "q" using {command down, control down}\' 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] osascript keystroke result: code={$returnCode}\n", FILE_APPEND);
+                }
+                
+                if ($returnCode !== 0) {
+                    // Method 3: Start screen saver (locks if password is required)
                     exec('osascript -e \'tell application "System Events" to start current screen saver\' 2>&1', $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] osascript result: code={$returnCode}\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] screen saver result: code={$returnCode}\n", FILE_APPEND);
+                }
+                
+                if ($returnCode !== 0) {
+                    // Method 4: pmset displaysleepnow as fallback
+                    exec('pmset displaysleepnow 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] pmset result: code={$returnCode}\n", FILE_APPEND);
                 }
                 
             } else {
