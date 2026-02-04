@@ -124,44 +124,58 @@ class WafSyncService
             return false;
         }
 
-        try {
-            $response = $this->getHttpClient(10)->post("{$this->wafUrl}/api/ids/agents/heartbeat", [
-                'token' => $this->agentToken,
-                'name' => $this->agentName,
-                'system_info' => $this->getSystemInfo(),
-            ]);
+        $maxRetries = 3;
+        $retryDelay = 2; // seconds
+        
+        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+            try {
+                $response = $this->getHttpClient(30)->post("{$this->wafUrl}/api/ids/agents/heartbeat", [
+                    'token' => $this->agentToken,
+                    'name' => $this->agentName,
+                    'system_info' => $this->getSystemInfo(),
+                ]);
 
-            if ($response->successful()) {
-                $data = $response->json();
-                Log::debug('Heartbeat sent successfully', $data);
+                if ($response->successful()) {
+                    $data = $response->json();
+                    Log::debug('Heartbeat sent successfully', $data);
+                    
+                    // Sync config from WAF Hub (including Ollama settings)
+                    if (isset($data['config'])) {
+                        $this->syncConfigFromHub($data['config']);
+                    }
+                    
+                    return true;
+                }
+
+                // If agent not found (404), try to register
+                if ($response->status() === 404) {
+                    Log::info('Agent not found, attempting registration...');
+                    return $this->register();
+                }
+
+                Log::warning('Heartbeat failed', [
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                    'attempt' => $attempt,
+                ]);
                 
-                // Sync config from WAF Hub (including Ollama settings)
-                if (isset($data['config'])) {
-                    $this->syncConfigFromHub($data['config']);
+            } catch (\Exception $e) {
+                Log::error("Heartbeat exception (attempt {$attempt}/{$maxRetries}): " . $e->getMessage());
+                
+                if ($attempt < $maxRetries) {
+                    Log::info("Retrying heartbeat in {$retryDelay} seconds...");
+                    sleep($retryDelay);
+                    continue;
                 }
                 
-                return true;
+                // On final failure, log connection error
+                if (str_contains($e->getMessage(), 'Connection') || str_contains($e->getMessage(), 'cURL')) {
+                    Log::info('Connection error, will try registration on next sync');
+                }
             }
-
-            // If agent not found (404), try to register
-            if ($response->status() === 404) {
-                Log::info('Agent not found, attempting registration...');
-                return $this->register();
-            }
-
-            Log::warning('Heartbeat failed', [
-                'status' => $response->status(),
-                'body' => $response->body(),
-            ]);
-            return false;
-        } catch (\Exception $e) {
-            Log::error('Heartbeat exception: ' . $e->getMessage());
-            // On connection error, try registration
-            if (str_contains($e->getMessage(), 'Connection') || str_contains($e->getMessage(), 'cURL')) {
-                Log::info('Connection error, will try registration on next sync');
-            }
-            return false;
         }
+        
+        return false;
     }
 
     /**
