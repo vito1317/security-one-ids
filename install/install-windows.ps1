@@ -612,16 +612,48 @@ $SyncServiceScript = @"
 `$ErrorActionPreference = 'Continue'
 Set-Location '$InstallDir'
 
+# Find PHP path (SYSTEM account may not have PATH set correctly)
+`$phpPath = 'php'
+`$possiblePhpPaths = @(
+    'C:\php\php.exe',
+    'C:\tools\php\php.exe',
+    'C:\Program Files\PHP\php.exe',
+    'C:\xampp\php\php.exe',
+    'C:\xampp-new\php\php.exe',
+    (Get-Command php -ErrorAction SilentlyContinue).Source
+)
+foreach (`$p in `$possiblePhpPaths) {
+    if (`$p -and (Test-Path `$p -ErrorAction SilentlyContinue)) {
+        `$phpPath = `$p
+        break
+    }
+}
+
 # Log startup
-Add-Content -Path '$DataDir\logs\sync.log' -Value "`n[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sync service starting..."
+Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sync service starting (PHP: `$phpPath)..."
 
 while (`$true) {
     try {
-        # Run sync command
-        `$output = & php artisan waf:sync 2>&1 | Out-String
-        if (`$output.Trim()) {
-            Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$output"
+        # Run sync command with timeout
+        `$job = Start-Job -ScriptBlock {
+            param(`$php, `$dir)
+            Set-Location `$dir
+            & `$php artisan waf:sync 2>&1
+        } -ArgumentList `$phpPath, '$InstallDir'
+        
+        # Wait up to 2 minutes for completion
+        `$completed = Wait-Job `$job -Timeout 120
+        
+        if (`$completed) {
+            `$output = Receive-Job `$job | Out-String
+            if (`$output.Trim()) {
+                Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$(`$output.Trim())"
+            }
+        } else {
+            Stop-Job `$job -ErrorAction SilentlyContinue
+            Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] TIMEOUT: Sync took too long, killed"
         }
+        Remove-Job `$job -Force -ErrorAction SilentlyContinue
     } catch {
         Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ERROR: `$_"
     }
