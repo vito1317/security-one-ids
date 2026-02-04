@@ -305,28 +305,6 @@ class WafSyncService
         if (!empty($config['addons']['reboot'])) {
             echo "🔴 REBOOT SIGNAL DETECTED in config!\n";
             Log::warning('Reboot signal received from WAF Hub, initiating system restart...');
-            
-            // Check for reboot cooldown to prevent infinite reboot loops
-            $cooldownFile = PHP_OS_FAMILY === 'Windows' 
-                ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\last_reboot.txt'
-                : base_path('storage/logs/last_reboot.txt');
-            
-            $cooldownMinutes = 5; // Prevent reboot if last reboot was within 5 minutes
-            
-            if (file_exists($cooldownFile)) {
-                $lastRebootTime = (int) file_get_contents($cooldownFile);
-                $elapsed = time() - $lastRebootTime;
-                
-                if ($elapsed < ($cooldownMinutes * 60)) {
-                    echo "⏸️ REBOOT SKIPPED - System was rebooted {$elapsed} seconds ago (cooldown: {$cooldownMinutes} min)\n";
-                    Log::warning("Reboot skipped due to cooldown. Last reboot was {$elapsed} seconds ago.");
-                    return; // Skip this section, don't reboot
-                }
-            }
-            
-            // Record this reboot time
-            file_put_contents($cooldownFile, time());
-            
             $this->handleSystemReboot();
         } else {
             // Debug: show what addons we received
