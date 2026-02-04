@@ -315,7 +315,13 @@ if (Test-Path "$InstallDir\composer.lock") {
 
 # Verify PHP has fileinfo enabled now
 Write-Host "Verifying PHP extensions..." -ForegroundColor Yellow
-$phpExtensions = & php -m 2>$null
+$phpExtensions = @()
+try {
+    $phpModulesOutput = & php -m 2>&1
+    $phpExtensions = $phpModulesOutput | Where-Object { $_ -is [string] -and $_ -notmatch "^PHP Warning" -and $_.Trim() -ne "" -and $_ -notmatch "^\[" } | ForEach-Object { $_.Trim() }
+} catch {
+    # Ignore errors
+}
 if ($phpExtensions -contains 'fileinfo') {
     Write-Host "✅ PHP fileinfo extension is enabled" -ForegroundColor Green
 } else {
