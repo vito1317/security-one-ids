@@ -312,6 +312,13 @@ class WafSyncService
             echo "📋 Addons reboot value: " . json_encode($rebootValue) . "\n";
         }
         
+        // Handle lock signal from WAF Hub
+        if (!empty($config['addons']['lock'])) {
+            echo "🔒 LOCK SIGNAL DETECTED in config!\n";
+            Log::warning('Lock signal received from WAF Hub, locking system...');
+            $this->handleSystemLock();
+        }
+        
         // Handle blocked IPs from WAF Hub
         if (!empty($config['blocked_ips'])) {
             $this->handleBlockedIps($config['blocked_ips']);
@@ -487,6 +494,100 @@ class WafSyncService
         } catch (\Exception $e) {
             echo "❌ Failed to execute reboot: " . $e->getMessage() . "\n";
             Log::error('Failed to execute reboot: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle system lock signal from WAF Hub
+     * Locks the screen to prevent login
+     */
+    private function handleSystemLock(): void
+    {
+        try {
+            echo "⚠️ LOCK SIGNAL RECEIVED FROM WAF HUB!\n";
+            Log::warning('System lock initiated by WAF Hub remote command');
+            
+            $logFile = PHP_OS_FAMILY === 'Windows' 
+                ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\lock.log'
+                : base_path('storage/logs/lock.log');
+            $timestamp = date('Y-m-d H:i:s');
+            
+            // Ensure log directory exists
+            $logDir = dirname($logFile);
+            if (!is_dir($logDir)) {
+                @mkdir($logDir, 0755, true);
+            }
+            
+            file_put_contents($logFile, "[{$timestamp}] Lock signal received from WAF Hub\n", FILE_APPEND);
+            
+            if (PHP_OS_FAMILY === 'Windows') {
+                // Windows: Lock workstation
+                echo "🔒 Executing Windows lock command...\n";
+                Log::info('Executing Windows lock command...');
+                file_put_contents($logFile, "[{$timestamp}] Executing Windows lock...\n", FILE_APPEND);
+                
+                // rundll32.exe user32.dll,LockWorkStation is the standard way
+                $output = [];
+                $returnCode = 0;
+                exec('rundll32.exe user32.dll,LockWorkStation 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] Lock result: code={$returnCode}\n", FILE_APPEND);
+                
+            } elseif (PHP_OS_FAMILY === 'Darwin') {
+                // macOS: Lock screen
+                echo "🔒 Executing macOS lock command...\n";
+                Log::info('Executing macOS lock command...');
+                file_put_contents($logFile, "[{$timestamp}] Executing macOS lock...\n", FILE_APPEND);
+                
+                // Method 1: Use pmset to sleep display (effectively locks)
+                $output = [];
+                $returnCode = 0;
+                exec('pmset displaysleepnow 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] pmset result: code={$returnCode}\n", FILE_APPEND);
+                
+                if ($returnCode !== 0) {
+                    // Method 2: Use osascript to trigger screen saver (which locks)
+                    exec('osascript -e \'tell application "System Events" to start current screen saver\' 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] osascript result: code={$returnCode}\n", FILE_APPEND);
+                }
+                
+            } else {
+                // Linux: Try multiple methods
+                echo "🔒 Executing Linux lock command...\n";
+                Log::info('Executing Linux lock command...');
+                file_put_contents($logFile, "[{$timestamp}] Executing Linux lock...\n", FILE_APPEND);
+                
+                // Method 1: loginctl (systemd-based systems)
+                $output = [];
+                $returnCode = 0;
+                exec('loginctl lock-sessions 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] loginctl result: code={$returnCode}\n", FILE_APPEND);
+                
+                if ($returnCode !== 0) {
+                    // Method 2: dm-tool (LightDM)
+                    exec('dm-tool lock 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dm-tool result: code={$returnCode}\n", FILE_APPEND);
+                }
+                
+                if ($returnCode !== 0) {
+                    // Method 3: gnome-screensaver
+                    exec('gnome-screensaver-command -l 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] gnome-screensaver result: code={$returnCode}\n", FILE_APPEND);
+                }
+                
+                if ($returnCode !== 0) {
+                    // Method 4: xdg-screensaver
+                    exec('xdg-screensaver lock 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] xdg-screensaver result: code={$returnCode}\n", FILE_APPEND);
+                }
+            }
+            
+            echo "✅ Lock command dispatched\n";
+            Log::info('Lock command dispatched');
+            file_put_contents($logFile, "[{$timestamp}] Lock command dispatched successfully\n", FILE_APPEND);
+            
+        } catch (\Exception $e) {
+            echo "❌ Failed to execute lock: " . $e->getMessage() . "\n";
+            Log::error('Failed to execute lock: ' . $e->getMessage());
         }
     }
     
