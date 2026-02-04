@@ -564,18 +564,50 @@ class WafSyncService
                 $output = [];
                 $returnCode = 1;
                 
-                // Step 1: Find the currently logged-in user
+                // Step 1: Find the currently logged-in user using multiple methods
                 $userOutput = [];
-                exec('query user 2>&1', $userOutput, $rc);
-                file_put_contents($logFile, "[{$timestamp}] query user output: " . implode("\n", $userOutput) . "\n", FILE_APPEND);
-                
                 $username = null;
+                
+                // Method 1: Try query user (Windows Pro/Enterprise with RDS)
+                exec('query user 2>&1', $userOutput, $rc);
+                file_put_contents($logFile, "[{$timestamp}] query user output: " . implode(" ", $userOutput) . "\n", FILE_APPEND);
+                
                 foreach ($userOutput as $line) {
-                    // Parse the query user output to find active session
-                    // Format: USERNAME  SESSIONNAME  ID  STATE  IDLE TIME  LOGON TIME
                     if (preg_match('/^>?(\S+)\s+\S+\s+\d+\s+Active/i', trim($line), $matches)) {
                         $username = $matches[1];
                         break;
+                    }
+                }
+                
+                // Method 2: Use wmic to get logged-in users
+                if (!$username) {
+                    $userOutput = [];
+                    exec('wmic computersystem get username 2>&1', $userOutput, $rc);
+                    file_put_contents($logFile, "[{$timestamp}] wmic username output: " . implode(" ", $userOutput) . "\n", FILE_APPEND);
+                    foreach ($userOutput as $line) {
+                        $line = trim($line);
+                        // Format: DOMAIN\username or just username
+                        if ($line && $line !== 'UserName' && stripos($line, 'username') === false) {
+                            // Extract just the username part (after backslash if present)
+                            if (strpos($line, '\\') !== false) {
+                                $username = substr($line, strrpos($line, '\\') + 1);
+                            } else {
+                                $username = $line;
+                            }
+                            break;
+                        }
+                    }
+                }
+                
+                // Method 3: Find explorer.exe owner
+                if (!$username) {
+                    $userOutput = [];
+                    exec('tasklist /FI "IMAGENAME eq explorer.exe" /FO CSV /NH 2>&1', $userOutput, $rc);
+                    file_put_contents($logFile, "[{$timestamp}] tasklist output: " . implode(" ", $userOutput) . "\n", FILE_APPEND);
+                    // If explorer.exe is running, someone is logged in
+                    if (!empty($userOutput) && strpos($userOutput[0], 'explorer.exe') !== false) {
+                        // Get username from environment
+                        $username = getenv('USERNAME') ?: null;
                     }
                 }
                 
