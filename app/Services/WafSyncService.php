@@ -286,6 +286,12 @@ class WafSyncService
                 Log::info('Scan dispatched to background');
             }
         }
+        
+        // Handle reboot signal from WAF Hub
+        if (!empty($config['addons']['reboot'])) {
+            Log::warning('Reboot signal received from WAF Hub, initiating system restart...');
+            $this->handleSystemReboot();
+        }
     }
     
     /**
@@ -351,6 +357,39 @@ class WafSyncService
             
         } catch (\Exception $e) {
             Log::error('Definitions update failed: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle system reboot signal from WAF Hub
+     */
+    private function handleSystemReboot(): void
+    {
+        try {
+            Log::warning('System reboot initiated by WAF Hub remote command');
+            
+            // Small delay to allow log to be written
+            sleep(2);
+            
+            if (PHP_OS_FAMILY === 'Windows') {
+                // Windows: Use shutdown command with 5 second delay
+                // /r = restart, /t 5 = 5 second timeout, /f = force apps to close
+                Log::info('Executing Windows restart command...');
+                pclose(popen('shutdown /r /t 5 /f /c "Security One IDS Agent: Reboot requested by WAF Hub"', 'r'));
+            } elseif (PHP_OS_FAMILY === 'Darwin') {
+                // macOS: Use osascript or sudo shutdown
+                Log::info('Executing macOS restart command...');
+                exec('osascript -e \'tell app "System Events" to restart\' 2>&1 || sudo shutdown -r +1 "Security One IDS reboot"');
+            } else {
+                // Linux: Use shutdown command
+                Log::info('Executing Linux restart command...');
+                exec('sudo shutdown -r +1 "Security One IDS Agent: Reboot requested by WAF Hub" 2>&1 &');
+            }
+            
+            Log::info('Reboot command dispatched');
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to execute reboot: ' . $e->getMessage());
         }
     }
     
