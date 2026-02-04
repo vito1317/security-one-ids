@@ -59,6 +59,18 @@ Write-Host "✅ PHP is installed" -ForegroundColor Green
 # Enable required PHP extensions
 Write-Host "🔧 Enabling required PHP extensions..." -ForegroundColor Cyan
 
+# Get list of already loaded (compiled-in) extensions to avoid duplicate loading
+Write-Host "Detecting already loaded extensions..." -ForegroundColor Yellow
+$loadedExtensions = @()
+try {
+    # Use 2>&1 to capture both stdout and stderr, then filter
+    $phpModulesOutput = & php -m 2>&1
+    $loadedExtensions = $phpModulesOutput | Where-Object { $_ -is [string] -and $_ -notmatch "^PHP Warning" -and $_.Trim() -ne "" -and $_ -notmatch "^\[" } | ForEach-Object { $_.Trim().ToLower() }
+    Write-Host "  Found $($loadedExtensions.Count) loaded extensions" -ForegroundColor Gray
+} catch {
+    Write-Host "  ⚠️ Could not detect loaded extensions, will check php.ini only" -ForegroundColor Yellow
+}
+
 # Find php.ini location
 $phpIniPath = & php -i 2>$null | Select-String "Loaded Configuration File" | ForEach-Object { $_.ToString().Split("=>")[1].Trim() }
 if (-not $phpIniPath -or $phpIniPath -eq "(none)") {
@@ -101,6 +113,19 @@ if ($phpIniPath -and (Test-Path $phpIniPath)) {
     $modified = $false
     
     foreach ($ext in $extensions) {
+        # First check if extension is already loaded (compiled-in)
+        if ($loadedExtensions -contains $ext.ToLower()) {
+            Write-Host "  ✓ Extension already loaded (built-in): $ext" -ForegroundColor Gray
+            
+            # Also comment out any existing extension line to prevent duplicate loading
+            if ($content -match "^\s*extension\s*=\s*$ext" -or $content -match "(?m)^extension\s*=\s*$ext") {
+                $content = $content -replace "(?m)^(\s*)extension(\s*=\s*$ext)", "`$1;extension`$2"
+                $modified = $true
+                Write-Host "    → Commented out duplicate in php.ini" -ForegroundColor Yellow
+            }
+            continue
+        }
+        
         # Check if extension is commented out
         if ($content -match ";\s*extension\s*=\s*$ext") {
             $content = $content -replace ";\s*extension\s*=\s*$ext", "extension=$ext"
