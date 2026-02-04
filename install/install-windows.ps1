@@ -179,37 +179,67 @@ if (-not $phpIniPath) {
 if ($phpIniPath -and (Test-Path $phpIniPath)) {
     Write-Host "Found php.ini: $phpIniPath" -ForegroundColor Yellow
     
-    # Extensions to enable
-    $extensions = @("fileinfo", "curl", "mbstring", "openssl", "pdo_sqlite", "sqlite3")
+    # Extensions to enable (Windows uses php_xxx format for DLLs)
+    # Map: short_name => windows_dll_name
+    $extensionMap = @{
+        "fileinfo" = "php_fileinfo"
+        "curl" = "php_curl"
+        "mbstring" = "php_mbstring"
+        "openssl" = "php_openssl"
+        "pdo_sqlite" = "php_pdo_sqlite"
+        "sqlite3" = "php_sqlite3"
+    }
+    
     $content = Get-Content $phpIniPath -Raw
     $modified = $false
+    $phpDir = Split-Path $phpIniPath -Parent
     
-    foreach ($ext in $extensions) {
+    foreach ($ext in $extensionMap.Keys) {
+        $winExt = $extensionMap[$ext]
+        
         # First check if extension is already loaded (compiled-in)
         if ($loadedExtensions -contains $ext.ToLower()) {
             Write-Host "  ✓ Extension already loaded (built-in): $ext" -ForegroundColor Gray
-            
-            # Also comment out any existing extension line to prevent duplicate loading
-            if ($content -match "^\s*extension\s*=\s*$ext" -or $content -match "(?m)^extension\s*=\s*$ext") {
-                $content = $content -replace "(?m)^(\s*)extension(\s*=\s*$ext)", "`$1;extension`$2"
-                $modified = $true
-                Write-Host "    → Commented out duplicate in php.ini" -ForegroundColor Yellow
-            }
             continue
         }
         
-        # Check if extension is commented out
-        if ($content -match ";\s*extension\s*=\s*$ext") {
-            $content = $content -replace ";\s*extension\s*=\s*$ext", "extension=$ext"
+        # Check both short and Windows DLL name patterns
+        $patterns = @(
+            "extension\s*=\s*$ext",
+            "extension\s*=\s*$winExt",
+            "extension\s*=\s*${winExt}\.dll"
+        )
+        
+        $isEnabled = $false
+        $isCommented = $false
+        
+        foreach ($pat in $patterns) {
+            if ($content -match "(?m)^\s*$pat") {
+                $isEnabled = $true
+                break
+            }
+            if ($content -match "(?m)^\s*;\s*$pat") {
+                $isCommented = $true
+            }
+        }
+        
+        if ($isEnabled) {
+            Write-Host "  ✓ Extension already enabled: $ext" -ForegroundColor Gray
+        } elseif ($isCommented) {
+            # Uncomment the extension
+            $content = $content -replace "(?m)^(\s*);(\s*extension\s*=\s*(?:$ext|$winExt|${winExt}\.dll))", "`$1`$2"
             $modified = $true
             Write-Host "  ✅ Enabled extension: $ext" -ForegroundColor Green
-        } elseif ($content -notmatch "extension\s*=\s*$ext") {
-            # Extension not found, add it
-            $content = $content + "`nextension=$ext"
-            $modified = $true
-            Write-Host "  ✅ Added extension: $ext" -ForegroundColor Green
         } else {
-            Write-Host "  ✓ Extension already enabled: $ext" -ForegroundColor Gray
+            # Check if DLL exists before adding
+            $dllPath = "$phpDir\ext\${winExt}.dll"
+            if (Test-Path $dllPath) {
+                $content = $content + "`nextension=$winExt"
+                $modified = $true
+                Write-Host "  ✅ Added extension: $ext (${winExt}.dll found)" -ForegroundColor Green
+            } else {
+                Write-Host "  ⚠️ Extension DLL not found: $dllPath" -ForegroundColor Yellow
+            }
         }
     }
     
