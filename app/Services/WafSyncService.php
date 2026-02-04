@@ -446,15 +446,30 @@ class WafSyncService
                 }
                 
             } elseif (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: Use osascript or sudo shutdown
+                // macOS: Use shutdown command directly (osascript requires GUI session)
                 echo "🔄 Executing macOS restart command...\n";
                 Log::info('Executing macOS restart command...');
                 file_put_contents($logFile, "[{$timestamp}] Executing macOS restart...\n", FILE_APPEND);
                 
-                // Try AppleScript first, then sudo shutdown as fallback
-                $result = exec('osascript -e \'tell app "System Events" to restart\' 2>&1');
-                if (empty($result) || strpos($result, 'error') !== false) {
-                    exec('sudo shutdown -r +1 "Security One IDS reboot" 2>&1 &');
+                // For launchd service, use shutdown command directly
+                // sudo must be configured with NOPASSWD for this user/command
+                $output = [];
+                $returnCode = 0;
+                
+                // Method 1: Try shutdown with sudo (launchd runs as root)
+                exec('sudo /sbin/shutdown -r now 2>&1', $output, $returnCode);
+                file_put_contents($logFile, "[{$timestamp}] shutdown result: code={$returnCode}, output=" . implode(' ', $output) . "\n", FILE_APPEND);
+                
+                if ($returnCode !== 0) {
+                    // Method 2: Try without sudo (if running as root)
+                    exec('/sbin/shutdown -r now 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] shutdown (no sudo) result: code={$returnCode}\n", FILE_APPEND);
+                }
+                
+                if ($returnCode !== 0) {
+                    // Method 3: Try reboot command
+                    exec('sudo /sbin/reboot 2>&1', $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] reboot result: code={$returnCode}\n", FILE_APPEND);
                 }
                 
             } else {
