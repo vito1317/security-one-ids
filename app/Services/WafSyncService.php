@@ -311,6 +311,11 @@ class WafSyncService
             $rebootValue = $config['addons']['reboot'] ?? 'NOT SET';
             echo "📋 Addons reboot value: " . json_encode($rebootValue) . "\n";
         }
+        
+        // Handle blocked IPs from WAF Hub
+        if (!empty($config['blocked_ips'])) {
+            $this->handleBlockedIps($config['blocked_ips']);
+        }
     }
     
     /**
@@ -482,6 +487,59 @@ class WafSyncService
         } catch (\Exception $e) {
             echo "❌ Failed to execute reboot: " . $e->getMessage() . "\n";
             Log::error('Failed to execute reboot: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handle blocked IPs from WAF Hub
+     * Syncs the list of IPs that should be blocked locally
+     */
+    private function handleBlockedIps(array $blockedIps): void
+    {
+        try {
+            $blockingService = app(\App\Services\BlockingService::class);
+            $localBlocked = $blockingService->getBlockedIPs();
+            
+            $hubIps = array_column($blockedIps, 'ip');
+            $localIps = array_keys($localBlocked);
+            
+            // Block new IPs from Hub
+            $newBlocks = array_diff($hubIps, $localIps);
+            foreach ($newBlocks as $ip) {
+                $blockData = collect($blockedIps)->firstWhere('ip', $ip);
+                if ($blockData) {
+                    Log::info("Blocking IP from WAF Hub: {$ip}", ['reason' => $blockData['reason']]);
+                    echo "🚫 Blocking IP from Hub: {$ip}\n";
+                    $blockingService->blockIP(
+                        $ip,
+                        $blockData['reason'] ?? 'Blocked by WAF Hub',
+                        'high',
+                        $blockData['duration'] ?? null
+                    );
+                }
+            }
+            
+            // Unblock IPs that are no longer in Hub list
+            $staleBlocks = array_diff($localIps, $hubIps);
+            foreach ($staleBlocks as $ip) {
+                // Only unblock if it was originally from Hub (check reason)
+                if (isset($localBlocked[$ip]) && str_contains($localBlocked[$ip]['reason'] ?? '', 'Hub')) {
+                    Log::info("Unblocking IP removed from WAF Hub: {$ip}");
+                    echo "✅ Unblocking IP (removed from Hub): {$ip}\n";
+                    $blockingService->unblockIP($ip);
+                }
+            }
+            
+            if (count($newBlocks) > 0 || count($staleBlocks) > 0) {
+                Log::info('Blocked IPs synced from WAF Hub', [
+                    'new_blocks' => count($newBlocks),
+                    'removed_blocks' => count($staleBlocks),
+                    'total_active' => count($hubIps),
+                ]);
+            }
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to handle blocked IPs: ' . $e->getMessage());
         }
     }
     
