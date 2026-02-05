@@ -1385,7 +1385,220 @@ class WafSyncService
             'memory_usage' => memory_get_usage(true),
             'load_average' => function_exists('sys_getloadavg') ? sys_getloadavg() : [],
             'uptime' => $this->getUptime(),
+            // Enhanced system metrics for WAF Hub display
+            'cpu' => $this->getCpuUsage(),
+            'memory' => $this->getMemoryUsage(),
+            'disk' => $this->getDiskUsage(),
+            'network' => $this->getNetworkUsage(),
         ];
+    }
+
+    /**
+     * Get CPU usage percentage
+     */
+    protected function getCpuUsage(): array
+    {
+        $percent = 0;
+        
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Windows: Use wmic
+            $output = [];
+            @exec('wmic cpu get loadpercentage 2>&1', $output);
+            foreach ($output as $line) {
+                $line = trim($line);
+                if (is_numeric($line)) {
+                    $percent = (float) $line;
+                    break;
+                }
+            }
+        } elseif (PHP_OS_FAMILY === 'Darwin') {
+            // macOS: Use top or ps
+            $output = @shell_exec("ps -A -o %cpu | awk '{s+=$1} END {print s}'");
+            if ($output) {
+                $percent = min(100, (float) trim($output));
+            }
+        } else {
+            // Linux: Read from /proc/stat
+            if (file_exists('/proc/stat')) {
+                $stat1 = file_get_contents('/proc/stat');
+                usleep(100000); // 100ms
+                $stat2 = file_get_contents('/proc/stat');
+                
+                preg_match('/^cpu\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m', $stat1, $m1);
+                preg_match('/^cpu\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m', $stat2, $m2);
+                
+                if ($m1 && $m2) {
+                    $total1 = $m1[1] + $m1[2] + $m1[3] + $m1[4];
+                    $total2 = $m2[1] + $m2[2] + $m2[3] + $m2[4];
+                    $idle1 = $m1[4];
+                    $idle2 = $m2[4];
+                    
+                    $totalDiff = $total2 - $total1;
+                    $idleDiff = $idle2 - $idle1;
+                    
+                    if ($totalDiff > 0) {
+                        $percent = round((1 - $idleDiff / $totalDiff) * 100, 1);
+                    }
+                }
+            }
+        }
+        
+        return ['percent' => $percent];
+    }
+
+    /**
+     * Get memory usage
+     */
+    protected function getMemoryUsage(): array
+    {
+        $total = 0;
+        $used = 0;
+        $percent = 0;
+        
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Windows: Use wmic
+            $output = [];
+            @exec('wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /value 2>&1', $output);
+            $values = [];
+            foreach ($output as $line) {
+                if (preg_match('/^(\w+)=(\d+)/', trim($line), $m)) {
+                    $values[$m[1]] = (int) $m[2] * 1024; // KB to bytes
+                }
+            }
+            $total = $values['TotalVisibleMemorySize'] ?? 0;
+            $free = $values['FreePhysicalMemory'] ?? 0;
+            $used = $total - $free;
+        } elseif (PHP_OS_FAMILY === 'Darwin') {
+            // macOS: Use vm_stat
+            $output = @shell_exec('vm_stat');
+            $pageSize = 4096;
+            if (preg_match('/page size of (\d+) bytes/', @shell_exec('vm_stat'), $m)) {
+                $pageSize = (int) $m[1];
+            }
+            if (preg_match('/Pages free:\s+(\d+)/', $output, $m)) {
+                $free = (int) $m[1] * $pageSize;
+            }
+            // Get total from sysctl
+            $totalOutput = @shell_exec('sysctl -n hw.memsize');
+            $total = $totalOutput ? (int) trim($totalOutput) : 0;
+            $used = $total - ($free ?? 0);
+        } else {
+            // Linux: Read from /proc/meminfo
+            if (file_exists('/proc/meminfo')) {
+                $meminfo = file_get_contents('/proc/meminfo');
+                preg_match('/MemTotal:\s+(\d+)/', $meminfo, $totalMatch);
+                preg_match('/MemAvailable:\s+(\d+)/', $meminfo, $availMatch);
+                
+                $total = isset($totalMatch[1]) ? (int) $totalMatch[1] * 1024 : 0;
+                $available = isset($availMatch[1]) ? (int) $availMatch[1] * 1024 : 0;
+                $used = $total - $available;
+            }
+        }
+        
+        if ($total > 0) {
+            $percent = round(($used / $total) * 100, 1);
+        }
+        
+        return [
+            'total' => $total,
+            'used' => $used,
+            'percent' => $percent,
+        ];
+    }
+
+    /**
+     * Get disk usage
+     */
+    protected function getDiskUsage(): array
+    {
+        $path = PHP_OS_FAMILY === 'Windows' ? 'C:' : '/';
+        
+        $total = @disk_total_space($path) ?: 0;
+        $free = @disk_free_space($path) ?: 0;
+        $used = $total - $free;
+        $percent = $total > 0 ? round(($used / $total) * 100, 1) : 0;
+        
+        return [
+            'total' => $total,
+            'used' => $used,
+            'percent' => $percent,
+        ];
+    }
+
+    /**
+     * Get network usage (bytes sent/recv per second)
+     */
+    protected function getNetworkUsage(): array
+    {
+        static $lastStats = null;
+        static $lastTime = null;
+        
+        $bytesSent = 0;
+        $bytesRecv = 0;
+        
+        $currentStats = $this->getNetworkStats();
+        $currentTime = microtime(true);
+        
+        if ($lastStats !== null && $lastTime !== null) {
+            $timeDiff = $currentTime - $lastTime;
+            if ($timeDiff > 0) {
+                $bytesSent = (int) (($currentStats['sent'] - $lastStats['sent']) / $timeDiff);
+                $bytesRecv = (int) (($currentStats['recv'] - $lastStats['recv']) / $timeDiff);
+            }
+        }
+        
+        $lastStats = $currentStats;
+        $lastTime = $currentTime;
+        
+        return [
+            'bytes_sent' => max(0, $bytesSent),
+            'bytes_recv' => max(0, $bytesRecv),
+        ];
+    }
+
+    /**
+     * Get raw network statistics
+     */
+    protected function getNetworkStats(): array
+    {
+        $sent = 0;
+        $recv = 0;
+        
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Windows: Use netstat
+            $output = [];
+            @exec('netstat -e 2>&1', $output);
+            foreach ($output as $line) {
+                if (preg_match('/Bytes\s+(\d+)\s+(\d+)/', $line, $m)) {
+                    $recv = (int) $m[1];
+                    $sent = (int) $m[2];
+                    break;
+                }
+            }
+        } elseif (PHP_OS_FAMILY === 'Darwin') {
+            // macOS: Use netstat
+            $output = @shell_exec('netstat -ib 2>&1');
+            if ($output && preg_match('/en0.*?(\d+)\s+\d+\s+\d+\s+(\d+)/m', $output, $m)) {
+                $recv = (int) $m[1];
+                $sent = (int) $m[2];
+            }
+        } else {
+            // Linux: Read from /proc/net/dev
+            if (file_exists('/proc/net/dev')) {
+                $content = file_get_contents('/proc/net/dev');
+                $lines = explode("\n", $content);
+                foreach ($lines as $line) {
+                    // Skip loopback
+                    if (strpos($line, 'lo:') !== false) continue;
+                    if (preg_match('/^\s*\w+:\s*(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)/', $line, $m)) {
+                        $recv += (int) $m[1];
+                        $sent += (int) $m[2];
+                    }
+                }
+            }
+        }
+        
+        return ['sent' => $sent, 'recv' => $recv];
     }
 
     /**
