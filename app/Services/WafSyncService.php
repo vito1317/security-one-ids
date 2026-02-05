@@ -1620,42 +1620,66 @@ class WafSyncService
         $lastStats = null;
         $lastTime = null;
         
+        Log::debug('getNetworkUsage: starting', ['cacheFile' => $cacheFile, 'exists' => file_exists($cacheFile)]);
+        
         if (file_exists($cacheFile)) {
             $cached = json_decode(file_get_contents($cacheFile), true);
             if ($cached && isset($cached['stats']) && isset($cached['time'])) {
                 $lastStats = $cached['stats'];
                 $lastTime = $cached['time'];
+                Log::debug('getNetworkUsage: cached data loaded', [
+                    'lastStats' => $lastStats,
+                    'lastTime' => $lastTime,
+                ]);
             }
         }
         
         $currentStats = $this->getNetworkStats();
         $currentTime = microtime(true);
         
+        Log::debug('getNetworkUsage: current stats', [
+            'currentStats' => $currentStats,
+            'currentTime' => $currentTime,
+        ]);
+        
         if ($lastStats !== null && $lastTime !== null) {
             $timeDiff = $currentTime - $lastTime;
+            Log::debug('getNetworkUsage: time diff', ['timeDiff' => $timeDiff]);
+            
             // Only calculate if time diff is reasonable (1-600 seconds)
             if ($timeDiff > 1 && $timeDiff < 600) {
                 $sentDiff = $currentStats['sent'] - $lastStats['sent'];
                 $recvDiff = $currentStats['recv'] - $lastStats['recv'];
                 
+                Log::debug('getNetworkUsage: diffs', ['sentDiff' => $sentDiff, 'recvDiff' => $recvDiff]);
+                
                 // Handle counter reset (system reboot)
                 if ($sentDiff >= 0 && $recvDiff >= 0) {
                     $bytesSent = (int) ($sentDiff / $timeDiff);
                     $bytesRecv = (int) ($recvDiff / $timeDiff);
+                    Log::debug('getNetworkUsage: calculated rates', ['bytesSent' => $bytesSent, 'bytesRecv' => $bytesRecv]);
                 }
+            } else {
+                Log::debug('getNetworkUsage: timeDiff out of range, skipping calculation');
             }
+        } else {
+            Log::debug('getNetworkUsage: no previous data, first run');
         }
         
         // Save current stats for next call
-        file_put_contents($cacheFile, json_encode([
+        $writeResult = file_put_contents($cacheFile, json_encode([
             'stats' => $currentStats,
             'time' => $currentTime,
         ]));
+        Log::debug('getNetworkUsage: saved cache', ['writeResult' => $writeResult]);
         
-        return [
+        $result = [
             'bytes_sent' => max(0, $bytesSent),
             'bytes_recv' => max(0, $bytesRecv),
         ];
+        Log::debug('getNetworkUsage: returning', $result);
+        
+        return $result;
     }
 
     /**
