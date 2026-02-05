@@ -1469,19 +1469,44 @@ class WafSyncService
             $free = $values['FreePhysicalMemory'] ?? 0;
             $used = $total - $free;
         } elseif (PHP_OS_FAMILY === 'Darwin') {
-            // macOS: Use vm_stat
-            $output = @shell_exec('vm_stat');
+            // macOS: Use vm_stat and sysctl
+            $vmstat = @shell_exec('vm_stat 2>/dev/null');
+            
+            // Get page size (typically 4096 or 16384 on ARM Macs)
             $pageSize = 4096;
-            if (preg_match('/page size of (\d+) bytes/', @shell_exec('vm_stat'), $m)) {
+            if ($vmstat && preg_match('/page size of (\d+) bytes/', $vmstat, $m)) {
                 $pageSize = (int) $m[1];
             }
-            if (preg_match('/Pages free:\s+(\d+)/', $output, $m)) {
-                $free = (int) $m[1] * $pageSize;
-            }
-            // Get total from sysctl
-            $totalOutput = @shell_exec('sysctl -n hw.memsize');
+            
+            // Get total memory from sysctl
+            $totalOutput = @shell_exec('sysctl -n hw.memsize 2>/dev/null');
             $total = $totalOutput ? (int) trim($totalOutput) : 0;
-            $used = $total - ($free ?? 0);
+            
+            if ($vmstat && $total > 0) {
+                // Parse vm_stat - note: output uses "." at end of numbers
+                $stats = [];
+                preg_match_all('/^(.+?):\s+([\d.]+)/m', $vmstat, $matches, PREG_SET_ORDER);
+                foreach ($matches as $match) {
+                    $key = trim($match[1]);
+                    $value = (int) str_replace('.', '', $match[2]);
+                    $stats[$key] = $value;
+                }
+                
+                // Calculate used memory: active + wired + compressed
+                $activePages = $stats['Pages active'] ?? 0;
+                $wiredPages = $stats['Pages wired down'] ?? 0;
+                $compressedPages = $stats['Pages occupied by compressor'] ?? 0;
+                
+                $usedPages = $activePages + $wiredPages + $compressedPages;
+                $used = $usedPages * $pageSize;
+            } else {
+                // Fallback: use top command
+                $topOutput = @shell_exec("top -l 1 -s 0 | grep 'PhysMem' 2>/dev/null");
+                if ($topOutput && preg_match('/(\d+)([MG])\s+used/i', $topOutput, $m)) {
+                    $multiplier = strtoupper($m[2]) === 'G' ? 1073741824 : 1048576;
+                    $used = (int) $m[1] * $multiplier;
+                }
+            }
         } else {
             // Linux: Read from /proc/meminfo
             if (file_exists('/proc/meminfo')) {
@@ -1530,25 +1555,45 @@ class WafSyncService
      */
     protected function getNetworkUsage(): array
     {
-        static $lastStats = null;
-        static $lastTime = null;
-        
         $bytesSent = 0;
         $bytesRecv = 0;
+        
+        // Use file cache to persist between heartbeats
+        $cacheFile = storage_path('app/network_stats_cache.json');
+        $lastStats = null;
+        $lastTime = null;
+        
+        if (file_exists($cacheFile)) {
+            $cached = json_decode(file_get_contents($cacheFile), true);
+            if ($cached && isset($cached['stats']) && isset($cached['time'])) {
+                $lastStats = $cached['stats'];
+                $lastTime = $cached['time'];
+            }
+        }
         
         $currentStats = $this->getNetworkStats();
         $currentTime = microtime(true);
         
         if ($lastStats !== null && $lastTime !== null) {
             $timeDiff = $currentTime - $lastTime;
-            if ($timeDiff > 0) {
-                $bytesSent = (int) (($currentStats['sent'] - $lastStats['sent']) / $timeDiff);
-                $bytesRecv = (int) (($currentStats['recv'] - $lastStats['recv']) / $timeDiff);
+            // Only calculate if time diff is reasonable (1-600 seconds)
+            if ($timeDiff > 1 && $timeDiff < 600) {
+                $sentDiff = $currentStats['sent'] - $lastStats['sent'];
+                $recvDiff = $currentStats['recv'] - $lastStats['recv'];
+                
+                // Handle counter reset (system reboot)
+                if ($sentDiff >= 0 && $recvDiff >= 0) {
+                    $bytesSent = (int) ($sentDiff / $timeDiff);
+                    $bytesRecv = (int) ($recvDiff / $timeDiff);
+                }
             }
         }
         
-        $lastStats = $currentStats;
-        $lastTime = $currentTime;
+        // Save current stats for next call
+        file_put_contents($cacheFile, json_encode([
+            'stats' => $currentStats,
+            'time' => $currentTime,
+        ]));
         
         return [
             'bytes_sent' => max(0, $bytesSent),
