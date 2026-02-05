@@ -27,6 +27,11 @@ cd "$INSTALL_DIR" || exit 1
 echo "$(date): Security One IDS wrapper started (PHP: $PHP_BIN)" >> "$LOG_DIR/wrapper.log"
 
 while true; do
+    echo "$(date): Running WAF sync (heartbeat)..." >> "$LOG_DIR/wrapper.log"
+    
+    # Send heartbeat to WAF Hub with system stats including network
+    "$PHP_BIN" "$INSTALL_DIR/artisan" waf:sync >> "$LOG_DIR/output.log" 2>&1
+    
     echo "$(date): Running security scan..." >> "$LOG_DIR/wrapper.log"
     
     # Run the scan with -v for verbose output, capture ALL output
