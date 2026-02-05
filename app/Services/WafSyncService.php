@@ -1377,6 +1377,46 @@ class WafSyncService
     }
 
     /**
+     * Get the last git pull/fetch time from FETCH_HEAD or .git/refs/heads/main
+     */
+    protected function getLastGitPullTime(): ?string
+    {
+        $basePath = base_path();
+        
+        // Check FETCH_HEAD (updated on git fetch/pull)
+        $fetchHead = "{$basePath}/.git/FETCH_HEAD";
+        if (file_exists($fetchHead)) {
+            $mtime = filemtime($fetchHead);
+            if ($mtime) {
+                return date('Y-m-d H:i:s', $mtime);
+            }
+        }
+        
+        // Fallback: check refs/heads/main or master
+        $refs = [
+            "{$basePath}/.git/refs/heads/main",
+            "{$basePath}/.git/refs/heads/master",
+        ];
+        
+        foreach ($refs as $ref) {
+            if (file_exists($ref)) {
+                $mtime = filemtime($ref);
+                if ($mtime) {
+                    return date('Y-m-d H:i:s', $mtime);
+                }
+            }
+        }
+        
+        // Last fallback: use git log to get last commit time
+        $output = @shell_exec("cd {$basePath} && git log -1 --format=%ci 2>/dev/null");
+        if ($output) {
+            return trim($output);
+        }
+        
+        return null;
+    }
+
+    /**
      * Get system information
      */
     protected function getSystemInfo(): array
