@@ -595,22 +595,98 @@ Write-Host "✅ Database ready" -ForegroundColor Green
 # Create Windows Service
 Write-Host "`n🔧 Creating Windows Services..." -ForegroundColor Cyan
 
-# Create scan service script (runs every 5 minutes)
+# Create scan service script with watchdog (runs every 5 minutes)
 $ScanServiceScript = @"
 `$ErrorActionPreference = 'Continue'
 Set-Location '$InstallDir'
+
+# Watchdog Configuration
+`$maxConsecutiveFailures = 5
+`$consecutiveFailures = 0
+`$watchdogLog = '$DataDir\logs\watchdog.log'
+`$scanLog = '$DataDir\logs\scan.log'
+
+# Find PHP path
+`$phpPath = 'php'
+`$possiblePhpPaths = @(
+    'C:\php\php.exe',
+    'C:\tools\php\php.exe',
+    'C:\Program Files\PHP\php.exe',
+    'C:\xampp\php\php.exe',
+    'C:\xampp-new\php\php.exe',
+    (Get-Command php -ErrorAction SilentlyContinue).Source
+)
+foreach (`$p in `$possiblePhpPaths) {
+    if (`$p -and (Test-Path `$p -ErrorAction SilentlyContinue)) {
+        `$phpPath = `$p
+        break
+    }
+}
+
+function Write-WatchdogLog {
+    param([string]`$Message, [string]`$Level = 'INFO')
+    `$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -Path `$watchdogLog -Value "[`$timestamp] [SCAN] [`$Level] `$Message" -ErrorAction SilentlyContinue
+}
+
+Write-WatchdogLog "=== Scan Watchdog Starting ===" 'INFO'
+
 while (`$true) {
-    php artisan desktop:scan --full 2>&1 | Out-File -FilePath '$DataDir\logs\scan.log' -Append
+    try {
+        `$startTime = Get-Date
+        `$job = Start-Job -ScriptBlock {
+            param(`$php, `$dir)
+            Set-Location `$dir
+            & `$php artisan desktop:scan --full 2>&1
+        } -ArgumentList `$phpPath, '$InstallDir'
+        
+        # Wait up to 10 minutes for scan completion
+        `$completed = Wait-Job `$job -Timeout 600
+        `$duration = [int](New-TimeSpan -Start `$startTime).TotalSeconds
+        
+        if (`$completed) {
+            `$output = Receive-Job `$job | Out-String
+            `$consecutiveFailures = 0
+            Add-Content -Path `$scanLog -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Scan completed in `${duration}s"
+            if (`$output.Trim()) {
+                Add-Content -Path `$scanLog -Value `$output.Trim()
+            }
+        } else {
+            Stop-Job `$job -ErrorAction SilentlyContinue
+            `$consecutiveFailures++
+            Write-WatchdogLog "TIMEOUT after `${duration}s (attempt `$consecutiveFailures/`$maxConsecutiveFailures)" 'WARN'
+        }
+        Remove-Job `$job -Force -ErrorAction SilentlyContinue
+        
+    } catch {
+        `$consecutiveFailures++
+        Write-WatchdogLog "CRASH: `$_ (attempt `$consecutiveFailures/`$maxConsecutiveFailures)" 'ERROR'
+    }
+    
+    if (`$consecutiveFailures -ge `$maxConsecutiveFailures) {
+        Write-WatchdogLog "Max failures reached. Cleaning up and restarting..." 'CRITICAL'
+        `$consecutiveFailures = 0
+        Get-Process -Name php, php-cgi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 60
+    }
+    
+    # Wait 5 minutes before next scan
     Start-Sleep -Seconds 300
 }
 "@
 
 $ScanServiceScript | Out-File -FilePath "$InstallDir\run-scan-service.ps1" -Encoding UTF8
 
-# Create sync service script (runs every minute for heartbeat with error handling)
+# Create sync service script with enhanced watchdog and crash recovery
 $SyncServiceScript = @"
 `$ErrorActionPreference = 'Continue'
 Set-Location '$InstallDir'
+
+# Watchdog Configuration
+`$maxConsecutiveFailures = 10
+`$consecutiveFailures = 0
+`$watchdogLog = '$DataDir\logs\watchdog.log'
+`$syncLog = '$DataDir\logs\sync.log'
 
 # Find PHP path (SYSTEM account may not have PATH set correctly)
 `$phpPath = 'php'
@@ -629,12 +705,35 @@ foreach (`$p in `$possiblePhpPaths) {
     }
 }
 
+function Write-WatchdogLog {
+    param([string]`$Message, [string]`$Level = 'INFO')
+    `$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    `$logEntry = "[`$timestamp] [`$Level] `$Message"
+    Add-Content -Path `$watchdogLog -Value `$logEntry -ErrorAction SilentlyContinue
+}
+
+function Kill-HungPhpProcesses {
+    # Kill any PHP processes running longer than 5 minutes (300 seconds)
+    Get-Process -Name php, php-cgi -ErrorAction SilentlyContinue | Where-Object {
+        (New-TimeSpan -Start `$_.StartTime).TotalSeconds -gt 300
+    } | ForEach-Object {
+        Write-WatchdogLog "Killing hung PHP process (PID: `$(`$_.Id), running for `$([int](New-TimeSpan -Start `$_.StartTime).TotalSeconds)s)" 'WARN'
+        Stop-Process -Id `$_.Id -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Log startup
-Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Sync service starting (PHP: `$phpPath)..."
+Write-WatchdogLog "=== Sync Watchdog Starting ===" 'INFO'
+Write-WatchdogLog "PHP Path: `$phpPath" 'INFO'
+Write-WatchdogLog "Install Dir: $InstallDir" 'INFO'
 
 while (`$true) {
     try {
-        # Run sync command with timeout
+        # Kill any hung PHP processes before starting new one
+        Kill-HungPhpProcesses
+        
+        # Run sync command with timeout using job
+        `$startTime = Get-Date
         `$job = Start-Job -ScriptBlock {
             param(`$php, `$dir)
             Set-Location `$dir
@@ -643,20 +742,51 @@ while (`$true) {
         
         # Wait up to 2 minutes for completion
         `$completed = Wait-Job `$job -Timeout 120
+        `$duration = [int](New-TimeSpan -Start `$startTime).TotalSeconds
         
         if (`$completed) {
             `$output = Receive-Job `$job | Out-String
-            if (`$output.Trim()) {
-                Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$(`$output.Trim())"
+            `$exitState = `$job.State
+            
+            if (`$exitState -eq 'Completed' -and `$job.ChildJobs[0].JobStateInfo.State -eq 'Completed') {
+                # Success - reset failure counter
+                `$consecutiveFailures = 0
+                if (`$output.Trim()) {
+                    Add-Content -Path `$syncLog -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$(`$output.Trim())"
+                }
+            } else {
+                # Job completed but with error
+                `$consecutiveFailures++
+                Write-WatchdogLog "Sync failed (attempt `$consecutiveFailures/`$maxConsecutiveFailures): `$(`$output.Trim())" 'ERROR'
             }
         } else {
+            # Timeout
             Stop-Job `$job -ErrorAction SilentlyContinue
-            Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] TIMEOUT: Sync took too long, killed"
+            `$consecutiveFailures++
+            Write-WatchdogLog "TIMEOUT after `${duration}s (attempt `$consecutiveFailures/`$maxConsecutiveFailures)" 'WARN'
+            Add-Content -Path `$syncLog -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] TIMEOUT: Sync took too long (`${duration}s), killed"
         }
         Remove-Job `$job -Force -ErrorAction SilentlyContinue
+        
     } catch {
-        Add-Content -Path '$DataDir\logs\sync.log' -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ERROR: `$_"
+        `$consecutiveFailures++
+        Write-WatchdogLog "CRASH: `$_ (attempt `$consecutiveFailures/`$maxConsecutiveFailures)" 'ERROR'
+        Add-Content -Path `$syncLog -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] ERROR: `$_"
     }
+    
+    # Check if we need to restart the entire script
+    if (`$consecutiveFailures -ge `$maxConsecutiveFailures) {
+        Write-WatchdogLog "Max consecutive failures reached (`$maxConsecutiveFailures). Restarting watchdog in 30s..." 'CRITICAL'
+        `$consecutiveFailures = 0
+        
+        # Kill all PHP processes to clean up
+        Get-Process -Name php, php-cgi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        
+        Start-Sleep -Seconds 30
+        Write-WatchdogLog "Watchdog restarted after cleanup" 'INFO'
+    }
+    
+    # Wait before next sync (60 seconds)
     Start-Sleep -Seconds 60
 }
 "@
