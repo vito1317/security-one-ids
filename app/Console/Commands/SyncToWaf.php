@@ -7,7 +7,10 @@ use Illuminate\Console\Command;
 
 class SyncToWaf extends Command
 {
-    protected $signature = 'waf:sync {--register : Force registration}';
+    protected $signature = 'waf:sync 
+        {--register : Force registration}
+        {--once : Run once and exit (for debugging)}
+        {--debug : Show debug information}';
     protected $description = 'Sync this IDS Agent with the central WAF';
 
     public function handle(WafSyncService $wafSync): int
@@ -29,6 +32,38 @@ class SyncToWaf extends Command
                 $this->error('✗ Failed to register with WAF');
                 return 1;
             }
+        }
+
+        // Debug output if requested
+        if ($this->option('debug')) {
+            $this->info('=== DEBUG INFO ===');
+            $this->info('PHP_OS_FAMILY: ' . PHP_OS_FAMILY);
+            $this->info('PHP_OS: ' . PHP_OS);
+            $this->info('php_uname: ' . php_uname('s'));
+            
+            // Test network stats directly
+            $this->info('Testing network stats collection...');
+            if (PHP_OS_FAMILY === 'Darwin') {
+                $this->info('Detected macOS, testing netstat...');
+                $output = shell_exec('netstat -I en0 -b 2>&1');
+                $this->info("netstat -I en0 -b output:\n" . $output);
+                
+                // Parse and show result
+                $lines = explode("\n", trim($output ?? ''));
+                if (isset($lines[1])) {
+                    $parts = preg_split('/\s+/', trim($lines[1]));
+                    $this->info('Parsed columns: ' . count($parts));
+                    if (count($parts) >= 10) {
+                        $this->info("Ibytes (col 6): " . ($parts[6] ?? 'N/A'));
+                        $this->info("Obytes (col 9): " . ($parts[9] ?? 'N/A'));
+                    }
+                }
+            } elseif (PHP_OS_FAMILY === 'Windows') {
+                $this->info('Detected Windows');
+            } else {
+                $this->info('Detected Linux');
+            }
+            $this->info('=== END DEBUG ===');
         }
 
         // Send heartbeat
