@@ -1666,6 +1666,13 @@ class WafSyncService
         $sent = 0;
         $recv = 0;
         
+        // Debug: Log OS detection
+        Log::debug('getNetworkStats: OS detection', [
+            'PHP_OS_FAMILY' => PHP_OS_FAMILY,
+            'PHP_OS' => PHP_OS,
+            'php_uname' => php_uname('s'),
+        ]);
+        
         if (PHP_OS_FAMILY === 'Windows') {
             // Windows: Use netstat
             $output = [];
@@ -1679,20 +1686,24 @@ class WafSyncService
             }
         } elseif (PHP_OS_FAMILY === 'Darwin') {
             // macOS: Try multiple methods to get network bytes
+            Log::debug('macOS network stats: starting collection');
             
             // Method 1: netstat -I for specific interface (most reliable)
             $interfaces = ['en0', 'en1', 'en2', 'en3', 'en4', 'en5'];
             foreach ($interfaces as $iface) {
                 $output = @shell_exec("netstat -I $iface -b 2>/dev/null");
                 if ($output) {
+                    Log::debug("macOS netstat -I $iface output", ['output' => $output]);
                     $lines = explode("\n", trim($output));
                     // Second line contains the data
                     if (isset($lines[1])) {
                         $parts = preg_split('/\s+/', trim($lines[1]));
+                        Log::debug("macOS $iface parsed parts", ['parts' => $parts, 'count' => count($parts)]);
                         // Format: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
                         if (count($parts) >= 10 && is_numeric($parts[6]) && is_numeric($parts[9])) {
                             $recv += (int) $parts[6];
                             $sent += (int) $parts[9];
+                            Log::debug("macOS $iface bytes found", ['recv' => $parts[6], 'sent' => $parts[9]]);
                         }
                     }
                 }
@@ -1700,11 +1711,14 @@ class WafSyncService
             
             // Fallback: parse netstat -ib if we got no data
             if ($sent === 0 && $recv === 0) {
+                Log::debug('macOS: Method 1 failed, trying netstat -ib fallback');
                 $output = @shell_exec('netstat -ib 2>&1');
                 if ($output) {
+                    Log::debug('macOS netstat -ib raw output', ['output' => substr($output, 0, 1000)]);
                     foreach (explode("\n", $output) as $line) {
                         // Match en* interfaces with Link# network
                         if (preg_match('/^(en\d+)\s+\d+\s+<Link#/', $line)) {
+                            Log::debug('macOS matched Link# line', ['line' => $line]);
                             $parts = preg_split('/\s+/', trim($line));
                             // Find numeric columns for bytes (usually columns 6 and 9)
                             $numericCols = [];
@@ -1713,6 +1727,7 @@ class WafSyncService
                                     $numericCols[] = ['idx' => $idx, 'val' => (int)$val];
                                 }
                             }
+                            Log::debug('macOS numeric columns found', ['numericCols' => $numericCols]);
                             // Typically: [mtu, ipkts, ierrs, ibytes, opkts, oerrs, obytes, coll]
                             // ibytes is usually the 4th numeric, obytes is 7th
                             if (count($numericCols) >= 7) {
@@ -1724,12 +1739,8 @@ class WafSyncService
                 }
             }
             
-            // Log for debugging if still zero
-            if ($sent === 0 && $recv === 0) {
-                Log::debug('macOS network stats: no data found', [
-                    'netstat_output' => @shell_exec('netstat -ib 2>&1 | head -20'),
-                ]);
-            }
+            // Log final result
+            Log::debug('macOS network stats final result', ['sent' => $sent, 'recv' => $recv]);
         } else {
             // Linux: Read from /proc/net/dev
             if (file_exists('/proc/net/dev')) {
