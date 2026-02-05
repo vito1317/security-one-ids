@@ -233,7 +233,14 @@ class BlockingService
      */
     public function isBlocked(string $ip): bool
     {
-        return Cache::has(self::CACHE_PREFIX . $ip);
+        // Check cache first
+        if (Cache::has(self::CACHE_PREFIX . $ip)) {
+            return true;
+        }
+        
+        // Also check blocked IPs from WAF Hub config
+        $blockedIps = $this->getBlockedIPs();
+        return isset($blockedIps[$ip]);
     }
 
     /**
@@ -335,12 +342,34 @@ class BlockingService
     }
 
     /**
-     * Get currently blocked IPs
+     * Get currently blocked IPs from WAF Hub config and local cache
      */
     public function getBlockedIPs(): array
     {
-        // This would need a more sophisticated caching strategy
-        // For now, return empty array - implement as needed
-        return [];
+        $blockedIps = [];
+        
+        // Load blocked IPs from WAF Hub config file
+        $configPath = storage_path('app/waf_config.json');
+        if (file_exists($configPath)) {
+            try {
+                $config = json_decode(file_get_contents($configPath), true);
+                if (!empty($config['blocked_ips']) && is_array($config['blocked_ips'])) {
+                    foreach ($config['blocked_ips'] as $blocked) {
+                        $ip = $blocked['ip'] ?? null;
+                        if ($ip) {
+                            $blockedIps[$ip] = [
+                                'reason' => $blocked['reason'] ?? 'Blocked by WAF Hub',
+                                'blocked_at' => $blocked['blocked_at'] ?? null,
+                                'expires_at' => $blocked['expires_at'] ?? null,
+                            ];
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to read blocked IPs from config: ' . $e->getMessage());
+            }
+        }
+        
+        return $blockedIps;
     }
 }

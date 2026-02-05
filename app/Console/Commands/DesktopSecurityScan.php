@@ -368,11 +368,21 @@ class DesktopSecurityScan extends Command
             
             // Send individual alerts for each brute force threat
             if ($bruteForceResult['threat_detected']) {
+                $blockingService = app(\App\Services\BlockingService::class);
+                
                 foreach ($bruteForceResult['threats'] ?? [] as $threat) {
                     // Validate IP address - use 127.0.0.1 for local/unknown IPs
                     $sourceIp = $threat['ip'] ?? null;
                     if (!$sourceIp || $sourceIp === 'unknown' || !filter_var($sourceIp, FILTER_VALIDATE_IP)) {
                         $sourceIp = '127.0.0.1'; // Local attack (e.g., su/sudo failures)
+                    }
+                    
+                    // Skip alert if IP is already blocked
+                    if ($blockingService->isBlocked($sourceIp)) {
+                        if ($this->option('verbose')) {
+                            $this->info("   ⏭️  Skipping alert for blocked IP: {$sourceIp}");
+                        }
+                        continue;
                     }
                     
                     $alertData = [
