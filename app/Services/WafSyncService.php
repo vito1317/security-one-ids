@@ -1678,11 +1678,24 @@ class WafSyncService
                 }
             }
         } elseif (PHP_OS_FAMILY === 'Darwin') {
-            // macOS: Use netstat
+            // macOS: Use netstat -ib and parse line by line
+            // Format: Name    Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
             $output = @shell_exec('netstat -ib 2>&1');
-            if ($output && preg_match('/en0.*?(\d+)\s+\d+\s+\d+\s+(\d+)/m', $output, $m)) {
-                $recv = (int) $m[1];
-                $sent = (int) $m[2];
+            if ($output) {
+                $lines = explode("\n", $output);
+                foreach ($lines as $line) {
+                    // Look for en0 (main interface) with actual data
+                    if (preg_match('/^en0\s+\d+/', $line)) {
+                        // Split by whitespace
+                        $parts = preg_split('/\s+/', trim($line));
+                        // Columns: Name(0) Mtu(1) Network(2) Address(3) Ipkts(4) Ierrs(5) Ibytes(6) Opkts(7) Oerrs(8) Obytes(9)
+                        if (count($parts) >= 10 && is_numeric($parts[6]) && is_numeric($parts[9])) {
+                            $recv = (int) $parts[6];
+                            $sent = (int) $parts[9];
+                            break;
+                        }
+                    }
+                }
             }
         } else {
             // Linux: Read from /proc/net/dev
