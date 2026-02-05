@@ -1678,24 +1678,57 @@ class WafSyncService
                 }
             }
         } elseif (PHP_OS_FAMILY === 'Darwin') {
-            // macOS: Use netstat -ib and parse line by line
-            // Format: Name    Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
-            $output = @shell_exec('netstat -ib 2>&1');
-            if ($output) {
-                $lines = explode("\n", $output);
-                foreach ($lines as $line) {
-                    // Look for en0 (main interface) with actual data
-                    if (preg_match('/^en0\s+\d+/', $line)) {
-                        // Split by whitespace
-                        $parts = preg_split('/\s+/', trim($line));
-                        // Columns: Name(0) Mtu(1) Network(2) Address(3) Ipkts(4) Ierrs(5) Ibytes(6) Opkts(7) Oerrs(8) Obytes(9)
+            // macOS: Try multiple methods to get network bytes
+            
+            // Method 1: netstat -I for specific interface (most reliable)
+            $interfaces = ['en0', 'en1', 'en2', 'en3', 'en4', 'en5'];
+            foreach ($interfaces as $iface) {
+                $output = @shell_exec("netstat -I $iface -b 2>/dev/null");
+                if ($output) {
+                    $lines = explode("\n", trim($output));
+                    // Second line contains the data
+                    if (isset($lines[1])) {
+                        $parts = preg_split('/\s+/', trim($lines[1]));
+                        // Format: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
                         if (count($parts) >= 10 && is_numeric($parts[6]) && is_numeric($parts[9])) {
-                            $recv = (int) $parts[6];
-                            $sent = (int) $parts[9];
-                            break;
+                            $recv += (int) $parts[6];
+                            $sent += (int) $parts[9];
                         }
                     }
                 }
+            }
+            
+            // Fallback: parse netstat -ib if we got no data
+            if ($sent === 0 && $recv === 0) {
+                $output = @shell_exec('netstat -ib 2>&1');
+                if ($output) {
+                    foreach (explode("\n", $output) as $line) {
+                        // Match en* interfaces with Link# network
+                        if (preg_match('/^(en\d+)\s+\d+\s+<Link#/', $line)) {
+                            $parts = preg_split('/\s+/', trim($line));
+                            // Find numeric columns for bytes (usually columns 6 and 9)
+                            $numericCols = [];
+                            foreach ($parts as $idx => $val) {
+                                if (is_numeric($val) && $val > 0) {
+                                    $numericCols[] = ['idx' => $idx, 'val' => (int)$val];
+                                }
+                            }
+                            // Typically: [mtu, ipkts, ierrs, ibytes, opkts, oerrs, obytes, coll]
+                            // ibytes is usually the 4th numeric, obytes is 7th
+                            if (count($numericCols) >= 7) {
+                                $recv += $numericCols[3]['val'] ?? 0;
+                                $sent += $numericCols[6]['val'] ?? 0;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Log for debugging if still zero
+            if ($sent === 0 && $recv === 0) {
+                Log::debug('macOS network stats: no data found', [
+                    'netstat_output' => @shell_exec('netstat -ib 2>&1 | head -20'),
+                ]);
             }
         } else {
             // Linux: Read from /proc/net/dev
