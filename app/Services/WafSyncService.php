@@ -132,6 +132,8 @@ class WafSyncService
                 $response = $this->getHttpClient(30)->post("{$this->wafUrl}/api/ids/agents/heartbeat", [
                     'token' => $this->agentToken,
                     'name' => $this->agentName,
+                    'version' => config('app.version', '1.0.0'),
+                    'version_updated_at' => $this->getLastGitPullTime(),
                     'system_info' => $this->getSystemInfo(),
                 ]);
 
