@@ -32,8 +32,22 @@ class BlockingService
      */
     public function blockIP(string $ip, string $reason, string $severity = 'high', ?int $duration = null): bool
     {
-        if (!config('ids.blocking.enabled', false)) {
-            Log::info('Blocking disabled, skipping block', ['ip' => $ip]);
+        // Check if IPS (blocking) is enabled from WAF Hub config
+        $wafConfigPath = storage_path('app/waf_config.json');
+        $ipsEnabled = false;
+        
+        if (file_exists($wafConfigPath)) {
+            $wafConfig = json_decode(file_get_contents($wafConfigPath), true);
+            $ipsEnabled = $wafConfig['ips_enabled'] ?? false;
+        }
+        
+        // Fall back to env if not in waf_config
+        if (!$ipsEnabled) {
+            $ipsEnabled = config('ids.blocking.enabled', false);
+        }
+        
+        if (!$ipsEnabled) {
+            Log::info('IPS (blocking) disabled, skipping block', ['ip' => $ip]);
             return false;
         }
 
