@@ -1502,9 +1502,24 @@ class WafSyncService
             } else {
                 // Fallback: use top command
                 $topOutput = @shell_exec("top -l 1 -s 0 | grep 'PhysMem' 2>/dev/null");
-                if ($topOutput && preg_match('/(\d+)([MG])\s+used/i', $topOutput, $m)) {
-                    $multiplier = strtoupper($m[2]) === 'G' ? 1073741824 : 1048576;
-                    $used = (int) $m[1] * $multiplier;
+                if ($topOutput) {
+                    // Parse: "PhysMem: 15G used (1234M wired), 1234M unused."
+                    if (preg_match('/(\d+)([MG])\s+used/i', $topOutput, $usedMatch)) {
+                        $multiplier = strtoupper($usedMatch[2]) === 'G' ? 1073741824 : 1048576;
+                        $used = (int) $usedMatch[1] * $multiplier;
+                    }
+                    if (preg_match('/(\d+)([MG])\s+unused/i', $topOutput, $unusedMatch)) {
+                        $multiplier = strtoupper($unusedMatch[2]) === 'G' ? 1073741824 : 1048576;
+                        $unused = (int) $unusedMatch[1] * $multiplier;
+                        $total = $used + $unused;
+                    }
+                }
+                // If still no total, try system_profiler as last resort
+                if ($total === 0) {
+                    $profilerOutput = @shell_exec("system_profiler SPHardwareDataType 2>/dev/null | grep 'Memory'");
+                    if ($profilerOutput && preg_match('/(\d+)\s*GB/', $profilerOutput, $m)) {
+                        $total = (int) $m[1] * 1073741824;
+                    }
                 }
             }
         } else {
