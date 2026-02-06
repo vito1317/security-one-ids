@@ -876,7 +876,8 @@ class WafSyncService
             
             if (PHP_OS_FAMILY === 'Windows') {
                 echo "✅ Enabling Windows user accounts...\n";
-                exec('powershell -Command "Get-LocalUser | Where-Object {$_.Enabled -eq $false -and $_.Name -ne \'Guest\'} | Enable-LocalUser" 2>&1', $output, $returnCode);
+                // Enable previously disabled users, but exclude system accounts (Guest, Administrator)
+                exec('powershell -Command "Get-LocalUser | Where-Object {$_.Enabled -eq $false -and $_.Name -ne \'Guest\' -and $_.Name -ne \'Administrator\'} | Enable-LocalUser" 2>&1', $output, $returnCode);
                 file_put_contents($logFile, "[{$timestamp}] Windows enable users result: code={$returnCode}\n", FILE_APPEND);
                 
             } elseif (PHP_OS_FAMILY === 'Darwin') {
