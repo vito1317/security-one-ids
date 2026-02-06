@@ -735,19 +735,11 @@ function Write-WatchdogLog {
 function Write-CrashLog {
     param([string]`$Message, [string]`$StackTrace = '')
     `$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    `$entry = @"
-
-=== CRASH REPORT [`$timestamp] ===
-`$Message
-Stack Trace: `$StackTrace
-PHP Path: `$phpPath
-Working Dir: $InstallDir
-Memory Usage: `$([math]::Round((Get-Process -Id `$PID).WorkingSet64/1MB, 2)) MB
-Uptime: `$([int](New-TimeSpan -Start `$startupTime).TotalMinutes) minutes
-Consecutive Failures: `$consecutiveFailures
-=====================================
-
-"@
+    `$memUsage = 0
+    try { `$memUsage = [math]::Round((Get-Process -Id `$PID).WorkingSet64/1MB, 2) } catch {}
+    `$uptime = 0
+    try { `$uptime = [int](New-TimeSpan -Start `$startupTime).TotalMinutes } catch {}
+    `$entry = \"``n=== CRASH REPORT [`$timestamp] ===``n`$Message``nStack Trace: `$StackTrace``nPHP Path: `$phpPath``nWorking Dir: $InstallDir``nMemory: `$memUsage MB``nUptime: `$uptime min``nFailures: `$consecutiveFailures``n=====================================``n\"
     Add-Content -Path `$crashLog -Value `$entry -ErrorAction SilentlyContinue
 }
 
