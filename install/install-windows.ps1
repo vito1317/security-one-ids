@@ -677,241 +677,101 @@ while (`$true) {
 
 $ScanServiceScript | Out-File -FilePath "$InstallDir\run-scan-service.ps1" -Encoding UTF8
 
-# Create sync service script with enhanced watchdog and crash recovery
-$SyncServiceScript = @"
-`$ErrorActionPreference = 'Continue'
-Set-Location '$InstallDir'
+# Create sync service script - SIMPLIFIED VERSION for reliability
+$SyncServiceScript = @'
+$ErrorActionPreference = 'Continue'
 
-# ============================
-# ENHANCED WATCHDOG CONFIGURATION
-# ============================
-`$maxConsecutiveFailures = 10
-`$consecutiveFailures = 0
-`$maxMemoryMB = 500
-`$healthCheckInterval = 300
-`$lastHealthCheck = 0
-`$startupTime = Get-Date
-`$watchdogVersion = '2.0'
+# Configuration
+$InstallDir = 'INSTALL_DIR_PLACEHOLDER'
+$LogDir = 'DATA_DIR_PLACEHOLDER\logs'
+$LogFile = "$LogDir\watchdog.log"
+$MaxFailures = 10
+$FailCount = 0
 
-# Paths
-`$watchdogLog = '$DataDir\logs\watchdog.log'
-`$syncLog = '$DataDir\logs\sync.log'
-`$crashLog = '$DataDir\logs\crash.log'
-`$pidFile = '$InstallDir\storage\sync.pid'
+# Ensure log directory exists
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+}
 
-# Find PHP path (SYSTEM account may not have PATH set correctly)
-`$phpPath = 'php'
-`$possiblePhpPaths = @(
+# Find PHP path
+$PhpPath = 'php'
+$PossiblePaths = @(
     'C:\php\php.exe',
     'C:\tools\php\php.exe',
     'C:\Program Files\PHP\php.exe',
     'C:\xampp\php\php.exe',
-    'C:\xampp-new\php\php.exe',
-    (Get-Command php -ErrorAction SilentlyContinue).Source
+    'C:\xampp-new\php\php.exe'
 )
-foreach (`$p in `$possiblePhpPaths) {
-    if (`$p -and (Test-Path `$p -ErrorAction SilentlyContinue)) {
-        `$phpPath = `$p
+foreach ($p in $PossiblePaths) {
+    if (Test-Path $p -ErrorAction SilentlyContinue) {
+        $PhpPath = $p
         break
     }
 }
 
-# ============================
-# LOGGING FUNCTIONS
-# ============================
-function Write-WatchdogLog {
-    param([string]`$Message, [string]`$Level = 'INFO')
-    `$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    `$logEntry = "[`$timestamp] [`$Level] `$Message"
-    Add-Content -Path `$watchdogLog -Value `$logEntry -ErrorAction SilentlyContinue
+function Log {
+    param([string]$Msg, [string]$Level = 'INFO')
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "[$ts] [$Level] $Msg"
+    Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
     
-    # Log rotation - keep under 5MB
-    if ((Test-Path `$watchdogLog) -and ((Get-Item `$watchdogLog).Length -gt 5MB)) {
-        Move-Item `$watchdogLog "`$watchdogLog.old" -Force -ErrorAction SilentlyContinue
-        Write-WatchdogLog "Log rotated" 'INFO'
+    # Rotate if > 5MB
+    if ((Test-Path $LogFile) -and ((Get-Item $LogFile -EA SilentlyContinue).Length -gt 5MB)) {
+        Move-Item $LogFile "$LogFile.old" -Force -EA SilentlyContinue
     }
 }
 
-function Write-CrashLog {
-    param([string]`$Message, [string]`$StackTrace = '')
-    `$timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    `$memUsage = 0
-    try { `$memUsage = [math]::Round((Get-Process -Id `$PID).WorkingSet64/1MB, 2) } catch {}
-    `$uptime = 0
-    try { `$uptime = [int](New-TimeSpan -Start `$startupTime).TotalMinutes } catch {}
-    `$entry = \"``n=== CRASH REPORT [`$timestamp] ===``n`$Message``nStack Trace: `$StackTrace``nPHP Path: `$phpPath``nWorking Dir: $InstallDir``nMemory: `$memUsage MB``nUptime: `$uptime min``nFailures: `$consecutiveFailures``n=====================================``n\"
-    Add-Content -Path `$crashLog -Value `$entry -ErrorAction SilentlyContinue
-}
+Log "=== Sync Watchdog v3.0 Starting ===" 'INFO'
+Log "Install Dir: $InstallDir" 'INFO'
+Log "PHP Path: $PhpPath" 'INFO'
 
-# ============================
-# PROCESS MANAGEMENT
-# ============================
-function Kill-HungPhpProcesses {
-    # Kill PHP processes running longer than 5 minutes
-    Get-Process -Name php, php-cgi -ErrorAction SilentlyContinue | Where-Object {
-        (New-TimeSpan -Start `$_.StartTime -ErrorAction SilentlyContinue).TotalSeconds -gt 300
-    } | ForEach-Object {
-        Write-WatchdogLog "Killing hung PHP (PID: `$(`$_.Id), age: `$([int](New-TimeSpan -Start `$_.StartTime).TotalSeconds)s)" 'WARN'
-        Stop-Process -Id `$_.Id -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Check-Memory {
-    `$currentMemory = [math]::Round((Get-Process -Id `$PID -ErrorAction SilentlyContinue).WorkingSet64/1MB, 2)
-    if (`$currentMemory -gt `$maxMemoryMB) {
-        Write-WatchdogLog "Memory usage high (${currentMemory}MB > ${maxMemoryMB}MB). Cleaning up..." 'WARN'
-        [System.GC]::Collect()
-        [System.GC]::WaitForPendingFinalizers()
-        return `$false
-    }
-    return `$true
-}
-
-function Test-PhpHealth {
+# Main loop - run waf:sync every 60 seconds
+while ($true) {
     try {
-        `$result = & `$phpPath -v 2>&1
-        if (`$LASTEXITCODE -eq 0) {
-            return `$true
-        }
-    } catch {}
-    return `$false
-}
-
-function Test-ArtisanHealth {
-    try {
-        `$result = & `$phpPath artisan --version 2>&1
-        if (`$LASTEXITCODE -eq 0) {
-            return `$true
-        }
-    } catch {}
-    return `$false
-}
-
-# ============================
-# SELF-RESURRECTION
-# ============================
-function Ensure-SelfRunning {
-    # Check if our scheduled task should restart us
-    `$taskName = '$ServiceName-Sync'
-    try {
-        `$task = Get-ScheduledTask -TaskName `$taskName -ErrorAction SilentlyContinue
-        if (`$task -and `$task.State -ne 'Running') {
-            Write-WatchdogLog "Scheduled task not running, triggering restart..." 'WARN'
-            Start-ScheduledTask -TaskName `$taskName -ErrorAction SilentlyContinue
-        }
-    } catch {}
-}
-
-# ============================
-# MAIN WATCHDOG LOOP
-# ============================
-
-# Write PID file
-`$PID | Out-File -FilePath `$pidFile -Force -ErrorAction SilentlyContinue
-
-Write-WatchdogLog "=== Sync Watchdog v`$watchdogVersion Starting ===" 'INFO'
-Write-WatchdogLog "PHP Path: `$phpPath" 'INFO'
-Write-WatchdogLog "Install Dir: $InstallDir" 'INFO'
-Write-WatchdogLog "Max Memory: ${maxMemoryMB}MB" 'INFO'
-
-# Initial health check
-if (-not (Test-PhpHealth)) {
-    Write-WatchdogLog "PHP health check FAILED on startup!" 'CRITICAL'
-    Write-CrashLog "PHP not responding on startup"
-}
-
-while (`$true) {
-    try {
-        `$currentTime = [int](Get-Date -UFormat %s)
+        Set-Location $InstallDir
         
-        # Periodic health check (every 5 minutes)
-        if ((`$currentTime - `$lastHealthCheck) -gt `$healthCheckInterval) {
-            `$lastHealthCheck = `$currentTime
-            
-            if (-not (Test-PhpHealth)) {
-                Write-WatchdogLog "PHP health check failed" 'ERROR'
-                `$consecutiveFailures++
-                continue
-            }
-            
-            Check-Memory | Out-Null
-            Kill-HungPhpProcesses
-            
-            Write-WatchdogLog "Health check passed (uptime: `$([int](New-TimeSpan -Start `$startupTime).TotalMinutes)m)" 'INFO'
-        }
+        # Run sync command with timeout (2 min max)
+        $proc = Start-Process -FilePath $PhpPath -ArgumentList 'artisan','waf:sync' -WorkingDirectory $InstallDir -NoNewWindow -PassThru -Wait:$false
+        $exited = $proc.WaitForExit(120000)  # 2 min timeout
         
-        # Run sync command with timeout using job
-        `$startTime = Get-Date
-        `$job = Start-Job -ScriptBlock {
-            param(`$php, `$dir)
-            Set-Location `$dir
-            & `$php artisan waf:sync 2>&1
-        } -ArgumentList `$phpPath, '$InstallDir'
-        
-        # Wait up to 2 minutes for completion
-        `$completed = Wait-Job `$job -Timeout 120
-        `$duration = [int](New-TimeSpan -Start `$startTime).TotalSeconds
-        
-        if (`$completed) {
-            `$output = Receive-Job `$job | Out-String
-            `$exitState = `$job.State
-            
-            if (`$exitState -eq 'Completed' -and `$job.ChildJobs[0].JobStateInfo.State -eq 'Completed') {
-                # Success - reset failure counter
-                `$consecutiveFailures = 0
-                if (`$output.Trim()) {
-                    Add-Content -Path `$syncLog -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] `$(`$output.Trim())"
-                }
-            } else {
-                `$consecutiveFailures++
-                Write-WatchdogLog "Sync failed: `$(`$output.Trim()) (attempt `$consecutiveFailures/`$maxConsecutiveFailures)" 'ERROR'
-            }
+        if (-not $exited) {
+            Log "waf:sync timeout - killing process" 'WARN'
+            $proc.Kill()
+            $FailCount++
+        } elseif ($proc.ExitCode -ne 0) {
+            Log "waf:sync failed with code $($proc.ExitCode)" 'ERROR'
+            $FailCount++
         } else {
-            Stop-Job `$job -ErrorAction SilentlyContinue
-            `$consecutiveFailures++
-            Write-WatchdogLog "TIMEOUT after ${duration}s (attempt `$consecutiveFailures/`$maxConsecutiveFailures)" 'WARN'
-            Add-Content -Path `$syncLog -Value "[`$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] TIMEOUT: ${duration}s"
+            Log "waf:sync completed successfully" 'INFO'
+            $FailCount = 0
         }
-        Remove-Job `$job -Force -ErrorAction SilentlyContinue
+        
+        # Full reset after too many failures
+        if ($FailCount -ge $MaxFailures) {
+            Log "Too many failures ($FailCount), performing full reset..." 'WARN'
+            
+            # Clear Laravel cache
+            & $PhpPath artisan cache:clear 2>&1 | Out-Null
+            & $PhpPath artisan config:clear 2>&1 | Out-Null
+            
+            $FailCount = 0
+            Log "Reset complete, waiting 60s..." 'INFO'
+            Start-Sleep -Seconds 60
+        }
         
     } catch {
-        `$consecutiveFailures++
-        `$errorMsg = `$_.Exception.Message
-        `$stackTrace = `$_.ScriptStackTrace
-        Write-WatchdogLog "CRASH: `$errorMsg" 'ERROR'
-        Write-CrashLog `$errorMsg `$stackTrace
+        Log "Exception: $($_.Exception.Message)" 'ERROR'
+        $FailCount++
     }
     
-    # Recovery logic
-    if (`$consecutiveFailures -ge `$maxConsecutiveFailures) {
-        Write-WatchdogLog "Max failures reached (`$maxConsecutiveFailures). Full reset..." 'CRITICAL'
-        Write-CrashLog "Max consecutive failures - initiating full reset"
-        
-        `$consecutiveFailures = 0
-        
-        # Kill all PHP processes
-        Get-Process -Name php, php-cgi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        
-        # Clear Laravel caches
-        try {
-            & `$phpPath artisan cache:clear 2>&1 | Out-Null
-            & `$phpPath artisan config:clear 2>&1 | Out-Null
-        } catch {}
-        
-        # Wait before retry
-        Write-WatchdogLog "Waiting 60s before restart..." 'INFO'
-        Start-Sleep -Seconds 60
-        
-        # Ensure scheduled task is running
-        Ensure-SelfRunning
-        
-        Write-WatchdogLog "Watchdog restarted after full reset" 'INFO'
-    }
-    
-    # Heartbeat interval
+    # Wait before next sync
     Start-Sleep -Seconds 60
 }
-"@
+'@
+
+# Replace placeholders
+$SyncServiceScript = $SyncServiceScript -replace 'INSTALL_DIR_PLACEHOLDER', $InstallDir
+$SyncServiceScript = $SyncServiceScript -replace 'DATA_DIR_PLACEHOLDER', $DataDir
 
 $SyncServiceScript | Out-File -FilePath "$InstallDir\run-sync-service.ps1" -Encoding UTF8
 
