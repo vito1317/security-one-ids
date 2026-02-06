@@ -1072,7 +1072,12 @@ class WafSyncService
                 }
             } elseif ($isWindows) {
                 // Windows: Restart PHP process or Windows service if applicable
-                Log::info('Windows update completed, no automatic restart required');
+                Log::info('Windows update completed, regenerating sync script...');
+                
+                // Regenerate the sync service script with latest template
+                $this->regenerateWindowsSyncScript($installDir);
+                
+                Log::info('Windows sync script regenerated, no automatic restart required');
                 // Note: Windows Agent typically runs as a scheduled task or service
                 // The next heartbeat will pick up the new code
             }
@@ -2100,5 +2105,126 @@ class WafSyncService
         $isDesktop = getenv('DISPLAY') || getenv('WAYLAND_DISPLAY') || file_exists('/usr/share/xsessions');
         
         return $isDesktop ? 'desktop' : 'linux';
+    }
+    
+    /**
+     * Regenerate the Windows sync service script with latest template
+     */
+    private function regenerateWindowsSyncScript(string $installDir): void
+    {
+        try {
+            $dataDir = 'C:\ProgramData\SecurityOneIDS';
+            $logDir = $dataDir . '\logs';
+            
+            // Ensure log directory exists
+            if (!is_dir($logDir)) {
+                mkdir($logDir, 0755, true);
+            }
+            
+            // Create the simplified sync service script
+            $script = <<<'POWERSHELL'
+$ErrorActionPreference = 'Continue'
+
+# Configuration
+$InstallDir = 'INSTALL_DIR_PLACEHOLDER'
+$LogDir = 'DATA_DIR_PLACEHOLDER\logs'
+$LogFile = "$LogDir\watchdog.log"
+$MaxFailures = 10
+$FailCount = 0
+
+# Ensure log directory exists
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+}
+
+# Find PHP path
+$PhpPath = 'php'
+$PossiblePaths = @(
+    'C:\php\php.exe',
+    'C:\tools\php\php.exe',
+    'C:\Program Files\PHP\php.exe',
+    'C:\xampp\php\php.exe',
+    'C:\xampp-new\php\php.exe'
+)
+foreach ($p in $PossiblePaths) {
+    if (Test-Path $p -ErrorAction SilentlyContinue) {
+        $PhpPath = $p
+        break
+    }
+}
+
+function Log {
+    param([string]$Msg, [string]$Level = 'INFO')
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "[$ts] [$Level] $Msg"
+    Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
+    
+    # Rotate if > 5MB
+    if ((Test-Path $LogFile) -and ((Get-Item $LogFile -EA SilentlyContinue).Length -gt 5MB)) {
+        Move-Item $LogFile "$LogFile.old" -Force -EA SilentlyContinue
+    }
+}
+
+Log "=== Sync Watchdog v3.0 Starting ===" 'INFO'
+Log "Install Dir: $InstallDir" 'INFO'
+Log "PHP Path: $PhpPath" 'INFO'
+
+# Main loop - run waf:sync every 60 seconds
+while ($true) {
+    try {
+        Set-Location $InstallDir
+        
+        # Run sync command with timeout (2 min max)
+        $proc = Start-Process -FilePath $PhpPath -ArgumentList 'artisan','waf:sync' -WorkingDirectory $InstallDir -NoNewWindow -PassThru -Wait:$false
+        $exited = $proc.WaitForExit(120000)  # 2 min timeout
+        
+        if (-not $exited) {
+            Log "waf:sync timeout - killing process" 'WARN'
+            $proc.Kill()
+            $FailCount++
+        } elseif ($proc.ExitCode -ne 0) {
+            Log "waf:sync failed with code $($proc.ExitCode)" 'ERROR'
+            $FailCount++
+        } else {
+            Log "waf:sync completed successfully" 'INFO'
+            $FailCount = 0
+        }
+        
+        # Full reset after too many failures
+        if ($FailCount -ge $MaxFailures) {
+            Log "Too many failures ($FailCount), performing full reset..." 'WARN'
+            
+            # Clear Laravel cache
+            & $PhpPath artisan cache:clear 2>&1 | Out-Null
+            & $PhpPath artisan config:clear 2>&1 | Out-Null
+            
+            $FailCount = 0
+            Log "Reset complete, waiting 60s..." 'INFO'
+            Start-Sleep -Seconds 60
+        }
+        
+    } catch {
+        Log "Exception: $($_.Exception.Message)" 'ERROR'
+        $FailCount++
+    }
+    
+    # Wait before next sync
+    Start-Sleep -Seconds 60
+}
+POWERSHELL;
+
+            // Replace placeholders
+            $script = str_replace('INSTALL_DIR_PLACEHOLDER', $installDir, $script);
+            $script = str_replace('DATA_DIR_PLACEHOLDER', $dataDir, $script);
+            
+            // Write the script
+            $scriptPath = $installDir . '\run-sync-service.ps1';
+            file_put_contents($scriptPath, $script);
+            
+            Log::info('Windows sync script regenerated', ['path' => $scriptPath]);
+            
+        } catch (\Exception $e) {
+            Log::error('Failed to regenerate Windows sync script: ' . $e->getMessage());
+        }
     }
 }
