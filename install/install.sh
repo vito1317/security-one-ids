@@ -444,32 +444,47 @@ EOF
     echo -e "${GREEN}✅ macOS LaunchDaemons created (scan + sync)${NC}"
     
 else
-    # Linux systemd
+    # Linux systemd - Enhanced with watchdog support
+    
+    # Copy watchdog script to install directory
+    cp "$INSTALL_DIR/install/security-one-watchdog.sh" "$INSTALL_DIR/security-one-watchdog.sh" 2>/dev/null || true
+    chmod +x "$INSTALL_DIR/security-one-watchdog.sh"
+    
+    # Main watchdog service (replaces schedule:work with enhanced wrapper)
     cat > /etc/systemd/system/$SERVICE_NAME.service << EOF
 [Unit]
-Description=Security One IDS Agent
+Description=Security One IDS Agent Watchdog
 After=network.target
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=$INSTALL_DIR
-ExecStart=/usr/bin/php $INSTALL_DIR/artisan schedule:work
+ExecStart=/bin/bash $INSTALL_DIR/security-one-watchdog.sh
 Restart=always
 RestartSec=10
+WatchdogSec=300
+MemoryLimit=512M
+TimeoutStopSec=30
+
+# Environment
+Environment=HOME=/root
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # Create timer for periodic scans
+    # Create timer for periodic scans (backup if watchdog fails)
     cat > /etc/systemd/system/$SERVICE_NAME-scan.timer << EOF
 [Unit]
-Description=Security One IDS Periodic Scan
+Description=Security One IDS Periodic Scan (Backup)
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+OnBootSec=5min
+OnUnitActiveSec=10min
 
 [Install]
 WantedBy=timers.target
@@ -484,15 +499,16 @@ Type=oneshot
 User=root
 WorkingDirectory=$INSTALL_DIR
 ExecStart=/usr/bin/php $INSTALL_DIR/artisan desktop:scan --full
+TimeoutStartSec=300
 EOF
 
     systemctl daemon-reload
     systemctl enable $SERVICE_NAME
     systemctl enable $SERVICE_NAME-scan.timer
-    systemctl start $SERVICE_NAME
+    systemctl restart $SERVICE_NAME 2>/dev/null || systemctl start $SERVICE_NAME
     systemctl start $SERVICE_NAME-scan.timer
     
-    echo -e "${GREEN}✅ Systemd service created${NC}"
+    echo -e "${GREEN}✅ Systemd service created with auto-recovery watchdog${NC}"
 fi
 
 # Register with WAF Hub
