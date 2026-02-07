@@ -601,78 +601,102 @@ LUA;
      */
     private function collectPacketStats(array &$stats): void
     {
-        // Debug: log what files are in the log directory
-        $allFiles = @scandir($this->logDir) ?: [];
-        $relevantFiles = array_filter($allFiles, fn($f) => str_contains($f, 'perf') || str_contains($f, 'stats') || str_contains($f, 'alert'));
-        Log::debug('[Snort Stats] Log dir contents', [
-            'log_dir' => $this->logDir,
-            'relevant_files' => array_values($relevantFiles),
-            'all_files_count' => count($allFiles),
-        ]);
+        // Get the network interface Snort is listening on
+        $interface = $this->detectDefaultInterface();
 
-        // Method 1: Check Snort 3 perf_monitor CSV files
-        $perfFiles = glob($this->logDir . '/perf_monitor*.csv');
-        if (!empty($perfFiles)) {
-            // Get the most recently modified perf file
-            usort($perfFiles, fn ($a, $b) => filemtime($b) - filemtime($a));
-            $content = @file_get_contents($perfFiles[0]);
-            if ($content) {
-                $lines = array_filter(explode("\n", trim($content)));
-                // Skip header line, get last data line
-                if (count($lines) > 1) {
-                    $lastLine = end($lines);
-                    $parts = str_getcsv($lastLine);
-                    // perf_monitor CSV: first column is timestamp, second is usually total packets
-                    if (count($parts) > 1 && is_numeric($parts[1])) {
-                        $stats['packets_analyzed'] = (int) $parts[1];
+        if ($this->isWindows()) {
+            // Windows: use PowerShell Get-NetAdapterStatistics
+            $this->collectWindowsPacketStats($stats, $interface);
+        } elseif (PHP_OS === 'Darwin') {
+            // macOS: use netstat -ib
+            $this->collectMacPacketStats($stats, $interface);
+        } else {
+            // Linux: use /sys/class/net stats
+            $this->collectLinuxPacketStats($stats, $interface);
+        }
+    }
+
+    /**
+     * Collect packet stats on macOS via netstat
+     */
+    private function collectMacPacketStats(array &$stats, string $interface): void
+    {
+        try {
+            $result = Process::timeout(5)->run("netstat -ib 2>/dev/null");
+            if ($result->successful()) {
+                $lines = explode("\n", $result->output());
+                foreach ($lines as $line) {
+                    // Match interface line: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
+                    if (preg_match('/^' . preg_quote($interface, '/') . '\s+/', $line)) {
+                        $parts = preg_split('/\s+/', trim($line));
+                        // Ipkts is typically at index 4 for the first matching line
+                        if (count($parts) >= 7 && is_numeric($parts[4])) {
+                            $stats['packets_analyzed'] = (int) $parts[4];
+                            return;
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::debug('Failed to get macOS packet stats: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Collect packet stats on Linux via /sys/class/net
+     */
+    private function collectLinuxPacketStats(array &$stats, string $interface): void
+    {
+        $rxPath = "/sys/class/net/{$interface}/statistics/rx_packets";
+        if (file_exists($rxPath)) {
+            $rxPackets = (int) trim(file_get_contents($rxPath));
+            $stats['packets_analyzed'] = $rxPackets;
+            return;
+        }
+
+        // Fallback: try /proc/net/dev
+        if (file_exists('/proc/net/dev')) {
+            $content = file_get_contents('/proc/net/dev');
+            foreach (explode("\n", $content) as $line) {
+                if (str_contains($line, $interface . ':')) {
+                    $parts = preg_split('/\s+/', trim($line));
+                    if (count($parts) > 1) {
+                        // rx_packets is the 2nd field (after interface:rx_bytes)
+                        $stats['packets_analyzed'] = (int) ($parts[2] ?? 0);
                         return;
                     }
                 }
             }
         }
+    }
 
-        // Method 2: Check snort.stats file (Snort 2 format)
-        $statsFile = $this->logDir . '/snort.stats';
-        if (file_exists($statsFile)) {
-            $statsContent = @file_get_contents($statsFile);
-            if ($statsContent) {
-                $lines = explode("\n", trim($statsContent));
-                $lastLine = end($lines);
-                $parts = explode(',', $lastLine);
-                if (count($parts) > 1 && is_numeric($parts[1])) {
-                    $stats['packets_analyzed'] = (int) $parts[1];
-                    return;
-                }
-                if (preg_match('/total_packets:\s*(\d+)/i', $statsContent, $m)) {
+    /**
+     * Collect packet stats on Windows via PowerShell
+     */
+    private function collectWindowsPacketStats(array &$stats, string $interface): void
+    {
+        try {
+            // Try Get-NetAdapterStatistics (available on modern Windows)
+            $result = Process::timeout(10)->run(
+                "powershell -NoProfile -Command \"Get-NetAdapterStatistics | Select-Object -First 1 -Property ReceivedUnicastPackets | Format-List\" 2>&1"
+            );
+            if ($result->successful()) {
+                if (preg_match('/ReceivedUnicastPackets\s*:\s*(\d+)/i', $result->output(), $m)) {
                     $stats['packets_analyzed'] = (int) $m[1];
                     return;
                 }
             }
-        }
 
-        // Method 3: Signal Snort to dump stats (Unix only)
-        if (!$this->isWindows() && $this->isRunning() && file_exists($this->pidFile)) {
-            $pid = trim(file_get_contents($this->pidFile));
-            if (is_numeric($pid)) {
-                @Process::timeout(3)->run("kill -USR1 {$pid} 2>/dev/null");
-                usleep(500000);
-                // Re-check all perf files
-                $perfFiles = glob($this->logDir . '/perf_monitor*.csv');
-                if (!empty($perfFiles)) {
-                    usort($perfFiles, fn ($a, $b) => filemtime($b) - filemtime($a));
-                    $content = @file_get_contents($perfFiles[0]);
-                    if ($content) {
-                        $lines = array_filter(explode("\n", trim($content)));
-                        if (count($lines) > 1) {
-                            $lastLine = end($lines);
-                            $parts = str_getcsv($lastLine);
-                            if (count($parts) > 1 && is_numeric($parts[1])) {
-                                $stats['packets_analyzed'] = (int) $parts[1];
-                            }
-                        }
-                    }
+            // Fallback: netstat -e
+            $result = Process::timeout(5)->run('netstat -e 2>&1');
+            if ($result->successful()) {
+                // "Bytes  Received      Sent"
+                if (preg_match('/Unicast Packets\s+(\d+)/i', $result->output(), $m)) {
+                    $stats['packets_analyzed'] = (int) $m[1];
                 }
             }
+        } catch (\Exception $e) {
+            Log::debug('Failed to get Windows packet stats: ' . $e->getMessage());
         }
     }
 
@@ -912,8 +936,8 @@ LUA;
             }
         }
 
-        // Enable perf_monitor stats output (writes CSV to log dir every 60s)
-        $cmd .= " --lua 'perf_monitor = { seconds = 60 }'";
+        // Enable perf_monitor stats output is unreliable across platforms
+        // Packet stats are collected from OS network interface counters instead
 
         // Run as daemon on Unix
         if (!$this->isWindows()) {
