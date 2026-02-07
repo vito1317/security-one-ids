@@ -477,12 +477,15 @@ class WafSyncService
         try {
             switch ($platform) {
                 case 'macos':
-                    // Snort 3 is not in default Homebrew - try multiple approaches
-                    $result = Process::timeout(600)->run('brew install snort3 2>&1');
-                    if (!$result->successful()) {
-                        // Try the snort formula (some taps provide it)
-                        $result = Process::timeout(600)->run('brew install snort 2>&1');
-                    }
+                    // First ensure Homebrew is up to date
+                    Process::timeout(120)->run('brew update 2>&1');
+                    
+                    // Install required dependencies for Snort 3
+                    Log::info('Installing Snort dependencies via Homebrew...');
+                    Process::timeout(600)->run('brew install daq libdnet openssl pcre libtool luajit hwloc cmake pkg-config libpcap 2>&1');
+                    
+                    // Install Snort 3 (the formula is "snort", not "snort3")
+                    $result = Process::timeout(600)->run('brew install snort 2>&1');
                     if (!$result->successful()) {
                         // Try MacPorts as fallback
                         $portsCheck = Process::run('which port 2>&1');
@@ -491,7 +494,7 @@ class WafSyncService
                         }
                     }
                     if (!$result->successful()) {
-                        return ['success' => false, 'error' => 'macOS Snort install failed. Homebrew does not have a Snort formula. Please install manually: https://www.snort.org/downloads'];
+                        return ['success' => false, 'error' => 'macOS Snort install failed: ' . $result->output() . ' Please install manually: https://www.snort.org/downloads'];
                     }
                     break;
 
