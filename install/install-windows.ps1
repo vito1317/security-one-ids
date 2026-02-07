@@ -725,10 +725,22 @@ Log "=== Sync Watchdog v3.0 Starting ===" 'INFO'
 Log "Install Dir: $InstallDir" 'INFO'
 Log "PHP Path: $PhpPath" 'INFO'
 
-# Main loop - run waf:sync every 60 seconds
+# Main loop - run waf:sync with dynamic heartbeat interval from Hub config
 while ($true) {
     try {
         Set-Location $InstallDir
+        
+        # Read heartbeat interval from waf_config.json (set by Hub)
+        $SleepInterval = 60
+        $ConfigFile = "$InstallDir\storage\app\waf_config.json"
+        if (Test-Path $ConfigFile -ErrorAction SilentlyContinue) {
+            try {
+                $Config = Get-Content $ConfigFile -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if ($Config.heartbeat_interval -and $Config.heartbeat_interval -ge 5 -and $Config.heartbeat_interval -le 300) {
+                    $SleepInterval = [int]$Config.heartbeat_interval
+                }
+            } catch { }
+        }
         
         # Run sync command with timeout (2 min max)
         $proc = Start-Process -FilePath $PhpPath -ArgumentList 'artisan','waf:sync' -WorkingDirectory $InstallDir -NoNewWindow -PassThru -Wait:$false
@@ -742,7 +754,7 @@ while ($true) {
             Log "waf:sync failed with code $($proc.ExitCode)" 'ERROR'
             $FailCount++
         } else {
-            Log "waf:sync completed successfully" 'INFO'
+            Log "waf:sync completed (interval: ${SleepInterval}s)" 'INFO'
             $FailCount = 0
         }
         
@@ -764,8 +776,8 @@ while ($true) {
         $FailCount++
     }
     
-    # Wait before next sync
-    Start-Sleep -Seconds 60
+    # Wait before next sync (dynamic interval from Hub)
+    Start-Sleep -Seconds $SleepInterval
 }
 '@
 
