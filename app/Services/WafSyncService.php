@@ -877,19 +877,57 @@ class WafSyncService
             return;
         }
 
-        // Check if Npcap is already installed
-        $npcapDll = 'C:\\Windows\\System32\\Npcap\\wpcap.dll';
-        $npcapDir = 'C:\\Program Files\\Npcap';
-        if (file_exists($npcapDll) || is_dir($npcapDir)) {
-            Log::debug('Npcap is already installed');
+        // Check cache file — don't re-attempt install every heartbeat
+        $cacheFile = storage_path('app/npcap_installed.txt');
+        if (file_exists($cacheFile)) {
             return;
         }
 
-        // Also check older WinPcap
-        $winpcapDll = 'C:\\Windows\\System32\\wpcap.dll';
-        if (file_exists($winpcapDll)) {
-            Log::debug('WinPcap is already installed (legacy)');
+        // Check if Npcap/WinPcap is already installed using multiple methods
+        // Method 1: Check Program Files (not affected by WOW64 redirection)
+        $npcapDir = 'C:\\Program Files\\Npcap';
+        if (is_dir($npcapDir)) {
+            file_put_contents($cacheFile, 'installed');
             return;
+        }
+
+        // Method 2: Check via PowerShell registry (reliable, bypasses WOW64)
+        try {
+            $r = Process::timeout(5)->run('powershell -NoProfile -Command "Get-ItemProperty HKLM:\\SOFTWARE\\Npcap -ErrorAction SilentlyContinue | Select-Object -ExpandProperty \'(default)\'" 2>&1');
+            if ($r->successful() && !empty(trim($r->output()))) {
+                file_put_contents($cacheFile, 'installed');
+                return;
+            }
+        } catch (\Exception $e) {
+            // Continue to check other methods
+        }
+
+        // Method 3: Check if Snort can see interfaces (definitive test)
+        try {
+            $snort = app(\App\Services\Detection\SnortEngine::class);
+            if ($snort->isInstalled()) {
+                $r = Process::timeout(10)->run($snort->getSnortPath() . ' -W 2>&1');
+                // If we see any interface with an IP, Npcap is working
+                if (preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $r->output())) {
+                    file_put_contents($cacheFile, 'installed');
+                    return;
+                }
+            }
+        } catch (\Exception $e) {
+            // Continue
+        }
+
+        // Method 4: Filesystem checks (may fail with WOW64 redirection)
+        $dllPaths = [
+            'C:\\Windows\\System32\\Npcap\\wpcap.dll',
+            'C:\\Windows\\System32\\wpcap.dll',
+            'C:\\Windows\\SysNative\\Npcap\\wpcap.dll', // Bypass WOW64
+        ];
+        foreach ($dllPaths as $dll) {
+            if (file_exists($dll)) {
+                file_put_contents($cacheFile, 'installed');
+                return;
+            }
         }
 
         Log::info('Npcap not found, attempting to install...');
@@ -902,6 +940,7 @@ class WafSyncService
                 $r = Process::timeout(120)->run("{$chocoCmd} install npcap -y 2>&1");
                 if ($r->successful()) {
                     Log::info('Npcap installed via Chocolatey');
+                    file_put_contents($cacheFile, 'installed');
                     return;
                 }
                 Log::warning('Npcap Chocolatey install failed: ' . substr($r->output(), 0, 200));
@@ -939,6 +978,7 @@ class WafSyncService
 
             if (str_contains($output, 'NPCAP_INSTALL_OK')) {
                 Log::info('Npcap installed successfully via direct download');
+                file_put_contents($cacheFile, 'installed');
                 $this->reportAgentEvent('snort_install', 'Npcap packet capture driver installed successfully');
             } else {
                 Log::warning('Npcap auto-install failed: ' . substr($output, 0, 300));

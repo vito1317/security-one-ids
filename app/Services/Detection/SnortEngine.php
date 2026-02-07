@@ -37,6 +37,14 @@ class SnortEngine
     }
 
     /**
+     * Get the Snort binary path
+     */
+    public function getSnortPath(): string
+    {
+        return $this->snortPath;
+    }
+
+    /**
      * Get the alert log file path (auto-detects Snort 2 vs Snort 3)
      */
     public function getAlertLogPath(): string
@@ -639,16 +647,28 @@ LUA;
                     // Match interface line: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
                     if (preg_match('/^' . preg_quote($interface, '/') . '\s+/', $line)) {
                         $parts = preg_split('/\s+/', trim($line));
-                        // Ipkts is typically at index 4 for the first matching line
+                        // Ipkts is typically at index 4 for the first matching line (with <Link#> and MAC)
                         if (count($parts) >= 7 && is_numeric($parts[4])) {
                             $stats['packets_analyzed'] = (int) $parts[4];
+                            Log::info('[Snort Stats] macOS packets from netstat', [
+                                'interface' => $interface,
+                                'packets' => $parts[4],
+                            ]);
                             return;
                         }
                     }
                 }
+                // If we get here, no matching interface found
+                Log::warning('[Snort Stats] No matching interface in netstat -ib', [
+                    'interface' => $interface,
+                    'line_count' => count($lines),
+                    'first_10_lines' => implode("\n", array_slice($lines, 0, 10)),
+                ]);
+            } else {
+                Log::warning('[Snort Stats] netstat -ib failed', ['exit_code' => $result->exitCode()]);
             }
         } catch (\Exception $e) {
-            Log::debug('Failed to get macOS packet stats: ' . $e->getMessage());
+            Log::warning('[Snort Stats] Failed to get macOS packet stats: ' . $e->getMessage());
         }
     }
 
