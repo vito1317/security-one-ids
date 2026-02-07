@@ -934,15 +934,24 @@ class ClamavService
         try {
             $wafUrl = rtrim(config('ids.waf_url') ?? env('WAF_URL', ''), '/');
             
-            // Read token directly from .env to avoid cache/database issues
-            $envPath = base_path('.env');
-            $token = env('AGENT_TOKEN', '');
+            // Use the same token resolution as WafSyncService:
+            // 1. Cached token from registration (most reliable)
+            // 2. .env AGENT_TOKEN
+            // 3. Direct .env file read as last resort
+            $token = cache()->get('waf_agent_token');
+            
+            if (empty($token)) {
+                $token = env('AGENT_TOKEN', '');
+            }
             
             // Also try reading .env file directly if env() doesn't work
-            if (empty($token) && file_exists($envPath)) {
-                $envContent = file_get_contents($envPath);
-                if (preg_match('/^AGENT_TOKEN=(.*)$/m', $envContent, $matches)) {
-                    $token = trim($matches[1], '"\'');
+            if (empty($token)) {
+                $envPath = base_path('.env');
+                if (file_exists($envPath)) {
+                    $envContent = file_get_contents($envPath);
+                    if (preg_match('/^AGENT_TOKEN=(.*)$/m', $envContent, $matches)) {
+                        $token = trim($matches[1], '"\'');
+                    }
                 }
             }
 
