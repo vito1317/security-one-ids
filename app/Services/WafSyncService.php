@@ -558,6 +558,56 @@ class WafSyncService
                     $result = Process::timeout(600)->run('yum install -y snort 2>&1');
                     break;
 
+                case 'server':  // Docker containers (Linux-based)
+                case 'linux':
+                    // Auto-detect Linux distro from /etc/os-release
+                    $distro = 'unknown';
+                    if (file_exists('/etc/os-release')) {
+                        $osRelease = file_get_contents('/etc/os-release');
+                        if (preg_match('/^ID=(.+)$/m', $osRelease, $m)) {
+                            $distro = strtolower(trim($m[1], '"'));
+                        }
+                    }
+
+                    Log::info("Linux distro detected: {$distro}");
+
+                    if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
+                        Process::run('apt-get update -qq 2>&1');
+                        $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                    } elseif (in_array($distro, ['rhel', 'centos', 'rocky', 'almalinux', 'ol'])) {
+                        Process::run('yum install -y epel-release 2>&1');
+                        $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                    } elseif ($distro === 'fedora') {
+                        $result = Process::timeout(600)->run('dnf install -y snort 2>&1');
+                    } elseif ($distro === 'arch' || $distro === 'manjaro') {
+                        $result = Process::timeout(600)->run('pacman -S --noconfirm snort 2>&1');
+                    } else {
+                        // Try apt first (most common), then yum
+                        $aptCheck = Process::run('which apt-get 2>&1');
+                        if ($aptCheck->successful()) {
+                            Process::run('apt-get update -qq 2>&1');
+                            $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                        } else {
+                            $yumCheck = Process::run('which yum 2>&1');
+                            if ($yumCheck->successful()) {
+                                $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                            }
+                        }
+                    }
+
+                    // Fallback: try snap
+                    if (empty($result) || !$result->successful()) {
+                        $snapCheck = Process::run('which snap 2>&1');
+                        if ($snapCheck->successful()) {
+                            $result = Process::timeout(600)->run('snap install snort 2>&1');
+                        }
+                    }
+
+                    if (empty($result) || !$result->successful()) {
+                        return ['success' => false, 'error' => "Linux Snort install failed (distro: {$distro}). " . ($result ? $result->output() : 'No package manager found')];
+                    }
+                    break;
+
                 case 'windows':
                     // Check if Snort is already installed
                     $snortCheck = Process::run('where snort 2>&1');
