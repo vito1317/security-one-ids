@@ -640,7 +640,7 @@ LUA;
     private function collectMacPacketStats(array &$stats, string $interface): void
     {
         try {
-            $result = Process::timeout(5)->run("netstat -ib 2>/dev/null");
+            $result = Process::timeout(5)->run("/usr/sbin/netstat -ib 2>/dev/null");
             if ($result->successful()) {
                 $lines = explode("\n", $result->output());
                 foreach ($lines as $line) {
