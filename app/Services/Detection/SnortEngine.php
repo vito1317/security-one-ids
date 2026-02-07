@@ -145,23 +145,52 @@ class SnortEngine
                 $result = Process::timeout(15)->run("powershell -NonInteractive -Command \"{$psCommand}\"");
             } else {
                 // Linux/macOS: agent already runs as root, start directly
-                $result = Process::timeout(10)->run("nohup {$cmd} > /dev/null 2>&1 & echo $!");
+                // Snort -D (daemon) forks: redirect stderr to a temp file for debugging
+                $stderrFile = sys_get_temp_dir() . '/snort_start_stderr_' . uniqid() . '.log';
+                $result = Process::timeout(10)->run("nohup {$cmd} > /dev/null 2>{$stderrFile} & echo $!");
                 $pid = trim($result->output());
                 if (is_numeric($pid)) {
                     file_put_contents($this->pidFile, $pid);
                 }
             }
 
-            // Wait briefly and check if started
-            sleep(2);
+            // Wait for Snort daemon to fork and write its PID file
+            sleep(3);
 
+            // For daemon mode (-D), check the Snort-written PID file first
+            // because the shell PID (from echo $!) is the parent that already exited
+            $snortPidFile = $this->logDir . '/snort.pid';
+            if (!$this->isWindows() && file_exists($snortPidFile)) {
+                $daemonPid = trim(file_get_contents($snortPidFile));
+                if (is_numeric($daemonPid)) {
+                    // Verify the daemon process exists
+                    $checkResult = Process::run("kill -0 {$daemonPid} 2>/dev/null && echo running");
+                    if (str_contains($checkResult->output(), 'running')) {
+                        // Update our PID file with the real daemon PID
+                        file_put_contents($this->pidFile, $daemonPid);
+                        Log::info('Snort daemon started successfully', [
+                            'platform' => PHP_OS_FAMILY,
+                            'daemon_pid' => $daemonPid,
+                        ]);
+                        @unlink($stderrFile ?? '');
+                        return ['success' => true, 'message' => "Snort started in {$mode} mode"];
+                    }
+                }
+            }
+
+            // Fallback: check process list
             if ($this->isRunning()) {
                 Log::info('Snort started successfully', ['platform' => PHP_OS_FAMILY]);
+                @unlink($stderrFile ?? '');
                 return ['success' => true, 'message' => "Snort started in {$mode} mode"];
             }
 
-            // Capture error output for debugging
-            $errorOutput = $result->errorOutput() ?? '';
+            // Start failed — capture error output for debugging
+            $errorOutput = '';
+            if (isset($stderrFile) && file_exists($stderrFile)) {
+                $errorOutput = file_get_contents($stderrFile);
+                @unlink($stderrFile);
+            }
             $stdOutput = $result->output() ?? '';
             Log::warning('Snort failed to start', [
                 'platform' => PHP_OS_FAMILY,
@@ -780,7 +809,13 @@ LUA;
         $cmd .= " -A alert_json";
 
         if ($mode === 'ips') {
-            $cmd .= " -Q"; // Inline/IPS mode
+            // -Q (inline) requires DAQ support (afpacket/nfq) which only works on Linux
+            // macOS only has pcap DAQ (passive/read-only), so skip -Q on macOS
+            if (PHP_OS !== 'Darwin') {
+                $cmd .= " -Q"; // Inline/IPS mode (Linux only)
+            } else {
+                Log::debug('Skipping -Q flag on macOS (no inline DAQ support), running in passive IDS mode');
+            }
         }
 
         // Run as daemon on Unix
