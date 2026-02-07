@@ -461,9 +461,16 @@ class WafSyncService
             // Start Snort if not running
             if (!$snort->isRunning()) {
                 $startResult = $snort->start($mode);
-                Log::info('Snort start result', $startResult);
-                $this->reportAgentEvent('snort_started', "Snort 已啟動（模式：{$mode}）");
+                if (!($startResult['success'] ?? false)) {
+                    Log::warning('Snort start result', $startResult);
+                } else {
+                    Log::info('Snort started successfully');
+                    $this->reportAgentEvent('snort_started', "Snort 已啟動（模式：{$mode}）");
+                }
             }
+
+            // Auto-update: check once per day
+            $this->autoUpdateSnort($snort);
 
             // Report status back to Hub via heartbeat
             $status = $snort->getStatus();
@@ -472,6 +479,47 @@ class WafSyncService
         } catch (\Exception $e) {
             Log::error('Snort addon handling failed: ' . $e->getMessage());
             $this->reportAgentEvent('error', 'Snort 處理失敗：' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Auto-update Snort (checks once per day)
+     */
+    private function autoUpdateSnort(\App\Services\Detection\SnortEngine $snort): void
+    {
+        $updateFile = storage_path('app/snort_last_update_check.txt');
+
+        // Only check once per day
+        if (file_exists($updateFile)) {
+            $lastCheck = (int) file_get_contents($updateFile);
+            if (time() - $lastCheck < 86400) {
+                return;
+            }
+        }
+
+        // Mark as checked
+        file_put_contents($updateFile, (string) time());
+
+        try {
+            Log::info('Running daily Snort auto-update check...');
+            $result = $snort->updateSnort();
+
+            if ($result['success'] ?? false) {
+                $version = $result['version'] ?? 'unknown';
+                $previous = $result['previous'] ?? null;
+
+                if ($previous && $previous !== $version) {
+                    Log::info("Snort updated: {$previous} → {$version}");
+                    $this->reportAgentEvent('snort_updated', "Snort 已更新：{$previous} → {$version}", [
+                        'old_version' => $previous,
+                        'new_version' => $version,
+                    ]);
+                } else {
+                    Log::info("Snort is up to date: {$version}");
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning('Snort auto-update check failed: ' . $e->getMessage());
         }
     }
 

@@ -119,10 +119,13 @@ class SnortEngine
 
         $interface = $interface ?? $this->detectDefaultInterface();
 
-        // Ensure log directory exists with correct permissions
+        // Ensure log directory exists
         if (!is_dir($this->logDir)) {
             @mkdir($this->logDir, 0755, true);
         }
+
+        // Ensure a valid config file exists (generate default if missing)
+        $this->ensureSnortConfig();
 
         // Build the Snort command (auto-detects Snort 2 vs 3)
         $cmd = $this->buildStartCommand($mode, $interface);
@@ -131,15 +134,22 @@ class SnortEngine
             Log::info("Starting Snort in {$mode} mode on interface {$interface}", [
                 'platform' => PHP_OS_FAMILY,
                 'snort_path' => $this->snortPath,
+                'config_path' => $this->configPath,
                 'command' => $cmd,
             ]);
 
             if ($this->isWindows()) {
-                $result = $this->startSnortWindows($cmd);
-            } elseif (PHP_OS === 'Darwin') {
-                $result = $this->startSnortMac($cmd);
+                // Windows: start as hidden background process
+                $escapedCmd = str_replace('"', '`"', $cmd);
+                $psCommand = "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c {$escapedCmd}' -WindowStyle Hidden";
+                $result = Process::timeout(15)->run("powershell -NonInteractive -Command \"{$psCommand}\"");
             } else {
-                $result = $this->startSnortLinux($cmd);
+                // Linux/macOS: agent already runs as root, start directly
+                $result = Process::timeout(10)->run("nohup {$cmd} > /dev/null 2>&1 & echo $!");
+                $pid = trim($result->output());
+                if (is_numeric($pid)) {
+                    file_put_contents($this->pidFile, $pid);
+                }
             }
 
             // Wait briefly and check if started
@@ -170,86 +180,286 @@ class SnortEngine
     }
 
     /**
-     * Start Snort on Linux with appropriate privileges
+     * Ensure a valid Snort config file exists.
+     * If no config is found, generate a minimal working config.
      */
-    private function startSnortLinux(string $cmd): \Illuminate\Process\ProcessResult
+    private function ensureSnortConfig(): void
     {
-        // Check if we need sudo (non-root user)
-        $needsSudo = function_exists('posix_getuid') && posix_getuid() !== 0;
-        $prefix = $needsSudo ? 'sudo ' : '';
+        // Re-detect config path in case it was created after constructor
+        $this->configPath = $this->detectConfigPath();
 
-        $result = Process::timeout(10)->run("{$prefix}nohup {$cmd} > /dev/null 2>&1 & echo $!");
-        $pid = trim($result->output());
-        if (is_numeric($pid)) {
-            file_put_contents($this->pidFile, $pid);
+        if (file_exists($this->configPath)) {
+            return;
         }
 
-        return $result;
-    }
-
-    /**
-     * Start Snort on macOS with sudo for BPF packet capture access
-     *
-     * macOS requires root/sudo to open BPF devices for raw packet capture.
-     * Also tries to fix BPF device permissions as a fallback.
-     */
-    private function startSnortMac(string $cmd): \Illuminate\Process\ProcessResult
-    {
-        // First, try to ensure BPF devices are accessible
-        $this->ensureBpfAccess();
-
-        // macOS always needs sudo for packet capture
-        $result = Process::timeout(10)->run("sudo nohup {$cmd} > /dev/null 2>&1 & echo $!");
-        $pid = trim($result->output());
-        if (is_numeric($pid)) {
-            file_put_contents($this->pidFile, $pid);
-        }
-
-        return $result;
-    }
-
-    /**
-     * Start Snort on Windows with elevated privileges
-     *
-     * Windows Snort requires Npcap for packet capture.
-     * Uses PowerShell to start Snort as a background process with admin rights.
-     */
-    private function startSnortWindows(string $cmd): \Illuminate\Process\ProcessResult
-    {
-        // Check for Npcap/WinPcap
-        $npcapInstalled = file_exists('C:\\Windows\\System32\\Npcap') ||
-                          file_exists('C:\\Program Files\\Npcap') ||
-                          file_exists('C:\\Windows\\System32\\wpcap.dll');
-
-        if (!$npcapInstalled) {
-            Log::warning('Npcap not detected — Snort may not capture packets. Install from https://npcap.com/');
-        }
-
-        // Use PowerShell to start Snort as admin background process
-        $escapedCmd = str_replace('"', '`"', $cmd);
-        $psCommand = "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c {$escapedCmd}' -WindowStyle Hidden -Verb RunAs";
-
-        return Process::timeout(15)->run("powershell -NonInteractive -Command \"{$psCommand}\"");
-    }
-
-    /**
-     * Ensure BPF device access on macOS
-     *
-     * BPF (Berkeley Packet Filter) devices are needed for raw packet capture.
-     * This sets permissions so Snort can access them.
-     */
-    private function ensureBpfAccess(): void
-    {
         try {
-            // Check if BPF devices exist and are accessible
-            if (file_exists('/dev/bpf0') && !is_readable('/dev/bpf0')) {
-                // Try to chmod BPF devices (requires sudo)
-                Process::timeout(5)->run('sudo chmod 644 /dev/bpf*');
-                Log::info('Set BPF device permissions for Snort packet capture');
+            $configDir = dirname($this->configPath);
+            if (!is_dir($configDir)) {
+                @mkdir($configDir, 0755, true);
             }
+
+            if ($this->isSnort2()) {
+                $this->generateSnort2Config();
+            } else {
+                $this->generateSnort3Config();
+            }
+
+            Log::info('Generated default Snort config', ['path' => $this->configPath]);
         } catch (\Exception $e) {
-            Log::debug('Could not set BPF permissions: ' . $e->getMessage());
+            Log::warning('Failed to generate Snort config: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Generate a minimal Snort 2.9 config
+     */
+    private function generateSnort2Config(): void
+    {
+        $rulesDir = $this->detectRulesDir();
+        $config = <<<CONF
+# Auto-generated Snort 2.9 config by Security One IDS
+var HOME_NET any
+var EXTERNAL_NET any
+var RULE_PATH {$rulesDir}
+
+config logdir: {$this->logDir}
+config detection: search-method ac-full
+
+output alert_fast: snort.alert.fast
+
+include \$RULE_PATH/local.rules
+CONF;
+
+        file_put_contents($this->configPath, $config);
+
+        // Ensure local.rules exists
+        $localRules = $rulesDir . '/local.rules';
+        if (!file_exists($localRules)) {
+            if (!is_dir($rulesDir)) {
+                @mkdir($rulesDir, 0755, true);
+            }
+            file_put_contents($localRules, "# Security One IDS - Local Rules\n");
+        }
+    }
+
+    /**
+     * Generate a minimal Snort 3 config (Lua)
+     */
+    private function generateSnort3Config(): void
+    {
+        $rulesDir = $this->detectRulesDir();
+        $config = <<<'LUA'
+-- Auto-generated Snort 3 config by Security One IDS
+HOME_NET = 'any'
+EXTERNAL_NET = 'any'
+
+ips = {
+    variables = default_variables,
+}
+
+alert_json = {
+    file = true,
+    limit = 100,
+    fields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority',
+}
+LUA;
+
+        file_put_contents($this->configPath, $config);
+    }
+
+    /**
+     * Update Snort to the latest version
+     *
+     * @return array{success: bool, version?: string, error?: string}
+     */
+    public function updateSnort(): array
+    {
+        if (!$this->isInstalled()) {
+            return ['success' => false, 'error' => 'Snort is not installed'];
+        }
+
+        $oldVersion = $this->getVersion();
+        $wasRunning = $this->isRunning();
+
+        // Stop Snort before updating
+        if ($wasRunning) {
+            $this->stop();
+        }
+
+        try {
+            Log::info('Updating Snort...', ['current_version' => $oldVersion, 'platform' => PHP_OS_FAMILY]);
+
+            if (PHP_OS === 'Darwin') {
+                $result = $this->updateSnortMac();
+            } elseif ($this->isWindows()) {
+                $result = $this->updateSnortWindows();
+            } else {
+                $result = $this->updateSnortLinux();
+            }
+
+            // Re-detect paths after update
+            $this->snortPath = $this->detectSnortPath();
+            $newVersion = $this->getVersion();
+
+            // Restart if was running
+            if ($wasRunning) {
+                $this->start();
+            }
+
+            if ($newVersion && $newVersion !== $oldVersion) {
+                Log::info('Snort updated', ['old' => $oldVersion, 'new' => $newVersion]);
+                return ['success' => true, 'version' => $newVersion, 'previous' => $oldVersion];
+            }
+
+            return ['success' => true, 'version' => $newVersion ?? $oldVersion, 'message' => 'Already at latest version'];
+        } catch (\Exception $e) {
+            Log::error('Snort update failed: ' . $e->getMessage());
+            // Try to restart if it was running
+            if ($wasRunning) {
+                $this->start();
+            }
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Update Snort on macOS via Homebrew
+     */
+    private function updateSnortMac(): \Illuminate\Process\ProcessResult
+    {
+        $brewPath = $this->findBrewPath();
+        $brewCmd = $this->getBrewCommand($brewPath);
+
+        Process::timeout(120)->run("{$brewCmd} update 2>&1");
+        return Process::timeout(600)->run("{$brewCmd} upgrade snort 2>&1");
+    }
+
+    /**
+     * Update Snort on Linux via package manager
+     */
+    private function updateSnortLinux(): \Illuminate\Process\ProcessResult
+    {
+        $distro = $this->detectLinuxDistro();
+
+        if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
+            Process::timeout(120)->run('apt-get update -qq 2>&1');
+            return Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade snort 2>&1');
+        }
+
+        if (in_array($distro, ['rhel', 'centos', 'rocky', 'almalinux', 'ol', 'fedora'])) {
+            return Process::timeout(600)->run('yum update -y snort 2>&1');
+        }
+
+        return Process::timeout(600)->run('apt-get update -qq && apt-get install -y --only-upgrade snort 2>&1');
+    }
+
+    /**
+     * Update Snort on Windows
+     */
+    private function updateSnortWindows(): \Illuminate\Process\ProcessResult
+    {
+        $chocoPath = $this->findChocoPath();
+        if ($chocoPath) {
+            return Process::timeout(600)->run("\"{$chocoPath}\" upgrade snort -y 2>&1");
+        }
+
+        $wingetPath = $this->findWingetPath();
+        if ($wingetPath) {
+            return Process::timeout(600)->run("\"{$wingetPath}\" upgrade Snort.Snort --accept-package-agreements 2>&1");
+        }
+
+        return Process::timeout(1)->run('echo No package manager found for update');
+    }
+
+    /**
+     * Find Homebrew binary path
+     */
+    private function findBrewPath(): string
+    {
+        foreach (['/opt/homebrew/bin/brew', '/usr/local/bin/brew'] as $bp) {
+            if (file_exists($bp)) {
+                return $bp;
+            }
+        }
+        return 'brew';
+    }
+
+    /**
+     * Get the Homebrew command, handling root execution by detecting real user
+     */
+    private function getBrewCommand(string $brewPath): string
+    {
+        if (!function_exists('posix_getuid') || posix_getuid() !== 0) {
+            $home = getenv('HOME') ?: '/tmp';
+            return "HOME={$home} {$brewPath}";
+        }
+
+        // Homebrew refuses to run as root — detect the real user
+        $realUser = getenv('SUDO_USER') ?: '';
+        if (empty($realUser) && $brewPath !== 'brew') {
+            $ownerInfo = posix_getpwuid(fileowner($brewPath));
+            $realUser = $ownerInfo['name'] ?? '';
+        }
+        if (empty($realUser)) {
+            $users = @scandir('/Users') ?: [];
+            foreach ($users as $u) {
+                if ($u !== '.' && $u !== '..' && $u !== 'Shared' && $u !== '.localized') {
+                    $realUser = $u;
+                    break;
+                }
+            }
+        }
+
+        if (!empty($realUser)) {
+            return "sudo -u {$realUser} HOME=/Users/{$realUser} {$brewPath}";
+        }
+
+        return $brewPath;
+    }
+
+    /**
+     * Detect Linux distro from /etc/os-release
+     */
+    private function detectLinuxDistro(): string
+    {
+        if (file_exists('/etc/os-release')) {
+            $osRelease = file_get_contents('/etc/os-release');
+            if (preg_match('/^ID=(.+)$/m', $osRelease, $m)) {
+                return strtolower(trim($m[1], '"'));
+            }
+        }
+        return 'unknown';
+    }
+
+    /**
+     * Find Chocolatey path on Windows
+     */
+    private function findChocoPath(): ?string
+    {
+        $chocoPath = 'C:\\ProgramData\\chocolatey\\bin\\choco.exe';
+        if (file_exists($chocoPath)) {
+            return $chocoPath;
+        }
+        $result = Process::run('where choco 2>&1');
+        return $result->successful() ? trim($result->output()) : null;
+    }
+
+    /**
+     * Find WinGet path on Windows
+     */
+    private function findWingetPath(): ?string
+    {
+        $paths = [
+            'C:\\Users\\' . get_current_user() . '\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe',
+        ];
+        foreach ($paths as $wp) {
+            $found = glob($wp);
+            if (!empty($found)) {
+                return $found[0];
+            }
+        }
+        $result = Process::run('where winget 2>&1');
+        return $result->successful() ? trim($result->output()) : null;
     }
 
     /**
@@ -261,20 +471,17 @@ class SnortEngine
             return ['success' => true, 'message' => 'Snort is not running'];
         }
 
-        // On non-Windows, we need sudo since Snort was started with elevated privileges
-        $sudo = (!$this->isWindows() && function_exists('posix_getuid') && posix_getuid() !== 0) ? 'sudo ' : '';
-
         try {
             if (file_exists($this->pidFile)) {
                 $pid = trim(file_get_contents($this->pidFile));
                 if ($this->isWindows()) {
                     Process::run("taskkill /PID {$pid} /F 2>nul");
                 } else {
-                    Process::run("{$sudo}kill {$pid} 2>/dev/null");
+                    Process::run("kill {$pid} 2>/dev/null");
                     sleep(1);
                     // Force kill if still running
                     if ($this->isProcessRunning((int) $pid)) {
-                        Process::run("{$sudo}kill -9 {$pid} 2>/dev/null");
+                        Process::run("kill -9 {$pid} 2>/dev/null");
                     }
                 }
                 @unlink($this->pidFile);
@@ -283,7 +490,7 @@ class SnortEngine
                 if ($this->isWindows()) {
                     Process::run("taskkill /IM snort.exe /F 2>nul");
                 } else {
-                    Process::run("{$sudo}pkill -f snort 2>/dev/null");
+                    Process::run("pkill -f snort 2>/dev/null");
                 }
             }
 
@@ -631,14 +838,19 @@ class SnortEngine
             ? [
                 'C:\\Snort\\etc\\snort\\snort.lua',
                 'C:\\Snort\\etc\\snort.lua',
+                'C:\\Snort\\etc\\snort\\snort.conf',
                 'C:\\Program Files\\Snort\\etc\\snort\\snort.lua',
+                'C:\\Program Files\\Snort\\etc\\snort.conf',
             ]
             : [
-                '/etc/snort/snort.lua',           // Snort 3
-                '/usr/local/etc/snort/snort.lua',
-                '/opt/snort/etc/snort/snort.lua',
-                '/etc/snort/snort.conf',          // Snort 2 fallback
+                '/etc/snort/snort.lua',              // Snort 3 system-wide
+                '/etc/snort/snort.conf',             // Snort 2 system-wide
+                '/usr/local/etc/snort/snort.lua',    // Homebrew Intel Mac
                 '/usr/local/etc/snort/snort.conf',
+                '/opt/homebrew/etc/snort/snort.lua',  // Homebrew ARM64 Mac
+                '/opt/homebrew/etc/snort/snort.conf',
+                '/opt/snort/etc/snort/snort.lua',
+                '/opt/snort/etc/snort.lua',
             ];
 
         foreach ($paths as $path) {
@@ -647,6 +859,10 @@ class SnortEngine
             }
         }
 
+        // Return platform-appropriate default
+        if ($this->isSnort2()) {
+            return '/etc/snort/snort.conf';
+        }
         return '/etc/snort/snort.lua';
     }
 
