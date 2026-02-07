@@ -930,10 +930,10 @@ class WafSyncService
             }
         }
 
-        Log::info('Npcap not found, attempting to install...');
+        Log::info('Packet capture driver not found, attempting to install...');
 
         try {
-            // Method 1: Try Chocolatey
+            // Method 1: Try Chocolatey for Npcap (if available)
             $chocoPath = 'C:\\ProgramData\\chocolatey\\bin\\choco.exe';
             if (file_exists($chocoPath) || Process::run('where choco 2>&1')->successful()) {
                 $chocoCmd = file_exists($chocoPath) ? "\"{$chocoPath}\"" : 'choco';
@@ -941,51 +941,71 @@ class WafSyncService
                 if ($r->successful()) {
                     Log::info('Npcap installed via Chocolatey');
                     file_put_contents($cacheFile, 'installed');
+                    $this->reportAgentEvent('snort_install', 'Npcap packet capture driver installed successfully via Chocolatey');
                     return;
                 }
-                Log::warning('Npcap Chocolatey install failed: ' . substr($r->output(), 0, 200));
+                Log::debug('Chocolatey npcap install failed, trying WinPcap...');
             }
 
-            // Method 2: Download and install Npcap OEM silent installer
+            // Method 2: Download and install WinPcap 4.1.3 (free, supports silent install /S)
+            // WinPcap is fully compatible with Snort 2.9 on Windows
             $scriptContent = "\$ErrorActionPreference = 'Stop'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\r\n" .
                 "try {\r\n" .
-                "    \$url = 'https://npcap.com/dist/npcap-1.80.exe'\r\n" .
-                "    \$outPath = \"\$env:TEMP\\npcap-installer.exe\"\r\n" .
-                "    Write-Output 'Downloading Npcap...'\r\n" .
+                "    \$url = 'https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe'\r\n" .
+                "    \$outPath = \"\$env:TEMP\\WinPcap_4_1_3.exe\"\r\n" .
+                "    Write-Output 'Downloading WinPcap 4.1.3...'\r\n" .
                 "    \$wc = New-Object System.Net.WebClient\r\n" .
-                "    \$wc.Headers.Add('User-Agent', 'SecurityOneIDS')\r\n" .
+                "    \$wc.Headers.Add('User-Agent', 'Mozilla/5.0 SecurityOneIDS')\r\n" .
                 "    \$wc.DownloadFile(\$url, \$outPath)\r\n" .
                 "    if (Test-Path \$outPath) {\r\n" .
-                "        Write-Output 'Installing Npcap silently...'\r\n" .
-                "        # /S = silent, /winpcap_mode = WinPcap API compatibility\r\n" .
-                "        Start-Process -FilePath \$outPath -ArgumentList '/S', '/winpcap_mode=yes' -Wait -NoNewWindow\r\n" .
+                "        \$fileSize = (Get-Item \$outPath).Length\r\n" .
+                "        Write-Output \"Downloaded \$fileSize bytes\"\r\n" .
+                "        if (\$fileSize -lt 100000) {\r\n" .
+                "            Write-Output 'WINPCAP_DOWNLOAD_TOO_SMALL'\r\n" .
+                "            Remove-Item \$outPath -Force\r\n" .
+                "            exit 1\r\n" .
+                "        }\r\n" .
+                "        Write-Output 'Installing WinPcap silently...'\r\n" .
+                "        Start-Process -FilePath \$outPath -ArgumentList '/S' -Wait -NoNewWindow\r\n" .
+                "        Start-Sleep -Seconds 3\r\n" .
                 "        Remove-Item \$outPath -Force -ErrorAction SilentlyContinue\r\n" .
-                "        Write-Output 'NPCAP_INSTALL_OK'\r\n" .
+                "        # Verify installation\r\n" .
+                "        if (Test-Path 'C:\\Windows\\System32\\wpcap.dll') {\r\n" .
+                "            Write-Output 'WINPCAP_INSTALL_OK'\r\n" .
+                "        } else {\r\n" .
+                "            Write-Output 'WINPCAP_INSTALL_NO_DLL'\r\n" .
+                "        }\r\n" .
                 "    } else {\r\n" .
-                "        Write-Output 'NPCAP_DOWNLOAD_FAILED'\r\n" .
+                "        Write-Output 'WINPCAP_DOWNLOAD_FAILED'\r\n" .
                 "    }\r\n" .
                 "} catch {\r\n" .
-                "    Write-Output \"NPCAP_ERROR: \$_\"\r\n" .
+                "    Write-Output \"WINPCAP_ERROR: \$_\"\r\n" .
                 "}\r\n";
 
-            $scriptPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'npcap_install_' . uniqid() . '.ps1';
+            $scriptPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'winpcap_install_' . uniqid() . '.ps1';
             file_put_contents($scriptPath, $scriptContent);
 
-            $r = Process::timeout(120)->run("powershell -NoProfile -ExecutionPolicy Bypass -File \"{$scriptPath}\" 2>&1");
+            $r = Process::timeout(180)->run("powershell -NoProfile -ExecutionPolicy Bypass -File \"{$scriptPath}\" 2>&1");
             $output = $r->output();
             @unlink($scriptPath);
 
-            if (str_contains($output, 'NPCAP_INSTALL_OK')) {
-                Log::info('Npcap installed successfully via direct download');
+            Log::debug('WinPcap install output: ' . substr($output, 0, 500));
+
+            if (str_contains($output, 'WINPCAP_INSTALL_OK')) {
+                Log::info('WinPcap 4.1.3 installed successfully');
                 file_put_contents($cacheFile, 'installed');
-                $this->reportAgentEvent('snort_install', 'Npcap packet capture driver installed successfully');
+                $this->reportAgentEvent('snort_install', 'WinPcap packet capture driver installed successfully');
+            } elseif (str_contains($output, 'WINPCAP_INSTALL_NO_DLL')) {
+                Log::warning('WinPcap installer ran but DLL not found — may need system restart');
+                file_put_contents($cacheFile, 'installed'); // Don't retry
+                $this->reportAgentEvent('snort_install', 'WinPcap installed, system restart may be required');
             } else {
-                Log::warning('Npcap auto-install failed: ' . substr($output, 0, 300));
-                $this->reportAgentEvent('snort_error', 'Npcap auto-install failed. Please install manually from https://npcap.com');
+                Log::warning('WinPcap auto-install failed: ' . substr($output, 0, 300));
+                $this->reportAgentEvent('snort_error', 'WinPcap auto-install failed: ' . substr($output, 0, 200));
             }
         } catch (\Exception $e) {
-            Log::error('Npcap installation error: ' . $e->getMessage());
+            Log::error('Packet capture driver installation error: ' . $e->getMessage());
         }
     }
 
