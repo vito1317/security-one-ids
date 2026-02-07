@@ -2031,7 +2031,7 @@ class WafSyncService
                 'remote' => substr($remoteHash, 0, 8),
             ]);
 
-            $this->reportAgentEvent('snort_alert', '偵測到新版本，自動更新中...');
+            $this->reportAgentEvent('code_update', 'Auto-update: detecting new code version, updating...');
             $this->handleIdsUpdate();
 
         } catch (\Exception $e) {
