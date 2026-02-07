@@ -523,20 +523,37 @@ class SnortEngine
             return '1'; // Windows uses interface index
         }
 
-        // Linux: try to find the default interface
-        try {
-            $result = Process::run("ip route show default 2>/dev/null | awk '{print $5}' | head -1");
-            $iface = trim($result->output());
-            if (!empty($iface)) {
-                return $iface;
+        $isMac = PHP_OS === 'Darwin';
+
+        // macOS: try route command first
+        if ($isMac) {
+            try {
+                $result = Process::run("route -n get default 2>/dev/null | grep 'interface:' | awk '{print \$2}'");
+                $iface = trim($result->output());
+                if (!empty($iface)) {
+                    return $iface;
+                }
+            } catch (\Exception $e) {
+                // Ignore
             }
-        } catch (\Exception $e) {
-            // Ignore
+
+            // macOS fallback: get first active network service interface
+            try {
+                $result = Process::run("networksetup -listallhardwareports 2>/dev/null | awk '/Device:/{print \$2}' | head -1");
+                $iface = trim($result->output());
+                if (!empty($iface)) {
+                    return $iface;
+                }
+            } catch (\Exception $e) {
+                // Ignore
+            }
+
+            return 'en0'; // macOS default
         }
 
-        // macOS fallback
+        // Linux: try to find the default interface
         try {
-            $result = Process::run("route -n get default 2>/dev/null | grep interface | awk '{print $2}'");
+            $result = Process::run("ip route show default 2>/dev/null | awk '{print \$5}' | head -1");
             $iface = trim($result->output());
             if (!empty($iface)) {
                 return $iface;

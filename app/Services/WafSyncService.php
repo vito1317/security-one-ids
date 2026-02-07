@@ -861,7 +861,7 @@ class WafSyncService
     {
         try {
             $snort = app(\App\Services\Detection\SnortEngine::class);
-            if (!$snort->isInstalled() || !$snort->isRunning()) {
+            if (!$snort->isInstalled()) {
                 return;
             }
 
