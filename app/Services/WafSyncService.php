@@ -878,56 +878,27 @@ class WafSyncService
         }
 
         // Check cache file — don't re-attempt install every heartbeat
-        $cacheFile = storage_path('app/npcap_installed.txt');
-        if (file_exists($cacheFile) && str_contains(file_get_contents($cacheFile), 'verified')) {
+        $cacheFile = storage_path('app/pcap_verified.txt');
+        if (file_exists($cacheFile)) {
             return;
         }
 
-        // Check if Npcap/WinPcap is already installed using multiple methods
-        // Method 1: Check Program Files (not affected by WOW64 redirection)
-        $npcapDir = 'C:\\Program Files\\Npcap';
-        if (is_dir($npcapDir)) {
-            file_put_contents($cacheFile, 'verified');
-            return;
-        }
-
-        // Method 2: Check via PowerShell registry (reliable, bypasses WOW64)
-        try {
-            $r = Process::timeout(5)->run('powershell -NoProfile -Command "Get-ItemProperty HKLM:\\SOFTWARE\\Npcap -ErrorAction SilentlyContinue | Select-Object -ExpandProperty \'(default)\'" 2>&1');
-            if ($r->successful() && !empty(trim($r->output()))) {
-                file_put_contents($cacheFile, 'verified');
-                return;
-            }
-        } catch (\Exception $e) {
-            // Continue to check other methods
-        }
-
-        // Method 3: Check if Snort can see interfaces (definitive test)
+        // The ONLY reliable check: does Snort actually see network interfaces?
+        // File/directory/registry checks are unreliable — partial installs create
+        // those artifacts without functional drivers.
         try {
             $snort = app(\App\Services\Detection\SnortEngine::class);
             if ($snort->isInstalled()) {
                 $r = Process::timeout(10)->run($snort->getSnortPath() . ' -W 2>&1');
-                // If we see any interface with an IP, Npcap is working
                 if (preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $r->output())) {
-                    file_put_contents($cacheFile, 'verified');
+                    // Snort can see interfaces — packet capture driver is working
+                    file_put_contents($cacheFile, date('c'));
+                    Log::debug('Packet capture driver verified via snort -W');
                     return;
                 }
             }
         } catch (\Exception $e) {
-            // Continue
-        }
-
-        // Method 4: Filesystem checks (may fail with WOW64 redirection)
-        $dllPaths = [
-            'C:\\Windows\\System32\\Npcap\\wpcap.dll',
-            'C:\\Windows\\System32\\wpcap.dll',
-            'C:\\Windows\\SysNative\\Npcap\\wpcap.dll', // Bypass WOW64
-        ];
-        foreach ($dllPaths as $dll) {
-            if (file_exists($dll)) {
-                file_put_contents($cacheFile, 'verified');
-                return;
-            }
+            // Continue to install
         }
 
         Log::info('Packet capture driver not found, attempting to install...');
