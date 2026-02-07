@@ -786,7 +786,7 @@ class WafSyncService
                 return;
             }
 
-            $response = \Illuminate\Support\Facades\Http::timeout(30)
+            $response = \Illuminate\Support\Facades\Http::timeout(120)
                 ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
                 ->get("{$this->wafUrl}/api/ids/agents/snort-rules", ['token' => $this->agentToken]);
 
@@ -799,15 +799,24 @@ class WafSyncService
             }
 
             $data = $response->json();
-            if (empty($data['rules'])) {
+
+            // Support both new format (rules_text) and legacy format (rules array)
+            $rulesContent = '';
+            $ruleCount = 0;
+
+            if (!empty($data['rules_text'])) {
+                // New optimized format: pre-joined rule text
+                $rulesContent = $data['rules_text'] . "\n";
+                $ruleCount = $data['rules_count'] ?? substr_count($rulesContent, "\n");
+            } elseif (!empty($data['rules'])) {
+                // Legacy format: array of rule objects
+                foreach ($data['rules'] as $rule) {
+                    $rulesContent .= ($rule['rule_content'] ?? '') . "\n";
+                }
+                $ruleCount = count($data['rules']);
+            } else {
                 Log::info('No Snort rules received from Hub');
                 return;
-            }
-
-            // Write rules to local Snort config
-            $rulesContent = '';
-            foreach ($data['rules'] as $rule) {
-                $rulesContent .= ($rule['rule_content'] ?? '') . "\n";
             }
 
             $rulesPath = '/etc/snort/rules/hub_custom.rules';
@@ -826,7 +835,6 @@ class WafSyncService
                 $snort->reload();
             }
 
-            $ruleCount = count($data['rules']);
             Log::info("Synced {$ruleCount} Snort rules from Hub");
 
             $this->reportAgentEvent('snort_rule_sync', "已從 Hub 同步 {$ruleCount} 條 Snort 規則", [
