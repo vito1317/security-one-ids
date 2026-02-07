@@ -139,9 +139,17 @@ class SnortEngine
             ]);
 
             if ($this->isWindows()) {
-                // Windows: start as hidden background process
-                $escapedCmd = str_replace('"', '`"', $cmd);
-                $psCommand = "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c {$escapedCmd}' -WindowStyle Hidden";
+                // Windows: Snort 2.9 doesn't have -D daemon mode
+                // Use Start-Process to launch Snort as a detached background process
+                $logFile = $this->logDir . '\\snort_stdout.log';
+                $errFile = $this->logDir . '\\snort_stderr.log';
+                $pidFile = $this->logDir . '\\snort.pid';
+                $psCommand = "\$proc = Start-Process -FilePath '{$this->snortPath}' " .
+                    "-ArgumentList '" . str_replace($this->snortPath . ' ', '', $cmd) . "' " .
+                    "-WindowStyle Hidden -PassThru " .
+                    "-RedirectStandardOutput '{$logFile}' " .
+                    "-RedirectStandardError '{$errFile}'; " .
+                    "\$proc.Id | Set-Content '{$pidFile}'";
                 $result = Process::timeout(15)->run("powershell -NonInteractive -Command \"{$psCommand}\"");
             } else {
                 // Linux/macOS: Snort -D (daemon mode) forks and detaches itself
@@ -593,6 +601,15 @@ LUA;
      */
     private function collectPacketStats(array &$stats): void
     {
+        // Debug: log what files are in the log directory
+        $allFiles = @scandir($this->logDir) ?: [];
+        $relevantFiles = array_filter($allFiles, fn($f) => str_contains($f, 'perf') || str_contains($f, 'stats') || str_contains($f, 'alert'));
+        Log::debug('[Snort Stats] Log dir contents', [
+            'log_dir' => $this->logDir,
+            'relevant_files' => array_values($relevantFiles),
+            'all_files_count' => count($allFiles),
+        ]);
+
         // Method 1: Check Snort 3 perf_monitor CSV files
         $perfFiles = glob($this->logDir . '/perf_monitor*.csv');
         if (!empty($perfFiles)) {
