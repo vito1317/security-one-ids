@@ -477,15 +477,28 @@ class WafSyncService
         try {
             switch ($platform) {
                 case 'macos':
+                    // Ensure HOME is set — Laravel scheduler may not have it
+                    $home = getenv('HOME') ?: (getenv('SUDO_USER') ? '/Users/' . getenv('SUDO_USER') : posix_getpwuid(posix_getuid())['dir'] ?? '/tmp');
+                    $envPrefix = "HOME={$home} ";
+                    
+                    // Find brew path (may not be in PATH for daemon)
+                    $brewPath = 'brew';
+                    foreach (['/opt/homebrew/bin/brew', '/usr/local/bin/brew'] as $bp) {
+                        if (file_exists($bp)) {
+                            $brewPath = $bp;
+                            break;
+                        }
+                    }
+                    
                     // First ensure Homebrew is up to date
-                    Process::timeout(120)->run('brew update 2>&1');
+                    Process::timeout(120)->run("{$envPrefix} {$brewPath} update 2>&1");
                     
                     // Install required dependencies for Snort 3
                     Log::info('Installing Snort dependencies via Homebrew...');
-                    Process::timeout(600)->run('brew install daq libdnet openssl pcre libtool luajit hwloc cmake pkg-config libpcap 2>&1');
+                    Process::timeout(600)->run("{$envPrefix} {$brewPath} install daq libdnet openssl pcre libtool luajit hwloc cmake pkg-config libpcap 2>&1");
                     
                     // Install Snort 3 (the formula is "snort", not "snort3")
-                    $result = Process::timeout(600)->run('brew install snort 2>&1');
+                    $result = Process::timeout(600)->run("{$envPrefix} {$brewPath} install snort 2>&1");
                     if (!$result->successful()) {
                         // Try MacPorts as fallback
                         $portsCheck = Process::run('which port 2>&1');
