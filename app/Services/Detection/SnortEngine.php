@@ -430,8 +430,11 @@ class SnortEngine
             ]
             : [
                 '/usr/local/bin/snort',
+                '/usr/local/bin/snort3',
                 '/usr/sbin/snort',
+                '/usr/sbin/snort3',
                 '/usr/bin/snort',
+                '/usr/bin/snort3',
                 '/opt/snort/bin/snort',
                 '/opt/homebrew/bin/snort',
             ];
@@ -444,7 +447,7 @@ class SnortEngine
 
         // Try which/where command
         try {
-            $cmd = $this->isWindows() ? 'where snort 2>nul' : 'which snort 2>/dev/null';
+            $cmd = $this->isWindows() ? 'where snort 2>nul' : 'which snort3 2>/dev/null || which snort 2>/dev/null';
             $result = Process::run($cmd);
             $path = trim($result->output());
             if (!empty($path) && file_exists($path)) {

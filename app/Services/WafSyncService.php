@@ -579,7 +579,34 @@ class WafSyncService
 
                     if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
                         Process::run('apt-get update -qq 2>&1');
-                        $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                        
+                        // Try installing snort3 first (newer package name)
+                        $result = Process::timeout(600)->run('apt-get install -y snort3 2>&1');
+                        
+                        if (!$result->successful()) {
+                            // Try snort (older package name)
+                            $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                        }
+                        
+                        if (!$result->successful()) {
+                            // Try adding Snort PPA (Ubuntu only)
+                            if (in_array($distro, ['ubuntu', 'linuxmint', 'pop'])) {
+                                Log::info('Trying Snort 3 via PPA...');
+                                Process::timeout(60)->run('apt-get install -y software-properties-common 2>&1');
+                                Process::timeout(60)->run('add-apt-repository -y ppa:oisf/suricata-stable 2>&1');
+                                Process::run('apt-get update -qq 2>&1');
+                                $result = Process::timeout(600)->run('apt-get install -y snort3 2>&1');
+                                if (!$result->successful()) {
+                                    $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                                }
+                            }
+                        }
+                        
+                        if (!$result->successful()) {
+                            // Compile from source as last resort
+                            Log::info('Trying Snort 3 compile from source...');
+                            $result = $this->compileSnort3FromSource();
+                        }
                     } elseif (in_array($distro, ['rhel', 'centos', 'rocky', 'almalinux', 'ol'])) {
                         Process::run('yum install -y epel-release 2>&1');
                         $result = Process::timeout(600)->run('yum install -y snort 2>&1');
@@ -761,6 +788,52 @@ class WafSyncService
         } catch (\Exception $e) {
             return ['success' => false, 'error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * Compile Snort 3 from source (Ubuntu/Debian fallback)
+     */
+    private function compileSnort3FromSource(): \Illuminate\Process\ProcessResult
+    {
+        // Install build dependencies
+        $deps = 'build-essential cmake libhwloc-dev libluajit-5.1-dev libssl-dev libpcap-dev ' .
+                'libpcre2-dev pkg-config zlib1g-dev libdaq-dev flex bison';
+        Process::timeout(300)->run("apt-get install -y {$deps} 2>&1");
+
+        $buildDir = '/tmp/snort3-build-' . uniqid();
+        @mkdir($buildDir, 0755, true);
+
+        // Download latest Snort 3 source
+        $downloadResult = Process::timeout(120)->run(
+            "cd {$buildDir} && " .
+            "curl -fsSL https://api.github.com/repos/snort3/snort3/releases/latest " .
+            "| grep 'tarball_url' | cut -d'\"' -f4 " .
+            "| xargs curl -fsSL -o snort3.tar.gz 2>&1"
+        );
+
+        if (!$downloadResult->successful()) {
+            // Fallback: try direct download
+            Process::timeout(120)->run(
+                "cd {$buildDir} && curl -fsSL -o snort3.tar.gz " .
+                "https://github.com/snort3/snort3/archive/refs/heads/master.tar.gz 2>&1"
+            );
+        }
+
+        // Extract, build, install
+        $result = Process::timeout(900)->run(
+            "cd {$buildDir} && " .
+            "tar xzf snort3.tar.gz --strip-components=1 && " .
+            "mkdir -p build && cd build && " .
+            "cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local 2>&1 && " .
+            "make -j\$(nproc) 2>&1 && " .
+            "make install 2>&1 && " .
+            "ldconfig 2>&1"
+        );
+
+        // Cleanup
+        Process::run("rm -rf {$buildDir} 2>/dev/null");
+
+        return $result;
     }
 
     /**
