@@ -607,26 +607,30 @@ class WafSyncService
                     // Method 3: Download Snort installer via PowerShell
                     if (!$snortInstalled) {
                         Log::info('Trying Snort install via direct download...');
-                        $downloadScript = <<<'PS'
-$ErrorActionPreference = 'Stop'
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$snortUrl = 'https://www.snort.org/downloads/snort/Snort_2_9_20_Installer.x64.exe'
-$outPath = "$env:TEMP\snort_installer.exe"
-try {
-    Invoke-WebRequest -Uri $snortUrl -OutFile $outPath -UseBasicParsing -TimeoutSec 120
-    if (Test-Path $outPath) {
-        Start-Process -FilePath $outPath -ArgumentList '/S' -Wait -NoNewWindow
-        Remove-Item $outPath -Force -ErrorAction SilentlyContinue
-        Write-Output 'INSTALL_OK'
-    } else {
-        Write-Output 'DOWNLOAD_FAILED: file not created'
-    }
-} catch {
-    Write-Output "DOWNLOAD_FAILED: $_"
-}
-PS;
-                        $r = Process::timeout(300)->run("powershell -NoProfile -ExecutionPolicy Bypass -Command \"{$downloadScript}\" 2>&1");
+                        $scriptContent = "\$ErrorActionPreference = 'Stop'\r\n" .
+                            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\r\n" .
+                            "\$snortUrl = 'https://www.snort.org/downloads/snort/Snort_2_9_20_Installer.x64.exe'\r\n" .
+                            "\$outPath = \"\$env:TEMP\\snort_installer.exe\"\r\n" .
+                            "try {\r\n" .
+                            "    Invoke-WebRequest -Uri \$snortUrl -OutFile \$outPath -UseBasicParsing -TimeoutSec 120\r\n" .
+                            "    if (Test-Path \$outPath) {\r\n" .
+                            "        Start-Process -FilePath \$outPath -ArgumentList '/S' -Wait -NoNewWindow\r\n" .
+                            "        Remove-Item \$outPath -Force -ErrorAction SilentlyContinue\r\n" .
+                            "        Write-Output 'INSTALL_OK'\r\n" .
+                            "    } else {\r\n" .
+                            "        Write-Output 'DOWNLOAD_FAILED: file not created'\r\n" .
+                            "    }\r\n" .
+                            "} catch {\r\n" .
+                            "    Write-Output \"DOWNLOAD_FAILED: \$_\"\r\n" .
+                            "}\r\n";
+
+                        $scriptPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'snort_install_' . uniqid() . '.ps1';
+                        file_put_contents($scriptPath, $scriptContent);
+
+                        $r = Process::timeout(300)->run("powershell -NoProfile -ExecutionPolicy Bypass -File \"{$scriptPath}\" 2>&1");
                         $output = $r->output();
+                        @unlink($scriptPath);
+
                         if (str_contains($output, 'INSTALL_OK')) {
                             $snortInstalled = true;
                         } else {
