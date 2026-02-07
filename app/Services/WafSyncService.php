@@ -883,6 +883,12 @@ class WafSyncService
             return;
         }
 
+        // Cooldown: don't retry install more than once per hour
+        $cooldownFile = storage_path('app/pcap_cooldown.txt');
+        if (file_exists($cooldownFile) && (time() - filemtime($cooldownFile)) < 3600) {
+            return;
+        }
+
         Log::info('[WinPcap] Checking packet capture driver status...');
 
         // The ONLY reliable check: does Snort actually see network interfaces?
@@ -942,13 +948,40 @@ class WafSyncService
                 "            exit 1\r\n" .
                 "        }\r\n" .
                 "        Write-Output 'Installing WinPcap silently...'\r\n" .
-                "        Start-Process -FilePath \$outPath -ArgumentList '/S' -Wait -NoNewWindow\r\n" .
-                "        Start-Sleep -Seconds 3\r\n" .
+                "        \$proc = Start-Process -FilePath \$outPath -ArgumentList '/S' -Wait -PassThru\r\n" .
+                "        Write-Output \"Installer exit code: \$(\$proc.ExitCode)\"\r\n" .
+                "        Start-Sleep -Seconds 5\r\n" .
                 "        Remove-Item \$outPath -Force -ErrorAction SilentlyContinue\r\n" .
-                "        # Verify installation\r\n" .
-                "        if (Test-Path 'C:\\Windows\\System32\\wpcap.dll') {\r\n" .
+                "        \r\n" .
+                "        # Try to start the NPF driver service\r\n" .
+                "        Write-Output 'Starting NPF driver service...'\r\n" .
+                "        try { net start npf 2>&1 | Out-String | Write-Output } catch { }\r\n" .
+                "        \r\n" .
+                "        # Check NPF service status\r\n" .
+                "        try { sc.exe query npf 2>&1 | Out-String | Write-Output } catch { }\r\n" .
+                "        \r\n" .
+                "        # Check DLL in multiple locations\r\n" .
+                "        \$dllPaths = @(\r\n" .
+                "            'C:\\Windows\\System32\\wpcap.dll',\r\n" .
+                "            'C:\\Windows\\SysWOW64\\wpcap.dll',\r\n" .
+                "            'C:\\Windows\\System32\\Npcap\\wpcap.dll',\r\n" .
+                "            'C:\\Windows\\System32\\Packet.dll'\r\n" .
+                "        )\r\n" .
+                "        \$found = \$false\r\n" .
+                "        foreach (\$dll in \$dllPaths) {\r\n" .
+                "            if (Test-Path \$dll) {\r\n" .
+                "                Write-Output \"FOUND: \$dll\"\r\n" .
+                "                \$found = \$true\r\n" .
+                "            }\r\n" .
+                "        }\r\n" .
+                "        \r\n" .
+                "        if (\$found) {\r\n" .
                 "            Write-Output 'WINPCAP_INSTALL_OK'\r\n" .
                 "        } else {\r\n" .
+                "            # Diagnostic: list what the installer actually put on disk\r\n" .
+                "            Write-Output 'DLL not found in expected paths. Checking WinPcap dirs:'\r\n" .
+                "            try { Get-ChildItem 'C:\\Program Files (x86)\\WinPcap' -ErrorAction SilentlyContinue | ForEach-Object { Write-Output \$_.FullName } } catch { }\r\n" .
+                "            try { Get-ChildItem 'C:\\Program Files\\WinPcap' -ErrorAction SilentlyContinue | ForEach-Object { Write-Output \$_.FullName } } catch { }\r\n" .
                 "            Write-Output 'WINPCAP_INSTALL_NO_DLL'\r\n" .
                 "        }\r\n" .
                 "    } else {\r\n" .
@@ -965,18 +998,20 @@ class WafSyncService
             $output = $r->output();
             @unlink($scriptPath);
 
-            Log::debug('WinPcap install output: ' . substr($output, 0, 500));
+            Log::info('[WinPcap] Install script output: ' . substr($output, 0, 800));
 
             if (str_contains($output, 'WINPCAP_INSTALL_OK')) {
                 Log::info('WinPcap 4.1.3 installed successfully');
-                file_put_contents($cacheFile, 'verified');
+                file_put_contents($cacheFile, date('c'));
+                @unlink($cooldownFile);
                 $this->reportAgentEvent('snort_install', 'WinPcap packet capture driver installed successfully');
             } elseif (str_contains($output, 'WINPCAP_INSTALL_NO_DLL')) {
-                Log::warning('WinPcap installer ran but DLL not found — may need system restart');
-                file_put_contents($cacheFile, 'verified'); // Don't retry
-                $this->reportAgentEvent('snort_install', 'WinPcap installed, system restart may be required');
+                Log::warning('WinPcap installer ran but DLL not found — will retry in 1 hour');
+                file_put_contents($cooldownFile, date('c')); // Cooldown, NOT permanent cache
+                $this->reportAgentEvent('snort_error', 'WinPcap installed but driver not loaded. May need manual install or reboot.');
             } else {
-                Log::warning('WinPcap auto-install failed: ' . substr($output, 0, 300));
+                Log::warning('WinPcap auto-install failed: ' . substr($output, 0, 500));
+                file_put_contents($cooldownFile, date('c')); // Cooldown
                 $this->reportAgentEvent('snort_error', 'WinPcap auto-install failed: ' . substr($output, 0, 200));
             }
         } catch (\Exception $e) {
