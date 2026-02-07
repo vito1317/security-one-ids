@@ -609,7 +609,7 @@ class WafSyncService
                         Process::run('mkdir C:\\Snort\\rules 2>&1');
                         Process::run('mkdir C:\\Snort\\log 2>&1');
                         Process::run('mkdir C:\\Snort\\etc 2>&1');
-                        return ['success' => false, 'error' => 'Windows Snort auto-install failed. ' . implode(' | ', $errors) . '. Please install Snort manually from https://www.snort.org/downloads'];
+                        return ['success' => false, 'error' => 'Windows Snort auto-install failed. ' . implode(' | ', $errors) . ' | Please install Snort manually from snort.org'];
                     }
                     break;
 
