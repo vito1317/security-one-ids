@@ -448,7 +448,22 @@ class WafSyncService
         try {
             switch ($platform) {
                 case 'macos':
-                    $result = Process::timeout(600)->run('brew install snort 2>&1');
+                    // Snort 3 is not in default Homebrew - try multiple approaches
+                    $result = Process::timeout(600)->run('brew install snort3 2>&1');
+                    if (!$result->successful()) {
+                        // Try the snort formula (some taps provide it)
+                        $result = Process::timeout(600)->run('brew install snort 2>&1');
+                    }
+                    if (!$result->successful()) {
+                        // Try MacPorts as fallback
+                        $portsCheck = Process::run('which port 2>&1');
+                        if ($portsCheck->successful()) {
+                            $result = Process::timeout(600)->run('sudo port install snort3 2>&1');
+                        }
+                    }
+                    if (!$result->successful()) {
+                        return ['success' => false, 'error' => 'macOS Snort install failed. Homebrew does not have a Snort formula. Please install manually: https://www.snort.org/downloads'];
+                    }
                     break;
 
                 case 'debian':
