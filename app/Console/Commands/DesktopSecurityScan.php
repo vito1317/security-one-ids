@@ -394,6 +394,13 @@ class DesktopSecurityScan extends Command
                         'raw_log' => json_encode([
                             'platform' => $collector->getPlatform(),
                             'attempts' => $threat['attempts'] ?? 0,
+                            'users_targeted' => $threat['users_targeted'] ?? [],
+                            'first_attempt' => $threat['first_attempt'] ?? null,
+                            'last_attempt' => $threat['last_attempt'] ?? null,
+                            'original_logs' => array_slice(
+                                array_map(fn($l) => $l['raw'] ?? '', array_filter($failedLogins, fn($l) => ($l['ip'] ?? '') === ($threat['ip'] ?? ''))),
+                                0, 10
+                            ),
                             'timestamp' => now()->toIso8601String(),
                         ]),
                     ];
