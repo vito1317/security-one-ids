@@ -777,8 +777,9 @@ LUA;
         // Snort 2: Use fast alert output (text format parsed by collectSnortAlerts)
         $cmd .= " -A fast";
 
-        if ($mode === 'ips') {
-            $cmd .= " -Q"; // Inline/IPS mode
+        if ($mode === 'ips' && !$this->isWindows()) {
+            // -Q (inline) requires DAQ support not available on Windows (WinPcap/Npcap is passive)
+            $cmd .= " -Q";
         }
 
         // Run as daemon on Unix
@@ -892,10 +893,10 @@ LUA;
         }
 
         // Return platform-appropriate default
-        if ($this->isSnort2()) {
-            return '/etc/snort/snort.conf';
+        if ($this->isWindows()) {
+            return $this->isSnort2() ? 'C:\\Snort\\etc\\snort.conf' : 'C:\\Snort\\etc\\snort.lua';
         }
-        return '/etc/snort/snort.lua';
+        return $this->isSnort2() ? '/etc/snort/snort.conf' : '/etc/snort/snort.lua';
     }
 
     private function detectLogDir(): string
@@ -936,7 +937,29 @@ LUA;
     private function detectDefaultInterface(): string
     {
         if ($this->isWindows()) {
-            return '1'; // Windows uses interface index
+            // Windows Snort uses device index from `snort -W`
+            // Try to detect the active adapter
+            try {
+                $result = Process::timeout(10)->run("{$this->snortPath} -W 2>&1");
+                $output = $result->output();
+                // Parse the interface list — look for an adapter with an IP address
+                // Format: "1  \Device\NPF_...   192.168.1.x   Description"
+                if (preg_match_all('/^\s*(\d+)\s+\S+\s+(\d+\.\d+\.\d+\.\d+)/m', $output, $matches)) {
+                    foreach ($matches[2] as $idx => $ip) {
+                        // Skip loopback/zero IPs
+                        if ($ip !== '0.0.0.0' && $ip !== '127.0.0.1') {
+                            Log::debug('Detected Windows Snort interface', [
+                                'index' => $matches[1][$idx],
+                                'ip' => $ip,
+                            ]);
+                            return $matches[1][$idx];
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::debug('Failed to detect Windows interface: ' . $e->getMessage());
+            }
+            return '1';
         }
 
         $isMac = PHP_OS === 'Darwin';
