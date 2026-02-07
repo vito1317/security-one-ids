@@ -565,19 +565,77 @@ LUA;
             $stats['alerts_today'] = $this->countAlertsToday();
         }
 
-        // Try to get Snort stats from stats file
-        $statsFile = $this->logDir . '/snort.stats';
-        if (file_exists($statsFile)) {
-            $statsContent = @file_get_contents($statsFile);
-            if ($statsContent && preg_match('/total_packets:\s*(\d+)/i', $statsContent, $m)) {
-                $stats['packets_analyzed'] = (int) $m[1];
-            }
+        // Also check Snort 2 fast alert format
+        $snort2AlertPath = $this->logDir . '/snort.alert.fast';
+        if ($stats['alerts_total'] === 0 && file_exists($snort2AlertPath)) {
+            $stats['alerts_total'] = $this->countLines($snort2AlertPath);
         }
+
+        // Try to get packet stats from Snort
+        $this->collectPacketStats($stats);
 
         // Count rules
         $stats['rules_loaded'] = $this->countLoadedRules();
 
+        // Calculate uptime from PID file
+        if ($this->isRunning() && file_exists($this->pidFile)) {
+            $pidCreated = filemtime($this->pidFile);
+            if ($pidCreated) {
+                $stats['uptime'] = time() - $pidCreated;
+            }
+        }
+
         return $stats;
+    }
+
+    /**
+     * Collect packet statistics from Snort
+     */
+    private function collectPacketStats(array &$stats): void
+    {
+        // Method 1: Check snort.stats file
+        $statsFile = $this->logDir . '/snort.stats';
+        if (file_exists($statsFile)) {
+            $statsContent = @file_get_contents($statsFile);
+            if ($statsContent) {
+                // Snort 3 CSV stats format: timestamp,total_pkts,...
+                $lines = explode("\n", trim($statsContent));
+                $lastLine = end($lines);
+                $parts = explode(',', $lastLine);
+                if (count($parts) > 1 && is_numeric($parts[1])) {
+                    $stats['packets_analyzed'] = (int) $parts[1];
+                    return;
+                }
+                // Snort 2 format
+                if (preg_match('/total_packets:\s*(\d+)/i', $statsContent, $m)) {
+                    $stats['packets_analyzed'] = (int) $m[1];
+                    return;
+                }
+            }
+        }
+
+        // Method 2: Signal Snort to dump stats (Unix only)
+        if (!$this->isWindows() && $this->isRunning() && file_exists($this->pidFile)) {
+            $pid = trim(file_get_contents($this->pidFile));
+            if (is_numeric($pid)) {
+                // USR1 tells Snort to dump stats
+                @Process::timeout(3)->run("kill -USR1 {$pid} 2>/dev/null");
+                // Wait briefly for stats file to be written
+                usleep(500000);
+                // Re-check stats file
+                if (file_exists($statsFile)) {
+                    $statsContent = @file_get_contents($statsFile);
+                    if ($statsContent) {
+                        $lines = explode("\n", trim($statsContent));
+                        $lastLine = end($lines);
+                        $parts = explode(',', $lastLine);
+                        if (count($parts) > 1 && is_numeric($parts[1])) {
+                            $stats['packets_analyzed'] = (int) $parts[1];
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
