@@ -218,10 +218,19 @@ install_snort() {
             apt-get install -y build-essential libpcap-dev libpcre3-dev \
                 libdnet-dev zlib1g-dev cmake libhwloc-dev \
                 libluajit-5.1-dev libssl-dev libsafec-dev \
-                libdaq-dev flex bison 2>/dev/null || true
+                libdaq-dev flex bison curl jq 2>/dev/null || true
+            
+            # Fetch latest Snort 3 version from GitHub
+            echo -e "${CYAN}Fetching latest Snort 3 version...${NC}"
+            SNORT_VER=$(curl -fsSL https://api.github.com/repos/snort3/snort3/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '[0-9][0-9.]*' || echo "")
+            if [ -z "$SNORT_VER" ]; then
+                SNORT_VER="3.6.2.0"  # Fallback to known stable version
+                echo -e "${YELLOW}Could not fetch latest version, using fallback: $SNORT_VER${NC}"
+            else
+                echo -e "${GREEN}Latest Snort 3 version: $SNORT_VER${NC}"
+            fi
             
             # Download and build Snort 3
-            SNORT_VER="3.3.5.0"
             cd /tmp
             curl -fsSL -o snort3-${SNORT_VER}.tar.gz \
                 "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz" 2>/dev/null || \
@@ -283,19 +292,70 @@ install_snort() {
         echo -e "${YELLOW}⚠️  Snort binary not found in PATH after install${NC}"
     fi
     
+    # Generate default Snort config if missing
+    if command -v snort &> /dev/null; then
+        SNORT_VERSION_NUM=$(snort -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || echo "3.0.0")
+        # Check for config in common paths
+        CONFIG_FOUND=false
+        for cfg in /etc/snort/snort.lua /etc/snort/snort.conf /usr/local/etc/snort/snort.lua /opt/homebrew/etc/snort/snort.lua; do
+            if [ -f "$cfg" ]; then
+                CONFIG_FOUND=true
+                break
+            fi
+        done
+        
+        if [ "$CONFIG_FOUND" = false ]; then
+            echo -e "${YELLOW}Generating default Snort config...${NC}"
+            mkdir -p /etc/snort/rules
+            
+            # Check if Snort 2 or 3
+            MAJOR_VER=$(echo "$SNORT_VERSION_NUM" | cut -d. -f1)
+            if [ "$MAJOR_VER" -lt 3 ] 2>/dev/null; then
+                # Snort 2 config
+                cat > /etc/snort/snort.conf << 'SNORTCONF'
+var HOME_NET any
+var EXTERNAL_NET any
+var RULE_PATH /etc/snort/rules
+
+config logdir: /var/log/snort
+config detection: search-method ac-full
+
+output alert_fast: snort.alert.fast
+
+include $RULE_PATH/local.rules
+SNORTCONF
+            else
+                # Snort 3 Lua config
+                cat > /etc/snort/snort.lua << 'SNORTLUA'
+-- Security One IDS - Auto-generated Snort 3 config
+HOME_NET = 'any'
+EXTERNAL_NET = 'any'
+
+ips = {
+    variables = default_variables,
+}
+
+alert_json = {
+    file = true,
+    limit = 100,
+    fields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority',
+}
+SNORTLUA
+            fi
+            
+            # Create local.rules if not exists
+            if [ ! -f /etc/snort/rules/local.rules ]; then
+                echo '# Security One IDS - Local Rules' > /etc/snort/rules/local.rules
+            fi
+            echo -e "${GREEN}✅ Default Snort config generated${NC}"
+        fi
+    fi
+    
     return 0
 }
 
-# Ask about Snort IPS installation
-INSTALL_SNORT="${INSTALL_SNORT:-}"
-if [ -z "$INSTALL_SNORT" ]; then
-    echo -e "\n${YELLOW}🛡️  Install Snort 3 IPS? (Optional add-on)${NC}"
-    echo -e "   Snort can monitor network traffic for intrusion attempts."
-    read -p "   Install Snort 3? [y/N]: " SNORT_CHOICE
-    if [[ "$SNORT_CHOICE" =~ ^[Yy]$ ]]; then
-        INSTALL_SNORT="yes"
-    fi
-fi
+# Always install Snort (required for IDS/IPS functionality)
+INSTALL_SNORT="${INSTALL_SNORT:-yes}"
 
 if [ "$INSTALL_SNORT" = "yes" ]; then
     install_snort || echo -e "${YELLOW}⚠️  Snort installation skipped${NC}"

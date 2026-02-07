@@ -811,17 +811,10 @@ $SyncTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontS
 Register-ScheduledTask -TaskName "$ServiceName-Sync" -Action $SyncTaskAction -Trigger @($SyncTaskTrigger1, $SyncTaskTrigger2) -Principal $SyncTaskPrincipal -Settings $SyncTaskSettings -Force | Out-Null
 Write-Host "✅ Sync Service created ($ServiceName-Sync) with auto-restart" -ForegroundColor Green
 
-# Snort 3 IPS Installation (Optional)
-Write-Host "`n🛡️  Snort 3 IPS Installation (Optional)" -ForegroundColor Yellow
-Write-Host "   Snort can monitor network traffic for intrusion attempts." -ForegroundColor Gray
+# Snort 3 IPS Installation (always install for IDS/IPS functionality)
+Write-Host "`n🛡️  Installing Snort 3 IPS..." -ForegroundColor Cyan
 
-$InstallSnort = $env:INSTALL_SNORT
-if (-not $InstallSnort) {
-    $SnortChoice = Read-Host "   Install Snort 3 IPS? [y/N]"
-    if ($SnortChoice -match '^[Yy]$') {
-        $InstallSnort = "yes"
-    }
-}
+$InstallSnort = if ($env:INSTALL_SNORT) { $env:INSTALL_SNORT } else { "yes" }
 
 if ($InstallSnort -eq "yes") {
     Write-Host "`n🛡️  Installing Snort 3 IPS..." -ForegroundColor Cyan
