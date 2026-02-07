@@ -977,7 +977,6 @@ class WafSyncService
         }
     }
 
-
     /**
      * Compile Snort 3 from source (Ubuntu/Debian fallback)
      */
