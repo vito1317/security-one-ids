@@ -413,17 +413,34 @@ class WafSyncService
             $snort = app(\App\Services\Detection\SnortEngine::class);
 
             if (!$snort->isInstalled()) {
+                // Check if install already failed — don't retry every heartbeat
+                $failFile = storage_path('app/snort_install_failed.txt');
+                if (file_exists($failFile)) {
+                    $failedAt = filemtime($failFile);
+                    // Only retry after 24 hours
+                    if (time() - $failedAt < 86400) {
+                        Log::debug('Snort install previously failed, skipping retry until ' . date('Y-m-d H:i:s', $failedAt + 86400));
+                        return;
+                    }
+                    // 24h passed — allow retry
+                    @unlink($failFile);
+                }
+
                 Log::info('Snort enabled but not installed, starting installation...');
                 $result = $this->installSnort();
 
                 if ($result['success']) {
                     Log::info('Snort installed successfully');
+                    @unlink($failFile); // Clear failure flag
                     $this->reportAgentEvent('snort_install', 'Snort 安裝成功', [
                         'version' => $result['version'] ?? null,
                     ]);
                 } else {
-                    Log::error('Snort installation failed: ' . ($result['error'] ?? 'Unknown error'));
-                    $this->reportAgentEvent('error', 'Snort 安裝失敗：' . ($result['error'] ?? 'Unknown error'));
+                    $error = $result['error'] ?? 'Unknown error';
+                    Log::error('Snort installation failed: ' . $error);
+                    // Cache the failure to prevent retry every heartbeat
+                    file_put_contents($failFile, $error);
+                    $this->reportAgentEvent('error', 'Snort 安裝失敗：' . $error);
                     return;
                 }
 
@@ -1243,15 +1260,14 @@ class WafSyncService
             $isWindows = PHP_OS_FAMILY === 'Windows';
             $isDocker = file_exists('/.dockerenv') || getenv('DOCKER_CONTAINER');
             
-            // Run git pull to get latest code
-            Log::info('Pulling latest code from git...', ['platform' => $isWindows ? 'windows' : 'unix']);
+            // Force update: fetch + reset --hard to avoid conflicts with local changes
+            Log::info('Fetching latest code from git...', ['platform' => $isWindows ? 'windows' : 'unix']);
             
             if ($isWindows) {
                 // Windows: Use cmd.exe for better output capturing
-                // PowerShell sometimes doesn't capture git output correctly
                 $gitResult = Process::path($installDir)
                     ->timeout(300)
-                    ->run('cmd /c "git pull origin main 2>&1"');
+                    ->run('cmd /c "git fetch origin main 2>&1 && git reset --hard origin/main 2>&1"');
                 
                 // Log both output and error for debugging
                 Log::info('Git command completed', [
@@ -1260,9 +1276,14 @@ class WafSyncService
                     'exitCode' => $gitResult->exitCode(),
                 ]);
             } else {
+                // Clean untracked files that might conflict, then force update
+                Process::path($installDir)
+                    ->timeout(30)
+                    ->run('git clean -fd 2>&1');
+                    
                 $gitResult = Process::path($installDir)
                     ->timeout(300)
-                    ->run('git pull origin main 2>&1');
+                    ->run('git fetch origin main 2>&1 && git reset --hard origin/main 2>&1');
             }
             
             if (!$gitResult->successful()) {

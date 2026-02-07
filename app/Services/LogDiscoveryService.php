@@ -13,40 +13,77 @@ use Illuminate\Support\Facades\Log;
 class LogDiscoveryService
 {
     /**
-     * Common log file locations to scan
+     * Common web server log file locations to scan
      */
     private const LOG_PATHS = [
-        // Container's own Nginx
+        // === Linux Nginx ===
         '/var/log/nginx/access.log',
         '/var/log/nginx/*/access.log',
+        '/var/log/nginx/*-access.log',
+        '/var/log/nginx/error.log',
+        '/usr/local/nginx/logs/access.log',
         
-        // Host-mounted logs (via docker-compose volumes)
+        // === Linux Apache ===
+        '/var/log/apache2/access.log',
+        '/var/log/apache2/*/access.log',
+        '/var/log/apache2/*-access.log',
+        '/var/log/apache2/other_vhosts_access.log',
+        '/var/log/httpd/access_log',
+        '/var/log/httpd/*/access_log',
+        
+        // === macOS ===
+        '/var/log/apache2/access_log',
+        '/var/log/apache2/error_log',
+        '/usr/local/var/log/nginx/access.log',
+        '/usr/local/var/log/nginx/error.log',
+        '/opt/homebrew/var/log/nginx/access.log',
+        '/opt/homebrew/var/log/nginx/error.log',
+        '/opt/homebrew/var/log/httpd/access_log',
+        '/private/var/log/apache2/access_log',
+        '/private/var/log/apache2/error_log',
+        
+        // === Docker / Container ===
         '/var/log/host-nginx/access.log',
         '/var/log/host-nginx/*/access.log',
         '/var/log/host-nginx/*-access.log',
         '/var/log/host-apache2/access.log',
         '/var/log/host-apache2/*/access.log',
-        '/var/log/host-apache2/*-access.log',
-        '/var/log/host-apache2/other_vhosts_access.log',
         '/var/log/host-httpd/access_log',
-        '/var/log/host-httpd/*/access_log',
-        
-        // Custom mounted log directories (from deploy.sh)
         '/var/log/custom-logs-*/access.log',
         '/var/log/custom-logs-*/*.log',
-        '/var/log/custom-logs-*/access_log',
-        '/var/log/custom-logs-*/*-access.log',
         
-        // Standard Nginx paths
-        '/usr/local/nginx/logs/access.log',
-        
-        // Standard Apache paths  
-        '/var/log/apache2/access.log',
-        '/var/log/httpd/access_log',
-        
-        // Custom paths
+        // === Common custom paths ===
         '/var/www/*/logs/access.log',
         '/home/*/logs/access.log',
+        '/home/*/public_html/logs/access.log',
+    ];
+
+    /**
+     * System log paths for security monitoring
+     */
+    private const SYSTEM_LOG_PATHS = [
+        // === Linux syslog / auth ===
+        '/var/log/syslog',
+        '/var/log/messages',
+        '/var/log/auth.log',
+        '/var/log/secure',
+        '/var/log/kern.log',
+        '/var/log/ufw.log',
+        '/var/log/fail2ban.log',
+        '/var/log/firewalld',
+        
+        // === macOS system logs ===
+        '/var/log/system.log',
+        '/var/log/install.log',
+        '/private/var/log/system.log',
+        '/private/var/log/asl/*.asl',
+        
+        // === Application logs ===
+        '/var/log/mysql/error.log',
+        '/var/log/postgresql/*.log',
+        '/var/log/redis/redis-server.log',
+        '/var/log/php*.log',
+        '/var/log/php-fpm/*.log',
     ];
 
     /**
