@@ -191,6 +191,116 @@ if [ "$INSTALL_CLAMAV" = "yes" ]; then
     install_clamav || echo -e "${YELLOW}⚠️  ClamAV installation skipped${NC}"
 fi
 
+# Snort 3 IPS Installation Function
+install_snort() {
+    echo -e "\n${CYAN}🛡️  Installing Snort 3 IPS...${NC}"
+    
+    if [ "$OS" = "macos" ]; then
+        # macOS - use Homebrew
+        if command -v brew &> /dev/null; then
+            ORIGINAL_USER="${SUDO_USER:-$USER}"
+            echo -e "${YELLOW}Installing Snort via Homebrew as $ORIGINAL_USER...${NC}"
+            sudo -u "$ORIGINAL_USER" brew install snort 2>/dev/null || brew install snort
+        else
+            echo -e "${RED}Homebrew not found. Please install Homebrew first or install Snort manually.${NC}"
+            return 1
+        fi
+    elif [ "$OS" = "debian" ]; then
+        apt-get update -qq
+        # Try Snort 3 package first
+        if apt-cache show snort3 &>/dev/null 2>&1; then
+            apt-get install -y snort3
+        elif apt-cache show snort &>/dev/null 2>&1; then
+            apt-get install -y snort
+        else
+            echo -e "${YELLOW}Snort not in repos, building from source...${NC}"
+            # Install build dependencies
+            apt-get install -y build-essential libpcap-dev libpcre3-dev \
+                libdnet-dev zlib1g-dev cmake libhwloc-dev \
+                libluajit-5.1-dev libssl-dev libsafec-dev \
+                libdaq-dev flex bison 2>/dev/null || true
+            
+            # Download and build Snort 3
+            SNORT_VER="3.3.5.0"
+            cd /tmp
+            curl -fsSL -o snort3-${SNORT_VER}.tar.gz \
+                "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz" 2>/dev/null || \
+            wget -q -O snort3-${SNORT_VER}.tar.gz \
+                "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz"
+            
+            if [ -f "snort3-${SNORT_VER}.tar.gz" ]; then
+                tar xzf snort3-${SNORT_VER}.tar.gz
+                cd snort3-${SNORT_VER}
+                mkdir build && cd build
+                cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local 2>/dev/null
+                make -j$(nproc) 2>/dev/null
+                make install 2>/dev/null
+                ldconfig 2>/dev/null
+                cd /tmp && rm -rf snort3-${SNORT_VER}*
+            else
+                echo -e "${RED}Failed to download Snort 3 source${NC}"
+                return 1
+            fi
+        fi
+    elif [ "$OS" = "redhat" ]; then
+        if command -v dnf &> /dev/null; then
+            dnf install -y epel-release 2>/dev/null
+            dnf install -y snort 2>/dev/null || dnf install -y snort3 2>/dev/null
+        else
+            yum install -y epel-release 2>/dev/null
+            yum install -y snort 2>/dev/null || yum install -y snort3 2>/dev/null
+        fi
+    else
+        echo -e "${YELLOW}Please install Snort 3 manually for your distribution.${NC}"
+        return 1
+    fi
+    
+    # Create directories
+    mkdir -p /var/log/snort /etc/snort/rules 2>/dev/null
+    chmod 755 /var/log/snort /etc/snort /etc/snort/rules
+    
+    # Download community rules
+    echo -e "${CYAN}📥 Downloading Snort community rules...${NC}"
+    cd /tmp
+    curl -fsSL -o snort3-community-rules.tar.gz \
+        "https://www.snort.org/downloads/community/snort3-community-rules.tar.gz" 2>/dev/null || \
+    wget -q -O snort3-community-rules.tar.gz \
+        "https://www.snort.org/downloads/community/snort3-community-rules.tar.gz" 2>/dev/null
+    
+    if [ -f "snort3-community-rules.tar.gz" ] && [ -s "snort3-community-rules.tar.gz" ]; then
+        tar xzf snort3-community-rules.tar.gz -C /etc/snort/rules --strip-components=1 2>/dev/null || true
+        rm -f snort3-community-rules.tar.gz
+        echo -e "${GREEN}✅ Community rules installed${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Could not download community rules (will retry later)${NC}"
+    fi
+    
+    # Verify installation
+    if command -v snort &> /dev/null; then
+        SNORT_VER=$(snort -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || echo "unknown")
+        echo -e "${GREEN}✅ Snort $SNORT_VER installed${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Snort binary not found in PATH after install${NC}"
+    fi
+    
+    return 0
+}
+
+# Ask about Snort IPS installation
+INSTALL_SNORT="${INSTALL_SNORT:-}"
+if [ -z "$INSTALL_SNORT" ]; then
+    echo -e "\n${YELLOW}🛡️  Install Snort 3 IPS? (Optional add-on)${NC}"
+    echo -e "   Snort can monitor network traffic for intrusion attempts."
+    read -p "   Install Snort 3? [y/N]: " SNORT_CHOICE
+    if [[ "$SNORT_CHOICE" =~ ^[Yy]$ ]]; then
+        INSTALL_SNORT="yes"
+    fi
+fi
+
+if [ "$INSTALL_SNORT" = "yes" ]; then
+    install_snort || echo -e "${YELLOW}⚠️  Snort installation skipped${NC}"
+fi
+
 # Create directories
 echo -e "\n${CYAN}📂 Creating directories...${NC}"
 mkdir -p "$INSTALL_DIR"

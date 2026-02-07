@@ -203,6 +203,8 @@ class WafSyncService
             'ollama_url' => $config['ollama']['url'] ?? 'not set',
             'ollama_model' => $config['ollama']['model'] ?? 'not set',
             'clamav_enabled' => $config['addons']['clamav_enabled'] ?? false,
+            'snort_enabled' => $config['addons']['snort_enabled'] ?? false,
+            'snort_mode' => $config['addons']['snort_mode'] ?? 'ids',
             'update_ids' => $config['addons']['update_ids'] ?? false,
             'update_definitions' => $config['addons']['update_definitions'] ?? false,
             'scan_now' => $config['addons']['scan_now'] ?? false,
@@ -212,6 +214,11 @@ class WafSyncService
         // Handle ClamAV add-on
         if (!empty($config['addons']['clamav_enabled'])) {
             $this->handleClamavAddon();
+        }
+        
+        // Handle Snort IPS add-on (remote install for existing agents)
+        if (!empty($config['addons']['snort_enabled'])) {
+            $this->handleSnortAddon($config['addons']['snort_mode'] ?? 'ids');
         }
         
         // Handle IDS update signal
@@ -386,6 +393,108 @@ class WafSyncService
             
         } catch (\Exception $e) {
             Log::error('ClamAV addon handling failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Handle Snort IPS add-on installation and management
+     *
+     * Called when Hub sends snort_enabled=true in config sync.
+     * Existing agents receive this during heartbeat and auto-install Snort.
+     */
+    private function handleSnortAddon(string $mode = 'ids'): void
+    {
+        try {
+            $snort = app(\App\Services\Detection\SnortEngine::class);
+
+            if (!$snort->isInstalled()) {
+                Log::info('Snort enabled but not installed, starting installation...');
+                $result = $this->installSnort();
+
+                if ($result['success']) {
+                    Log::info('Snort installed successfully');
+                } else {
+                    Log::error('Snort installation failed: ' . ($result['error'] ?? 'Unknown error'));
+                    return;
+                }
+
+                // Re-instantiate after install
+                $snort = new \App\Services\Detection\SnortEngine();
+            }
+
+            // Start Snort if not running
+            if (!$snort->isRunning()) {
+                $startResult = $snort->start($mode);
+                Log::info('Snort start result', $startResult);
+            }
+
+            // Report status back to Hub via heartbeat
+            $status = $snort->getStatus();
+            Log::info('Snort status reported', $status);
+
+        } catch (\Exception $e) {
+            Log::error('Snort addon handling failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Install Snort 3 on the current platform
+     */
+    private function installSnort(): array
+    {
+        $platform = $this->detectPlatform();
+        Log::info("Installing Snort 3 on {$platform}...");
+
+        try {
+            switch ($platform) {
+                case 'macos':
+                    $result = Process::timeout(600)->run('brew install snort 2>&1');
+                    break;
+
+                case 'debian':
+                case 'ubuntu':
+                    Process::run('apt-get update -qq 2>&1');
+                    $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                    // If Snort 3 not in repos, try snap
+                    if (!$result->successful()) {
+                        $result = Process::timeout(600)->run('snap install snort 2>&1');
+                    }
+                    break;
+
+                case 'redhat':
+                case 'centos':
+                    Process::run('yum install -y epel-release 2>&1');
+                    $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                    break;
+
+                case 'windows':
+                    // Try Chocolatey
+                    $result = Process::timeout(600)->run('choco install snort -y 2>&1');
+                    if (!$result->successful()) {
+                        return ['success' => false, 'error' => 'Snort Windows install failed. Please install manually from snort.org'];
+                    }
+                    break;
+
+                default:
+                    return ['success' => false, 'error' => "Unsupported platform: {$platform}"];
+            }
+
+            // Create default directories
+            if ($platform !== 'windows') {
+                Process::run('mkdir -p /var/log/snort /etc/snort/rules 2>/dev/null');
+            }
+
+            // Download community rules
+            $snort = new \App\Services\Detection\SnortEngine();
+            if ($snort->isInstalled()) {
+                $snort->updateRules();
+                return ['success' => true, 'version' => $snort->getVersion()];
+            }
+
+            return ['success' => false, 'error' => 'Snort installed but binary not found'];
+
+        } catch (\Exception $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
         }
     }
     
@@ -1427,6 +1536,9 @@ class WafSyncService
      */
     protected function getSystemInfo(): array
     {
+        // Include Snort status in system info for Hub
+        $snortInfo = $this->getSnortInfo();
+
         return [
             'os' => PHP_OS,
             'php_version' => PHP_VERSION,
@@ -1438,7 +1550,26 @@ class WafSyncService
             'memory' => $this->getMemoryUsage(),
             'disk' => $this->getDiskUsage(),
             'network' => $this->getNetworkUsage(),
+            // Snort IPS status
+            'snort' => $snortInfo,
         ];
+    }
+
+    /**
+     * Get Snort IPS status information for heartbeat
+     */
+    private function getSnortInfo(): array
+    {
+        try {
+            $snort = app(\App\Services\Detection\SnortEngine::class);
+            return $snort->getStatus();
+        } catch (\Exception $e) {
+            return [
+                'installed' => false,
+                'version' => null,
+                'running' => false,
+            ];
+        }
     }
 
     /**

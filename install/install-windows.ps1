@@ -799,6 +799,97 @@ $SyncTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontS
 Register-ScheduledTask -TaskName "$ServiceName-Sync" -Action $SyncTaskAction -Trigger @($SyncTaskTrigger1, $SyncTaskTrigger2) -Principal $SyncTaskPrincipal -Settings $SyncTaskSettings -Force | Out-Null
 Write-Host "✅ Sync Service created ($ServiceName-Sync) with auto-restart" -ForegroundColor Green
 
+# Snort 3 IPS Installation (Optional)
+Write-Host "`n🛡️  Snort 3 IPS Installation (Optional)" -ForegroundColor Yellow
+Write-Host "   Snort can monitor network traffic for intrusion attempts." -ForegroundColor Gray
+
+$InstallSnort = $env:INSTALL_SNORT
+if (-not $InstallSnort) {
+    $SnortChoice = Read-Host "   Install Snort 3 IPS? [y/N]"
+    if ($SnortChoice -match '^[Yy]$') {
+        $InstallSnort = "yes"
+    }
+}
+
+if ($InstallSnort -eq "yes") {
+    Write-Host "`n🛡️  Installing Snort 3 IPS..." -ForegroundColor Cyan
+    
+    $snortInstalled = $false
+    
+    # Method 1: Try Chocolatey
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+        Write-Host "Installing Snort via Chocolatey..." -ForegroundColor Yellow
+        $ErrorActionPreference = 'SilentlyContinue'
+        $proc = Start-Process -FilePath "choco" -ArgumentList "install snort -y" -Wait -NoNewWindow -PassThru
+        $ErrorActionPreference = 'Continue'
+        
+        if ($proc.ExitCode -eq 0) {
+            $snortInstalled = $true
+            Write-Host "✅ Snort installed via Chocolatey" -ForegroundColor Green
+        }
+    }
+    
+    # Method 2: Download from snort.org
+    if (-not $snortInstalled) {
+        Write-Host "Downloading Snort 3 from official site..." -ForegroundColor Yellow
+        $snortUrl = "https://www.snort.org/downloads/snortplus/snort3-latest.msi"
+        $snortMsi = "$env:TEMP\snort3-latest.msi"
+        
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $snortUrl -OutFile $snortMsi -UseBasicParsing -ErrorAction SilentlyContinue
+            
+            if (Test-Path $snortMsi) {
+                Write-Host "Installing Snort MSI..." -ForegroundColor Yellow
+                $proc = Start-Process -FilePath "msiexec" -ArgumentList "/i `"$snortMsi`" /qn" -Wait -NoNewWindow -PassThru
+                if ($proc.ExitCode -eq 0) {
+                    $snortInstalled = $true
+                    Write-Host "✅ Snort installed from MSI" -ForegroundColor Green
+                }
+                Remove-Item $snortMsi -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            Write-Host "⚠️  Could not download Snort: $_" -ForegroundColor Yellow
+        }
+    }
+    
+    if ($snortInstalled) {
+        # Create directories
+        New-Item -ItemType Directory -Path "C:\Snort\log" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -ItemType Directory -Path "C:\Snort\rules" -Force -ErrorAction SilentlyContinue | Out-Null
+        
+        # Download community rules
+        Write-Host "📥 Downloading Snort community rules..." -ForegroundColor Cyan
+        try {
+            $rulesUrl = "https://www.snort.org/downloads/community/snort3-community-rules.tar.gz"
+            $rulesFile = "$env:TEMP\snort3-community-rules.tar.gz"
+            Invoke-WebRequest -Uri $rulesUrl -OutFile $rulesFile -UseBasicParsing -ErrorAction SilentlyContinue
+            
+            if (Test-Path $rulesFile) {
+                # Extract rules (requires tar, available on Windows 10+)
+                & tar xzf $rulesFile -C "C:\Snort\rules" --strip-components=1 2>$null
+                Remove-Item $rulesFile -Force -ErrorAction SilentlyContinue
+                Write-Host "✅ Community rules installed" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "⚠️  Could not download community rules (will retry later)" -ForegroundColor Yellow
+        }
+        
+        # Refresh PATH
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+        
+        # Verify
+        $snortCmd = Get-Command snort -ErrorAction SilentlyContinue
+        if ($snortCmd) {
+            Write-Host "✅ Snort 3 is ready" -ForegroundColor Green
+        } else {
+            Write-Host "⚠️  Snort installed but not in PATH. You may need to restart your terminal." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "⚠️  Snort installation skipped (can be installed later via Dashboard)" -ForegroundColor Yellow
+    }
+}
+
 # Start services
 Write-Host "`n🚀 Starting IDS Agent..." -ForegroundColor Cyan
 Start-ScheduledTask -TaskName "$ServiceName-Scan" -ErrorAction SilentlyContinue
