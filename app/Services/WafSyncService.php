@@ -477,10 +477,6 @@ class WafSyncService
         try {
             switch ($platform) {
                 case 'macos':
-                    // Ensure HOME is set — Laravel scheduler may not have it
-                    $home = getenv('HOME') ?: (getenv('SUDO_USER') ? '/Users/' . getenv('SUDO_USER') : posix_getpwuid(posix_getuid())['dir'] ?? '/tmp');
-                    $envPrefix = "HOME={$home} ";
-                    
                     // Find brew path (may not be in PATH for daemon)
                     $brewPath = 'brew';
                     foreach (['/opt/homebrew/bin/brew', '/usr/local/bin/brew'] as $bp) {
@@ -490,15 +486,47 @@ class WafSyncService
                         }
                     }
                     
+                    // Homebrew refuses to run as root — detect the real user
+                    $brewPrefix = '';
+                    if (posix_getuid() === 0) {
+                        // Find the actual user: SUDO_USER, or owner of brew binary
+                        $realUser = getenv('SUDO_USER') ?: '';
+                        if (empty($realUser) && $brewPath !== 'brew') {
+                            $ownerInfo = posix_getpwuid(fileowner($brewPath));
+                            $realUser = $ownerInfo['name'] ?? '';
+                        }
+                        if (empty($realUser)) {
+                            // Last resort: find first non-root user in /Users
+                            $users = @scandir('/Users') ?: [];
+                            foreach ($users as $u) {
+                                if ($u !== '.' && $u !== '..' && $u !== 'Shared' && $u !== '.localized') {
+                                    $realUser = $u;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!empty($realUser)) {
+                            $brewPrefix = "sudo -u {$realUser} ";
+                            $home = "/Users/{$realUser}";
+                        } else {
+                            Log::error('Cannot determine non-root user for Homebrew');
+                            return ['success' => false, 'error' => 'Cannot run Homebrew as root. No non-root user found.'];
+                        }
+                    } else {
+                        $home = getenv('HOME') ?: posix_getpwuid(posix_getuid())['dir'] ?? '/tmp';
+                    }
+                    
+                    $brewCmd = "{$brewPrefix}HOME={$home} {$brewPath}";
+                    
                     // First ensure Homebrew is up to date
-                    Process::timeout(120)->run("{$envPrefix} {$brewPath} update 2>&1");
+                    Process::timeout(120)->run("{$brewCmd} update 2>&1");
                     
                     // Install required dependencies for Snort 3
                     Log::info('Installing Snort dependencies via Homebrew...');
-                    Process::timeout(600)->run("{$envPrefix} {$brewPath} install daq libdnet openssl pcre libtool luajit hwloc cmake pkg-config libpcap 2>&1");
+                    Process::timeout(600)->run("{$brewCmd} install daq libdnet openssl pcre libtool luajit hwloc cmake pkg-config libpcap 2>&1");
                     
                     // Install Snort 3 (the formula is "snort", not "snort3")
-                    $result = Process::timeout(600)->run("{$envPrefix} {$brewPath} install snort 2>&1");
+                    $result = Process::timeout(600)->run("{$brewCmd} install snort 2>&1");
                     if (!$result->successful()) {
                         // Try MacPorts as fallback
                         $portsCheck = Process::run('which port 2>&1');
