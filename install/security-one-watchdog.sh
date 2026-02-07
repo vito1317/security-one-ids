@@ -9,7 +9,9 @@ WATCHDOG_LOG="$LOG_DIR/watchdog.log"
 PID_FILE="$INSTALL_DIR/storage/ids.pid"
 CRASH_COUNT_FILE="$INSTALL_DIR/storage/crash_count"
 MAX_CRASHES_BEFORE_RESET=5
-SCAN_INTERVAL=60
+SCAN_INTERVAL=300  # Security scan interval (5 min)
+DEFAULT_HEARTBEAT_INTERVAL=60
+CONFIG_FILE="$INSTALL_DIR/storage/app/waf_config.json"
 HEALTH_CHECK_INTERVAL=30
 
 # Ensure log directory exists
@@ -136,6 +138,7 @@ log_message "INFO" "=== Security One IDS Watchdog Started ==="
 log_message "INFO" "PHP: $PHP_BIN"
 log_message "INFO" "Install Dir: $INSTALL_DIR"
 log_message "INFO" "Scan Interval: ${SCAN_INTERVAL}s"
+log_message "INFO" "Default Heartbeat Interval: ${DEFAULT_HEARTBEAT_INTERVAL}s (overridden by Hub config)"
 
 # Reset crash count on fresh start
 reset_crash_count
@@ -209,7 +212,38 @@ while true; do
         continue
     fi
     
-    # Wait before next scan cycle
-    log_message "INFO" "Waiting ${SCAN_INTERVAL}s before next scan cycle..."
-    sleep $SCAN_INTERVAL
+    # Read dynamic heartbeat interval from Hub config
+    heartbeat_interval=$DEFAULT_HEARTBEAT_INTERVAL
+    if [ -f "$CONFIG_FILE" ]; then
+        # Parse heartbeat_interval from JSON (using grep+sed for portability)
+        hi=$(grep -o '"heartbeat_interval"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_FILE" 2>/dev/null | grep -o '[0-9]*$')
+        if [ -n "$hi" ] && [ "$hi" -ge 5 ] && [ "$hi" -le 300 ]; then
+            heartbeat_interval=$hi
+        fi
+    fi
+
+    # Wait for heartbeat interval before next sync cycle
+    log_message "INFO" "Waiting ${heartbeat_interval}s before next heartbeat (scan every ${SCAN_INTERVAL}s)..."
+    
+    # Use heartbeat interval for sync, but run desktop:scan less frequently
+    elapsed_since_scan=0
+    while [ $elapsed_since_scan -lt $SCAN_INTERVAL ]; do
+        sleep $heartbeat_interval
+        elapsed_since_scan=$((elapsed_since_scan + heartbeat_interval))
+        
+        # Run heartbeat sync
+        if run_artisan "waf:sync" 60; then
+            log_message "INFO" "Heartbeat sync OK"
+        else
+            log_message "WARNING" "Heartbeat sync failed"
+        fi
+        
+        # Re-read interval in case Hub updated it
+        if [ -f "$CONFIG_FILE" ]; then
+            hi=$(grep -o '"heartbeat_interval"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_FILE" 2>/dev/null | grep -o '[0-9]*$')
+            if [ -n "$hi" ] && [ "$hi" -ge 5 ] && [ "$hi" -le 300 ]; then
+                heartbeat_interval=$hi
+            fi
+        fi
+    done
 done

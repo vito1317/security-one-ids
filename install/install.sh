@@ -516,7 +516,7 @@ if [ "$OS" = "macos" ]; then
 </plist>
 EOF
     
-    # Create heartbeat sync plist (runs every 60 seconds)
+    # Create heartbeat sync plist (daemon mode - reads interval from Hub config)
     cat > /Library/LaunchDaemons/com.securityone.ids.sync.plist << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -528,12 +528,13 @@ EOF
     <array>
         <string>$PHP_PATH</string>
         <string>$INSTALL_DIR/artisan</string>
-        <string>waf:sync</string>
+        <string>waf:heartbeat</string>
+        <string>--daemon</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
-    <key>StartInterval</key>
-    <integer>60</integer>
+    <key>KeepAlive</key>
+    <true/>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
@@ -542,6 +543,8 @@ EOF
     <string>$LOG_DIR/sync-error.log</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>HOME</key>
+        <string>/var/root</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
