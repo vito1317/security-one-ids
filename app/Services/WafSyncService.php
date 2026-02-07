@@ -233,9 +233,12 @@ class WafSyncService
             $this->collectSnortAlerts();
         }
         
-        // Handle IDS update signal
+        // Handle IDS update signal (manual trigger from Hub)
         if (!empty($config['addons']['update_ids'])) {
             $this->handleIdsUpdate();
+        } else {
+            // Auto-update: check if remote has newer commits
+            $this->checkAndAutoUpdate();
         }
         
         // Handle virus definitions update signal
@@ -1739,6 +1742,68 @@ class WafSyncService
         }
     }
     
+    /**
+     * Check if remote has newer code and auto-update if needed
+     *
+     * Compares local HEAD commit hash against origin/main.
+     * No version number comparison — purely git commit based.
+     */
+    private function checkAndAutoUpdate(): void
+    {
+        try {
+            $installDir = base_path();
+
+            // Throttle: only check once every 5 minutes
+            $lastCheckFile = storage_path('app/last_auto_update_check.txt');
+            if (file_exists($lastCheckFile)) {
+                $lastCheck = (int) file_get_contents($lastCheckFile);
+                if (time() - $lastCheck < 300) {
+                    return;
+                }
+            }
+            file_put_contents($lastCheckFile, time());
+
+            // Fetch latest from remote (lightweight operation)
+            $fetchResult = Process::path($installDir)
+                ->timeout(30)
+                ->run('git fetch origin main 2>&1');
+
+            if (!$fetchResult->successful()) {
+                Log::debug('Auto-update: git fetch failed', ['output' => $fetchResult->output()]);
+                return;
+            }
+
+            // Compare local HEAD vs remote HEAD
+            $localHash = trim(Process::path($installDir)
+                ->run('git rev-parse HEAD 2>/dev/null')
+                ->output());
+
+            $remoteHash = trim(Process::path($installDir)
+                ->run('git rev-parse origin/main 2>/dev/null')
+                ->output());
+
+            if (empty($localHash) || empty($remoteHash)) {
+                return;
+            }
+
+            if ($localHash === $remoteHash) {
+                Log::debug('Auto-update: already up to date', ['hash' => substr($localHash, 0, 8)]);
+                return;
+            }
+
+            Log::info('Auto-update: new code detected, updating...', [
+                'local' => substr($localHash, 0, 8),
+                'remote' => substr($remoteHash, 0, 8),
+            ]);
+
+            $this->reportAgentEvent('snort_alert', '偵測到新版本，自動更新中...');
+            $this->handleIdsUpdate();
+
+        } catch (\Exception $e) {
+            Log::debug('Auto-update check failed: ' . $e->getMessage());
+        }
+    }
+
     /**
      * Handle IDS update signal
      */
