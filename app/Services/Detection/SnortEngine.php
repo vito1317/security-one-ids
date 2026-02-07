@@ -119,41 +119,136 @@ class SnortEngine
 
         $interface = $interface ?? $this->detectDefaultInterface();
 
-        // Ensure log directory exists
+        // Ensure log directory exists with correct permissions
         if (!is_dir($this->logDir)) {
-            mkdir($this->logDir, 0755, true);
+            @mkdir($this->logDir, 0755, true);
         }
 
-        // Build Snort 3 command
+        // Build the Snort command (auto-detects Snort 2 vs 3)
         $cmd = $this->buildStartCommand($mode, $interface);
 
         try {
-            Log::info("Starting Snort in {$mode} mode on interface {$interface}");
+            Log::info("Starting Snort in {$mode} mode on interface {$interface}", [
+                'platform' => PHP_OS_FAMILY,
+                'snort_path' => $this->snortPath,
+                'command' => $cmd,
+            ]);
 
             if ($this->isWindows()) {
-                // Windows: start as background process
-                $result = Process::run("start /B {$cmd}");
+                $result = $this->startSnortWindows($cmd);
+            } elseif (PHP_OS === 'Darwin') {
+                $result = $this->startSnortMac($cmd);
             } else {
-                // Linux/Mac: run as daemon
-                $result = Process::run("nohup {$cmd} > /dev/null 2>&1 & echo $!");
-                $pid = trim($result->output());
-                if (is_numeric($pid)) {
-                    file_put_contents($this->pidFile, $pid);
-                }
+                $result = $this->startSnortLinux($cmd);
             }
 
             // Wait briefly and check if started
-            sleep(1);
+            sleep(2);
 
             if ($this->isRunning()) {
-                Log::info('Snort started successfully');
+                Log::info('Snort started successfully', ['platform' => PHP_OS_FAMILY]);
                 return ['success' => true, 'message' => "Snort started in {$mode} mode"];
             }
 
-            return ['success' => false, 'error' => 'Snort started but not running (check config)'];
+            // Capture error output for debugging
+            $errorOutput = $result->errorOutput() ?? '';
+            $stdOutput = $result->output() ?? '';
+            Log::warning('Snort failed to start', [
+                'platform' => PHP_OS_FAMILY,
+                'exit_code' => $result->exitCode(),
+                'stdout' => substr($stdOutput, 0, 500),
+                'stderr' => substr($errorOutput, 0, 500),
+            ]);
+
+            return ['success' => false, 'error' => 'Snort started but not running: ' . substr($errorOutput ?: $stdOutput, 0, 200)];
         } catch (\Exception $e) {
-            Log::error('Failed to start Snort: ' . $e->getMessage());
+            Log::error('Failed to start Snort: ' . $e->getMessage(), [
+                'platform' => PHP_OS_FAMILY,
+            ]);
             return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Start Snort on Linux with appropriate privileges
+     */
+    private function startSnortLinux(string $cmd): \Illuminate\Process\ProcessResult
+    {
+        // Check if we need sudo (non-root user)
+        $needsSudo = function_exists('posix_getuid') && posix_getuid() !== 0;
+        $prefix = $needsSudo ? 'sudo ' : '';
+
+        $result = Process::timeout(10)->run("{$prefix}nohup {$cmd} > /dev/null 2>&1 & echo $!");
+        $pid = trim($result->output());
+        if (is_numeric($pid)) {
+            file_put_contents($this->pidFile, $pid);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Start Snort on macOS with sudo for BPF packet capture access
+     *
+     * macOS requires root/sudo to open BPF devices for raw packet capture.
+     * Also tries to fix BPF device permissions as a fallback.
+     */
+    private function startSnortMac(string $cmd): \Illuminate\Process\ProcessResult
+    {
+        // First, try to ensure BPF devices are accessible
+        $this->ensureBpfAccess();
+
+        // macOS always needs sudo for packet capture
+        $result = Process::timeout(10)->run("sudo nohup {$cmd} > /dev/null 2>&1 & echo $!");
+        $pid = trim($result->output());
+        if (is_numeric($pid)) {
+            file_put_contents($this->pidFile, $pid);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Start Snort on Windows with elevated privileges
+     *
+     * Windows Snort requires Npcap for packet capture.
+     * Uses PowerShell to start Snort as a background process with admin rights.
+     */
+    private function startSnortWindows(string $cmd): \Illuminate\Process\ProcessResult
+    {
+        // Check for Npcap/WinPcap
+        $npcapInstalled = file_exists('C:\\Windows\\System32\\Npcap') ||
+                          file_exists('C:\\Program Files\\Npcap') ||
+                          file_exists('C:\\Windows\\System32\\wpcap.dll');
+
+        if (!$npcapInstalled) {
+            Log::warning('Npcap not detected — Snort may not capture packets. Install from https://npcap.com/');
+        }
+
+        // Use PowerShell to start Snort as admin background process
+        $escapedCmd = str_replace('"', '`"', $cmd);
+        $psCommand = "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c {$escapedCmd}' -WindowStyle Hidden -Verb RunAs";
+
+        return Process::timeout(15)->run("powershell -NonInteractive -Command \"{$psCommand}\"");
+    }
+
+    /**
+     * Ensure BPF device access on macOS
+     *
+     * BPF (Berkeley Packet Filter) devices are needed for raw packet capture.
+     * This sets permissions so Snort can access them.
+     */
+    private function ensureBpfAccess(): void
+    {
+        try {
+            // Check if BPF devices exist and are accessible
+            if (file_exists('/dev/bpf0') && !is_readable('/dev/bpf0')) {
+                // Try to chmod BPF devices (requires sudo)
+                Process::timeout(5)->run('sudo chmod 644 /dev/bpf*');
+                Log::info('Set BPF device permissions for Snort packet capture');
+            }
+        } catch (\Exception $e) {
+            Log::debug('Could not set BPF permissions: ' . $e->getMessage());
         }
     }
 
@@ -166,17 +261,20 @@ class SnortEngine
             return ['success' => true, 'message' => 'Snort is not running'];
         }
 
+        // On non-Windows, we need sudo since Snort was started with elevated privileges
+        $sudo = (!$this->isWindows() && function_exists('posix_getuid') && posix_getuid() !== 0) ? 'sudo ' : '';
+
         try {
             if (file_exists($this->pidFile)) {
                 $pid = trim(file_get_contents($this->pidFile));
                 if ($this->isWindows()) {
                     Process::run("taskkill /PID {$pid} /F 2>nul");
                 } else {
-                    Process::run("kill {$pid} 2>/dev/null");
+                    Process::run("{$sudo}kill {$pid} 2>/dev/null");
                     sleep(1);
                     // Force kill if still running
                     if ($this->isProcessRunning((int) $pid)) {
-                        Process::run("kill -9 {$pid} 2>/dev/null");
+                        Process::run("{$sudo}kill -9 {$pid} 2>/dev/null");
                     }
                 }
                 @unlink($this->pidFile);
@@ -185,7 +283,7 @@ class SnortEngine
                 if ($this->isWindows()) {
                     Process::run("taskkill /IM snort.exe /F 2>nul");
                 } else {
-                    Process::run("pkill -f snort 2>/dev/null");
+                    Process::run("{$sudo}pkill -f snort 2>/dev/null");
                 }
             }
 
@@ -403,10 +501,66 @@ class SnortEngine
 
     // ─── Private Helpers ─────────────────────────────────────────
 
+    /**
+     * Detect if this is Snort 2.x (vs Snort 3.x)
+     * Snort 2 and 3 have different CLI flags.
+     */
+    private function isSnort2(): bool
+    {
+        $version = $this->getVersion();
+        if (!$version) {
+            return false;
+        }
+
+        return version_compare($version, '3.0.0', '<');
+    }
+
+    /**
+     * Build Snort start command, auto-detecting Snort 2 vs 3 flags
+     */
     private function buildStartCommand(string $mode, string $interface): string
     {
         $cmd = "{$this->snortPath}";
 
+        if ($this->isSnort2()) {
+            return $this->buildSnort2Command($cmd, $mode, $interface);
+        }
+
+        return $this->buildSnort3Command($cmd, $mode, $interface);
+    }
+
+    /**
+     * Build command for Snort 2.9.x
+     */
+    private function buildSnort2Command(string $cmd, string $mode, string $interface): string
+    {
+        if (file_exists($this->configPath)) {
+            $cmd .= " -c {$this->configPath}";
+        }
+
+        $cmd .= " -i {$interface}";
+        $cmd .= " -l {$this->logDir}";
+
+        // Snort 2: Use fast alert output (text format parsed by collectSnortAlerts)
+        $cmd .= " -A fast";
+
+        if ($mode === 'ips') {
+            $cmd .= " -Q"; // Inline/IPS mode
+        }
+
+        // Run as daemon on Unix
+        if (!$this->isWindows()) {
+            $cmd .= " -D";
+        }
+
+        return $cmd;
+    }
+
+    /**
+     * Build command for Snort 3.x
+     */
+    private function buildSnort3Command(string $cmd, string $mode, string $interface): string
+    {
         if (file_exists($this->configPath)) {
             $cmd .= " -c {$this->configPath}";
         }
@@ -422,7 +576,7 @@ class SnortEngine
             $cmd .= " -Q"; // Inline/IPS mode
         }
 
-        // Run as daemon
+        // Run as daemon on Unix
         if (!$this->isWindows()) {
             $cmd .= " -D";
             $cmd .= " --pid-path {$this->logDir}";
