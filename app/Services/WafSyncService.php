@@ -919,25 +919,33 @@ class WafSyncService
         }
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing WinPcap 4.1.3...');
+        Log::info('[Pcap] Installing Npcap (signed driver for modern Windows)...');
 
         try {
             $script = "\$ErrorActionPreference='Stop'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "try {\r\n" .
-                "  \$f=\"\$env:TEMP\\WinPcap_4_1_3.exe\"\r\n" .
-                "  (New-Object Net.WebClient).DownloadFile('https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe',\$f)\r\n" .
+                "  # Try Npcap 1.80 (signed driver, works on modern Windows)\r\n" .
+                "  \$f=\"\$env:TEMP\\npcap-1.80.exe\"\r\n" .
+                "  Write-Output 'Downloading Npcap 1.80...'\r\n" .
+                "  (New-Object Net.WebClient).DownloadFile('https://npcap.com/dist/npcap-1.80.exe',\$f)\r\n" .
                 "  \$sz=(Get-Item \$f).Length; Write-Output \"DL:\$sz\"\r\n" .
-                "  if(\$sz -lt 100000){Write-Output 'SMALL'; exit 1}\r\n" .
-                "  \$p=Start-Process \$f -ArgumentList '/S' -Wait -PassThru\r\n" .
+                "  if(\$sz -lt 500000){Write-Output 'TOO_SMALL'; exit 1}\r\n" .
+                "  Write-Output 'Installing Npcap silently...'\r\n" .
+                "  \$p=Start-Process \$f -ArgumentList '/S','/winpcap_mode=yes' -Wait -PassThru\r\n" .
                 "  Write-Output \"EXIT:\$(\$p.ExitCode)\"\r\n" .
                 "  Start-Sleep 5\r\n" .
                 "  Remove-Item \$f -Force -EA SilentlyContinue\r\n" .
+                "  # Try starting npcap service\r\n" .
+                "  net start npcap 2>&1|Write-Output\r\n" .
+                "  sc.exe query npcap 2>&1|Write-Output\r\n" .
+                "  # Also try npf (WinPcap compat mode)\r\n" .
                 "  net start npf 2>&1|Write-Output\r\n" .
-                "  sc.exe query npf 2>&1|Write-Output\r\n" .
-                "  foreach(\$d in 'C:\\Windows\\System32\\wpcap.dll','C:\\Windows\\SysWOW64\\wpcap.dll','C:\\Windows\\System32\\Packet.dll'){\r\n" .
+                "  # Check DLLs\r\n" .
+                "  foreach(\$d in 'C:\\Windows\\System32\\Npcap\\wpcap.dll','C:\\Windows\\System32\\wpcap.dll','C:\\Windows\\SysWOW64\\wpcap.dll'){\r\n" .
                 "    if(Test-Path \$d){Write-Output \"FOUND:\$d\"}\r\n" .
                 "  }\r\n" .
+                "  # Verify with snort\r\n" .
                 "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
                 "  Write-Output \"SNORT_W:\$w\"\r\n" .
                 "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'}else{Write-Output 'PCAP_FAIL'}\r\n" .
@@ -949,15 +957,15 @@ class WafSyncService
             $out = $r->output();
             @unlink($path);
 
-            Log::info('[Pcap] Output: ' . substr($out, 0, 1000));
+            Log::info('[Pcap] Output: ' . substr($out, 0, 1500));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
                 @unlink($attemptFile);
-                Log::info('[Pcap] WinPcap installed and verified');
-                $this->reportAgentEvent('snort_install', 'WinPcap installed successfully');
+                Log::info('[Pcap] Npcap installed and verified');
+                $this->reportAgentEvent('snort_install', 'Npcap installed successfully');
             } else {
-                $this->reportAgentEvent('snort_error', 'WinPcap install incomplete: ' . substr($out, 0, 300));
+                $this->reportAgentEvent('snort_error', 'Npcap install incomplete: ' . substr($out, 0, 500));
             }
         } catch (\Exception $e) {
             Log::error('[Pcap] Error: ' . $e->getMessage());
