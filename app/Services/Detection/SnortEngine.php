@@ -818,7 +818,7 @@ LUA;
         // Run as daemon on Unix
         if (!$this->isWindows()) {
             $cmd .= " -D";
-            $cmd .= " --pid-path {$this->logDir}";
+            $cmd .= " --create-pidfile"; // PID file created in log dir (-l)
         }
 
         return $cmd;
