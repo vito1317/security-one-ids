@@ -460,6 +460,8 @@ class WafSyncService
 
             // Start Snort if not running
             if (!$snort->isRunning()) {
+                // Ensure Npcap is installed on Windows before trying to start
+                $this->ensureNpcapInstalled();
                 $startResult = $snort->start($mode);
                 if (!($startResult['success'] ?? false)) {
                     Log::warning('Snort start result', $startResult);
@@ -694,6 +696,9 @@ class WafSyncService
                     break;
 
                 case 'windows':
+                    // Step 1: Ensure Npcap is installed (required for Snort to capture packets)
+                    $this->ensureNpcapInstalled();
+
                     // Check if Snort is already installed
                     $snortCheck = Process::run('where snort 2>&1');
                     if ($snortCheck->successful()) {
@@ -860,6 +865,87 @@ class WafSyncService
 
         } catch (\Exception $e) {
             return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Ensure Npcap is installed on Windows (required for Snort packet capture)
+     */
+    private function ensureNpcapInstalled(): void
+    {
+        if (PHP_OS_FAMILY !== 'Windows') {
+            return;
+        }
+
+        // Check if Npcap is already installed
+        $npcapDll = 'C:\\Windows\\System32\\Npcap\\wpcap.dll';
+        $npcapDir = 'C:\\Program Files\\Npcap';
+        if (file_exists($npcapDll) || is_dir($npcapDir)) {
+            Log::debug('Npcap is already installed');
+            return;
+        }
+
+        // Also check older WinPcap
+        $winpcapDll = 'C:\\Windows\\System32\\wpcap.dll';
+        if (file_exists($winpcapDll)) {
+            Log::debug('WinPcap is already installed (legacy)');
+            return;
+        }
+
+        Log::info('Npcap not found, attempting to install...');
+
+        try {
+            // Method 1: Try Chocolatey
+            $chocoPath = 'C:\\ProgramData\\chocolatey\\bin\\choco.exe';
+            if (file_exists($chocoPath) || Process::run('where choco 2>&1')->successful()) {
+                $chocoCmd = file_exists($chocoPath) ? "\"{$chocoPath}\"" : 'choco';
+                $r = Process::timeout(120)->run("{$chocoCmd} install npcap -y 2>&1");
+                if ($r->successful()) {
+                    Log::info('Npcap installed via Chocolatey');
+                    return;
+                }
+                Log::warning('Npcap Chocolatey install failed: ' . substr($r->output(), 0, 200));
+            }
+
+            // Method 2: Download and install Npcap OEM silent installer
+            $scriptContent = "\$ErrorActionPreference = 'Stop'\r\n" .
+                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\r\n" .
+                "try {\r\n" .
+                "    \$url = 'https://npcap.com/dist/npcap-1.80.exe'\r\n" .
+                "    \$outPath = \"\$env:TEMP\\npcap-installer.exe\"\r\n" .
+                "    Write-Output 'Downloading Npcap...'\r\n" .
+                "    \$wc = New-Object System.Net.WebClient\r\n" .
+                "    \$wc.Headers.Add('User-Agent', 'SecurityOneIDS')\r\n" .
+                "    \$wc.DownloadFile(\$url, \$outPath)\r\n" .
+                "    if (Test-Path \$outPath) {\r\n" .
+                "        Write-Output 'Installing Npcap silently...'\r\n" .
+                "        # /S = silent, /winpcap_mode = WinPcap API compatibility\r\n" .
+                "        Start-Process -FilePath \$outPath -ArgumentList '/S', '/winpcap_mode=yes' -Wait -NoNewWindow\r\n" .
+                "        Remove-Item \$outPath -Force -ErrorAction SilentlyContinue\r\n" .
+                "        Write-Output 'NPCAP_INSTALL_OK'\r\n" .
+                "    } else {\r\n" .
+                "        Write-Output 'NPCAP_DOWNLOAD_FAILED'\r\n" .
+                "    }\r\n" .
+                "} catch {\r\n" .
+                "    Write-Output \"NPCAP_ERROR: \$_\"\r\n" .
+                "}\r\n";
+
+            $scriptPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'npcap_install_' . uniqid() . '.ps1';
+            file_put_contents($scriptPath, $scriptContent);
+
+            $r = Process::timeout(120)->run("powershell -NoProfile -ExecutionPolicy Bypass -File \"{$scriptPath}\" 2>&1");
+            $output = $r->output();
+            @unlink($scriptPath);
+
+            if (str_contains($output, 'NPCAP_INSTALL_OK')) {
+                Log::info('Npcap installed successfully via direct download');
+                $this->reportAgentEvent('snort_install', 'Npcap packet capture driver installed successfully');
+            } else {
+                Log::warning('Npcap auto-install failed: ' . substr($output, 0, 300));
+                $this->reportAgentEvent('snort_error', 'Npcap auto-install failed. Please install manually from https://npcap.com');
+            }
+        } catch (\Exception $e) {
+            Log::error('Npcap installation error: ' . $e->getMessage());
         }
     }
 
