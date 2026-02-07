@@ -550,9 +550,10 @@ class WafSyncService
 
                 case 'debian':
                 case 'ubuntu':
+                    $this->preseedSnortDebconf();
                     Process::run('apt-get update -qq 2>&1');
-                    $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
-                    // If Snort 3 not in repos, try snap
+                    $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
+                    // If Snort not in repos, try snap
                     if (!$result->successful()) {
                         $result = Process::timeout(600)->run('snap install snort 2>&1');
                     }
@@ -578,26 +579,28 @@ class WafSyncService
                     Log::info("Linux distro detected: {$distro}");
 
                     if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
+                        // Pre-seed debconf to avoid interactive prompts (Snort asks for HOME_NET)
+                        $this->preseedSnortDebconf();
                         Process::run('apt-get update -qq 2>&1');
                         
-                        // Try installing snort3 first (newer package name)
-                        $result = Process::timeout(600)->run('apt-get install -y snort3 2>&1');
+                        // Try installing snort (available in Ubuntu universe repo)
+                        $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
                         
                         if (!$result->successful()) {
-                            // Try snort (older package name)
-                            $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                            // Try snort3 (newer package name on some distros)
+                            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort3 2>&1');
                         }
                         
                         if (!$result->successful()) {
                             // Try adding Snort PPA (Ubuntu only)
                             if (in_array($distro, ['ubuntu', 'linuxmint', 'pop'])) {
-                                Log::info('Trying Snort 3 via PPA...');
-                                Process::timeout(60)->run('apt-get install -y software-properties-common 2>&1');
+                                Log::info('Trying Snort via PPA...');
+                                Process::timeout(60)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common 2>&1');
                                 Process::timeout(60)->run('add-apt-repository -y ppa:oisf/suricata-stable 2>&1');
                                 Process::run('apt-get update -qq 2>&1');
-                                $result = Process::timeout(600)->run('apt-get install -y snort3 2>&1');
+                                $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
                                 if (!$result->successful()) {
-                                    $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                                    $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort3 2>&1');
                                 }
                             }
                         }
@@ -618,8 +621,9 @@ class WafSyncService
                         // Try apt first (most common), then yum
                         $aptCheck = Process::run('which apt-get 2>&1');
                         if ($aptCheck->successful()) {
+                            $this->preseedSnortDebconf();
                             Process::run('apt-get update -qq 2>&1');
-                            $result = Process::timeout(600)->run('apt-get install -y snort 2>&1');
+                            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
                         } else {
                             $yumCheck = Process::run('which yum 2>&1');
                             if ($yumCheck->successful()) {
@@ -834,6 +838,38 @@ class WafSyncService
         Process::run("rm -rf {$buildDir} 2>/dev/null");
 
         return $result;
+    }
+
+    /**
+     * Pre-seed debconf answers for Snort package to avoid interactive prompts
+     */
+    private function preseedSnortDebconf(): void
+    {
+        try {
+            // Detect default network interface
+            $interface = 'any';
+            $ifResult = Process::run("ip route show default 2>/dev/null | awk '{print \$5}' | head -1");
+            $detected = trim($ifResult->output());
+            if (!empty($detected)) {
+                $interface = $detected;
+            }
+
+            // Pre-seed answers for debconf prompts
+            $selections = [
+                "snort snort/interface string {$interface}",
+                'snort snort/address_range string 0.0.0.0/0',
+                'snort snort/startup string boot',
+                'snort snort/invalid_interface note',
+            ];
+
+            foreach ($selections as $selection) {
+                Process::run("echo '{$selection}' | debconf-set-selections 2>&1");
+            }
+
+            Log::debug('Snort debconf pre-seeded', ['interface' => $interface]);
+        } catch (\Exception $e) {
+            Log::debug('Failed to pre-seed Snort debconf: ' . $e->getMessage());
+        }
     }
 
     /**
