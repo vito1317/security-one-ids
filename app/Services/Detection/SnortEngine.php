@@ -127,6 +127,23 @@ class SnortEngine
 
         $interface = $interface ?? $this->detectDefaultInterface();
 
+        // On Windows, if no valid interface was found (Npcap missing), don't attempt start
+        if ($this->isWindows() && $interface === '1') {
+            // Verify interface 1 actually exists
+            try {
+                $result = Process::timeout(10)->run("{$this->snortPath} -W 2>&1");
+                $output = $result->output();
+                if (!preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $output)) {
+                    return [
+                        'success' => false,
+                        'error' => 'No network interfaces found. Please install Npcap from https://npcap.com and restart the system.',
+                    ];
+                }
+            } catch (\Exception $e) {
+                // Continue with attempt
+            }
+        }
+
         // Ensure log directory exists
         if (!is_dir($this->logDir)) {
             @mkdir($this->logDir, 0755, true);
@@ -1105,8 +1122,14 @@ LUA;
         return $default;
     }
 
+    private ?string $cachedInterface = null;
+
     private function detectDefaultInterface(): string
     {
+        if ($this->cachedInterface !== null) {
+            return $this->cachedInterface;
+        }
+
         if ($this->isWindows()) {
             // Windows Snort uses device index from `snort -W`
             // Try to detect the active adapter
@@ -1123,18 +1146,18 @@ LUA;
                                 'index' => $matches[1][$idx],
                                 'ip' => $ip,
                             ]);
-                            return $matches[1][$idx];
+                            $this->cachedInterface = $matches[1][$idx];
+                            return $this->cachedInterface;
                         }
                     }
                 }
                 // No interfaces found — likely Npcap not installed
-                Log::warning('No Snort interfaces found (Npcap may not be installed)', [
-                    'snort_W_output' => substr($output, 0, 500),
-                ]);
+                Log::warning('No Snort network interfaces detected (Npcap may not be installed). Install from https://npcap.com');
             } catch (\Exception $e) {
                 Log::debug('Failed to detect Windows interface: ' . $e->getMessage());
             }
-            return '1';
+            $this->cachedInterface = '1';
+            return $this->cachedInterface;
         }
 
         $isMac = PHP_OS === 'Darwin';
