@@ -225,6 +225,9 @@ class WafSyncService
             if (!empty($config['addons']['snort_rules_hash'])) {
                 $this->syncSnortRules($config['addons']['snort_rules_hash']);
             }
+
+            // Upload local Snort rules to Hub
+            $this->uploadSnortRulesToHub();
         }
         
         // Handle IDS update signal
@@ -729,6 +732,140 @@ class WafSyncService
             return trim(file_get_contents($hashPath));
         }
         return '';
+    }
+
+    /**
+     * Upload local Snort rules from Agent to Hub
+     */
+    public function uploadSnortRulesToHub(): void
+    {
+        try {
+            if (empty($this->wafUrl) || empty($this->agentToken)) {
+                return;
+            }
+
+            $snort = app(\App\Services\Detection\SnortEngine::class);
+            if (!$snort->isInstalled()) {
+                return;
+            }
+
+            // Find local Snort rules directories
+            $rulesDirs = [];
+            if (PHP_OS_FAMILY === 'Windows') {
+                $rulesDirs = ['C:\\Snort\\rules'];
+            } else {
+                $rulesDirs = ['/etc/snort/rules', '/usr/local/etc/snort/rules'];
+            }
+
+            $rules = [];
+            foreach ($rulesDirs as $dir) {
+                if (!is_dir($dir)) {
+                    continue;
+                }
+
+                $files = glob($dir . DIRECTORY_SEPARATOR . '*.rules');
+                foreach ($files as $file) {
+                    // Skip hub_custom.rules (those came FROM Hub)
+                    if (str_contains(basename($file), 'hub_custom')) {
+                        continue;
+                    }
+
+                    $lines = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                    foreach ($lines as $line) {
+                        $line = trim($line);
+                        // Skip comments and empty lines
+                        if (empty($line) || $line[0] === '#') {
+                            continue;
+                        }
+
+                        // Parse SID from rule content
+                        if (preg_match('/sid\s*:\s*(\d+)/', $line, $sidMatch)) {
+                            $sid = (int) $sidMatch[1];
+
+                            // Parse name/msg
+                            $name = '';
+                            if (preg_match('/msg\s*:\s*"([^"]*)"/', $line, $msgMatch)) {
+                                $name = $msgMatch[1];
+                            }
+
+                            // Parse action (alert, drop, pass, etc.)
+                            $action = 'alert';
+                            if (preg_match('/^(alert|drop|pass|log|activate|dynamic|reject|sdrop)\s+/', $line, $actionMatch)) {
+                                $action = $actionMatch[1];
+                            }
+
+                            // Parse category from classtype
+                            $category = basename($file, '.rules');
+                            if (preg_match('/classtype\s*:\s*([^;]+)/', $line, $classMatch)) {
+                                $category = trim($classMatch[1]);
+                            }
+
+                            // Parse priority
+                            $priority = 1;
+                            if (preg_match('/priority\s*:\s*(\d+)/', $line, $priMatch)) {
+                                $priority = (int) $priMatch[1];
+                            }
+
+                            // Map priority to severity
+                            $severity = match (true) {
+                                $priority >= 4 => 'critical',
+                                $priority >= 3 => 'high',
+                                $priority >= 2 => 'medium',
+                                default => 'low',
+                            };
+
+                            $rules[] = [
+                                'sid' => $sid,
+                                'name' => $name ?: "Rule SID:{$sid}",
+                                'category' => $category,
+                                'rule_content' => $line,
+                                'action' => $action,
+                                'severity' => $severity,
+                                'priority' => $priority,
+                            ];
+                        }
+                    }
+                }
+            }
+
+            if (empty($rules)) {
+                Log::debug('No local Snort rules to upload to Hub');
+                return;
+            }
+
+            // Upload in batches of 100
+            $batches = array_chunk($rules, 100);
+            $totalImported = 0;
+
+            foreach ($batches as $batch) {
+                $response = \Illuminate\Support\Facades\Http::timeout(30)
+                    ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
+                    ->post("{$this->wafUrl}/api/ids/agents/snort-rules/upload", [
+                        'token' => $this->agentToken,
+                        'rules' => $batch,
+                    ]);
+
+                if ($response->successful()) {
+                    $data = $response->json();
+                    $totalImported += ($data['imported'] ?? 0);
+                } else {
+                    Log::warning('Failed to upload Snort rules batch to Hub', [
+                        'status' => $response->status(),
+                    ]);
+                }
+            }
+
+            if ($totalImported > 0) {
+                Log::info("Uploaded {$totalImported} Snort rules to Hub");
+                $this->reportAgentEvent('snort_rule_sync', "已上傳 {$totalImported} 條本地 Snort 規則到 Hub", [
+                    'total_rules' => count($rules),
+                    'imported' => $totalImported,
+                ]);
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Failed to upload Snort rules to Hub: ' . $e->getMessage());
+        }
     }
 
     /**
