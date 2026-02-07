@@ -769,31 +769,52 @@ class WafSyncService
                         }
                     }
 
-                    // Method 3: Download from GitHub releases (not Cloudflare-blocked)
+                    // Method 3: Download Snort 2.9.x MSI from snort.org (Snort 3 has no Windows installer)
                     if (!$snortInstalled) {
-                        Log::info('Trying Snort install via GitHub release download...');
+                        Log::info('Trying Snort 2.9 install via direct MSI download...');
                         $scriptContent = "\$ErrorActionPreference = 'Stop'\r\n" .
                             "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\r\n" .
                             "try {\r\n" .
-                            "    \$apiUrl = 'https://api.github.com/repos/snort3/snort3/releases/latest'\r\n" .
-                            "    \$headers = @{ 'User-Agent' = 'SecurityOneIDS' }\r\n" .
-                            "    \$release = Invoke-RestMethod -Uri \$apiUrl -Headers \$headers -TimeoutSec 30\r\n" .
-                            "    \$msiAsset = \$release.assets | Where-Object { \$_.name -match '\\.msi\\.exe\$|\\.msi\$|\\.exe\$' -and \$_.name -match 'snort' } | Select-Object -First 1\r\n" .
-                            "    if (\$msiAsset) {\r\n" .
-                            "        \$outPath = \"\$env:TEMP\\\\snort_installer.exe\"\r\n" .
-                            "        Invoke-WebRequest -Uri \$msiAsset.browser_download_url -OutFile \$outPath -UseBasicParsing -TimeoutSec 300\r\n" .
-                            "        if (Test-Path \$outPath) {\r\n" .
-                            "            Start-Process -FilePath \$outPath -ArgumentList '/S' -Wait -NoNewWindow\r\n" .
-                            "            Remove-Item \$outPath -Force -ErrorAction SilentlyContinue\r\n" .
+                            "    \$snortMsi = \"Snort_2_9_20_Installer.x64.msi\"\r\n" .
+                            "    \$url = \"https://www.snort.org/downloads/snort/\$snortMsi\"\r\n" .
+                            "    \$outPath = \"\$env:TEMP\\\\\$snortMsi\"\r\n" .
+                            "    Write-Output \"Downloading from \$url...\"\r\n" .
+                            "    \$wc = New-Object System.Net.WebClient\r\n" .
+                            "    \$wc.Headers.Add('User-Agent', 'SecurityOneIDS')\r\n" .
+                            "    \$wc.DownloadFile(\$url, \$outPath)\r\n" .
+                            "    if (Test-Path \$outPath) {\r\n" .
+                            "        Write-Output 'Installing Snort MSI...'\r\n" .
+                            "        Start-Process msiexec.exe -ArgumentList '/i', \$outPath, '/quiet', '/norestart', 'INSTALLDIR=C:\\Snort' -Wait -NoNewWindow\r\n" .
+                            "        Remove-Item \$outPath -Force -ErrorAction SilentlyContinue\r\n" .
+                            "        # Create necessary directories\r\n" .
+                            "        New-Item -ItemType Directory -Path 'C:\\Snort\\rules' -Force | Out-Null\r\n" .
+                            "        New-Item -ItemType Directory -Path 'C:\\Snort\\log' -Force | Out-Null\r\n" .
+                            "        New-Item -ItemType Directory -Path 'C:\\Snort\\etc' -Force | Out-Null\r\n" .
+                            "        # Generate default snort.conf if missing\r\n" .
+                            "        if (-not (Test-Path 'C:\\Snort\\etc\\snort.conf')) {\r\n" .
+                            "            @'\r\n" .
+                            "var HOME_NET any\r\n" .
+                            "var EXTERNAL_NET any\r\n" .
+                            "var RULE_PATH C:\\Snort\\rules\r\n" .
+                            "config logdir: C:\\Snort\\log\r\n" .
+                            "config detection: search-method ac-full\r\n" .
+                            "output alert_fast: snort.alert.fast\r\n" .
+                            "include \$RULE_PATH\\local.rules\r\n" .
+                            "'@ | Set-Content 'C:\\Snort\\etc\\snort.conf' -Encoding UTF8\r\n" .
+                            "        }\r\n" .
+                            "        if (-not (Test-Path 'C:\\Snort\\rules\\local.rules')) {\r\n" .
+                            "            '# Security One IDS - Local Rules' | Set-Content 'C:\\Snort\\rules\\local.rules' -Encoding UTF8\r\n" .
+                            "        }\r\n" .
+                            "        if (Test-Path 'C:\\Snort\\bin\\snort.exe') {\r\n" .
                             "            Write-Output 'INSTALL_OK'\r\n" .
                             "        } else {\r\n" .
-                            "            Write-Output 'DOWNLOAD_FAILED: file not created'\r\n" .
+                            "            Write-Output 'MSI_INSTALLED_BUT_EXE_NOT_FOUND'\r\n" .
                             "        }\r\n" .
                             "    } else {\r\n" .
-                            "        Write-Output 'NO_ASSET: No Windows installer found in latest release'\r\n" .
+                            "        Write-Output 'DOWNLOAD_FAILED: file not created'\r\n" .
                             "    }\r\n" .
                             "} catch {\r\n" .
-                            "    Write-Output \"GITHUB_FAILED: \$_\"\r\n" .
+                            "    Write-Output \"DOWNLOAD_FAILED: \$_\"\r\n" .
                             "}\r\n";
 
                         $scriptPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'snort_install_' . uniqid() . '.ps1';
@@ -806,7 +827,7 @@ class WafSyncService
                         if (str_contains($output, 'INSTALL_OK')) {
                             $snortInstalled = true;
                         } else {
-                            $errors[] = 'GitHub: ' . substr($output ?: $r->errorOutput() ?: 'no output', 0, 200);
+                            $errors[] = 'Direct MSI: ' . substr($output ?: $r->errorOutput() ?: 'no output', 0, 200);
                         }
                     }
 
