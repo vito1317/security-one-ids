@@ -593,12 +593,32 @@ LUA;
      */
     private function collectPacketStats(array &$stats): void
     {
-        // Method 1: Check snort.stats file
+        // Method 1: Check Snort 3 perf_monitor CSV files
+        $perfFiles = glob($this->logDir . '/perf_monitor*.csv');
+        if (!empty($perfFiles)) {
+            // Get the most recently modified perf file
+            usort($perfFiles, fn ($a, $b) => filemtime($b) - filemtime($a));
+            $content = @file_get_contents($perfFiles[0]);
+            if ($content) {
+                $lines = array_filter(explode("\n", trim($content)));
+                // Skip header line, get last data line
+                if (count($lines) > 1) {
+                    $lastLine = end($lines);
+                    $parts = str_getcsv($lastLine);
+                    // perf_monitor CSV: first column is timestamp, second is usually total packets
+                    if (count($parts) > 1 && is_numeric($parts[1])) {
+                        $stats['packets_analyzed'] = (int) $parts[1];
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Method 2: Check snort.stats file (Snort 2 format)
         $statsFile = $this->logDir . '/snort.stats';
         if (file_exists($statsFile)) {
             $statsContent = @file_get_contents($statsFile);
             if ($statsContent) {
-                // Snort 3 CSV stats format: timestamp,total_pkts,...
                 $lines = explode("\n", trim($statsContent));
                 $lastLine = end($lines);
                 $parts = explode(',', $lastLine);
@@ -606,7 +626,6 @@ LUA;
                     $stats['packets_analyzed'] = (int) $parts[1];
                     return;
                 }
-                // Snort 2 format
                 if (preg_match('/total_packets:\s*(\d+)/i', $statsContent, $m)) {
                     $stats['packets_analyzed'] = (int) $m[1];
                     return;
@@ -614,23 +633,25 @@ LUA;
             }
         }
 
-        // Method 2: Signal Snort to dump stats (Unix only)
+        // Method 3: Signal Snort to dump stats (Unix only)
         if (!$this->isWindows() && $this->isRunning() && file_exists($this->pidFile)) {
             $pid = trim(file_get_contents($this->pidFile));
             if (is_numeric($pid)) {
-                // USR1 tells Snort to dump stats
                 @Process::timeout(3)->run("kill -USR1 {$pid} 2>/dev/null");
-                // Wait briefly for stats file to be written
                 usleep(500000);
-                // Re-check stats file
-                if (file_exists($statsFile)) {
-                    $statsContent = @file_get_contents($statsFile);
-                    if ($statsContent) {
-                        $lines = explode("\n", trim($statsContent));
-                        $lastLine = end($lines);
-                        $parts = explode(',', $lastLine);
-                        if (count($parts) > 1 && is_numeric($parts[1])) {
-                            $stats['packets_analyzed'] = (int) $parts[1];
+                // Re-check all perf files
+                $perfFiles = glob($this->logDir . '/perf_monitor*.csv');
+                if (!empty($perfFiles)) {
+                    usort($perfFiles, fn ($a, $b) => filemtime($b) - filemtime($a));
+                    $content = @file_get_contents($perfFiles[0]);
+                    if ($content) {
+                        $lines = array_filter(explode("\n", trim($content)));
+                        if (count($lines) > 1) {
+                            $lastLine = end($lines);
+                            $parts = str_getcsv($lastLine);
+                            if (count($parts) > 1 && is_numeric($parts[1])) {
+                                $stats['packets_analyzed'] = (int) $parts[1];
+                            }
                         }
                     }
                 }
@@ -873,6 +894,9 @@ LUA;
                 Log::debug('Skipping -Q flag on macOS (no inline DAQ support), running in passive IDS mode');
             }
         }
+
+        // Enable perf_monitor stats output (writes CSV to log dir every 60s)
+        $cmd .= " --lua 'perf_monitor = { seconds = 60 }'";
 
         // Run as daemon on Unix
         if (!$this->isWindows()) {
