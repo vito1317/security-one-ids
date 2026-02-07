@@ -556,59 +556,89 @@ class WafSyncService
                     break;
 
                 case 'windows':
-                    // Try multiple install methods for Windows
+                    // Check if Snort is already installed
+                    $snortCheck = Process::run('where snort 2>&1');
+                    if ($snortCheck->successful()) {
+                        Log::info('Snort already installed on Windows');
+                        break;
+                    }
+                    // Also check common install paths
+                    $commonPaths = ['C:\\Snort\\bin\\snort.exe', 'C:\\Program Files\\Snort\\bin\\snort.exe'];
+                    foreach ($commonPaths as $sp) {
+                        if (file_exists($sp)) {
+                            Log::info("Snort found at {$sp}");
+                            break 2;
+                        }
+                    }
+
                     $snortInstalled = false;
-                    
+                    $errors = [];
+
                     // Method 1: Try Chocolatey
                     $chocoCheck = Process::run('where choco 2>&1');
                     if ($chocoCheck->successful()) {
                         Log::info('Trying Snort install via Chocolatey...');
-                        $result = Process::timeout(600)->run('choco install snort -y 2>&1');
-                        if ($result->successful()) {
+                        $r = Process::timeout(600)->run('choco install snort -y 2>&1');
+                        if ($r->successful()) {
                             $snortInstalled = true;
+                        } else {
+                            $errors[] = 'Chocolatey: ' . substr($r->output() ?: $r->errorOutput(), 0, 200);
                         }
+                    } else {
+                        $errors[] = 'Chocolatey: not installed';
                     }
-                    
+
                     // Method 2: Try WinGet
                     if (!$snortInstalled) {
                         $wingetCheck = Process::run('where winget 2>&1');
                         if ($wingetCheck->successful()) {
                             Log::info('Trying Snort install via WinGet...');
-                            $result = Process::timeout(600)->run('winget install Snort.Snort --accept-package-agreements --accept-source-agreements 2>&1');
-                            if ($result->successful()) {
+                            $r = Process::timeout(600)->run('winget install Snort.Snort --accept-package-agreements --accept-source-agreements 2>&1');
+                            if ($r->successful()) {
                                 $snortInstalled = true;
+                            } else {
+                                $errors[] = 'WinGet: ' . substr($r->output() ?: $r->errorOutput(), 0, 200);
                             }
+                        } else {
+                            $errors[] = 'WinGet: not installed';
                         }
                     }
-                    
-                    // Method 3: Download MSI from snort.org
+
+                    // Method 3: Download Snort installer via PowerShell
                     if (!$snortInstalled) {
                         Log::info('Trying Snort install via direct download...');
-                        $downloadDir = 'C:\\Windows\\Temp';
-                        $msiPath = "{$downloadDir}\\snort3_installer.exe";
-                        
-                        // Download Snort installer
-                        $dlResult = Process::timeout(300)->run(
-                            "powershell -Command \"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; " .
-                            "Invoke-WebRequest -Uri 'https://www.snort.org/downloads/snort/Snort_2_9_20_Installer.x64.exe' " .
-                            "-OutFile '{$msiPath}' -UseBasicParsing\" 2>&1"
-                        );
-                        
-                        if ($dlResult->successful() && file_exists($msiPath)) {
-                            // Run silent install
-                            $result = Process::timeout(300)->run("\"{$msiPath}\" /S 2>&1");
-                            @unlink($msiPath);
-                            if ($result->successful()) {
-                                $snortInstalled = true;
-                            }
+                        $downloadScript = <<<'PS'
+$ErrorActionPreference = 'Stop'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$snortUrl = 'https://www.snort.org/downloads/snort/Snort_2_9_20_Installer.x64.exe'
+$outPath = "$env:TEMP\snort_installer.exe"
+try {
+    Invoke-WebRequest -Uri $snortUrl -OutFile $outPath -UseBasicParsing -TimeoutSec 120
+    if (Test-Path $outPath) {
+        Start-Process -FilePath $outPath -ArgumentList '/S' -Wait -NoNewWindow
+        Remove-Item $outPath -Force -ErrorAction SilentlyContinue
+        Write-Output 'INSTALL_OK'
+    } else {
+        Write-Output 'DOWNLOAD_FAILED: file not created'
+    }
+} catch {
+    Write-Output "DOWNLOAD_FAILED: $_"
+}
+PS;
+                        $r = Process::timeout(300)->run("powershell -NoProfile -ExecutionPolicy Bypass -Command \"{$downloadScript}\" 2>&1");
+                        $output = $r->output();
+                        if (str_contains($output, 'INSTALL_OK')) {
+                            $snortInstalled = true;
+                        } else {
+                            $errors[] = 'Direct download: ' . substr($output ?: $r->errorOutput() ?: 'no output', 0, 200);
                         }
                     }
-                    
+
                     if (!$snortInstalled) {
                         // Create Snort directories as fallback
                         Process::run('mkdir C:\\Snort\\rules 2>&1');
                         Process::run('mkdir C:\\Snort\\log 2>&1');
-                        return ['success' => false, 'error' => 'Windows Snort auto-install failed (tried Chocolatey, WinGet, and direct download). Output: ' . ($result?->output() ?? 'N/A')];
+                        return ['success' => false, 'error' => 'Windows Snort auto-install failed. ' . implode(' | ', $errors)];
                     }
                     break;
 
