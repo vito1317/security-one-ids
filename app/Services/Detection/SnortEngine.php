@@ -37,6 +37,14 @@ class SnortEngine
     }
 
     /**
+     * Get the alert log file path
+     */
+    public function getAlertLogPath(): string
+    {
+        return $this->alertLogPath;
+    }
+
+    /**
      * Get installed Snort version
      */
     public function getVersion(): ?string

@@ -228,6 +228,9 @@ class WafSyncService
 
             // Upload local Snort rules to Hub
             $this->uploadSnortRulesToHub();
+
+            // Collect and send new Snort alerts to Hub
+            $this->collectSnortAlerts();
         }
         
         // Handle IDS update signal
@@ -845,6 +848,141 @@ class WafSyncService
         } catch (\Exception $e) {
             Log::error('Snort rules sync failed: ' . $e->getMessage());
             $this->reportAgentEvent('error', 'Snort 規則同步例外：' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Collect new Snort alerts and send them to Hub
+     */
+    private function collectSnortAlerts(): void
+    {
+        try {
+            $snort = app(\App\Services\Detection\SnortEngine::class);
+            if (!$snort->isInstalled() || !$snort->isRunning()) {
+                return;
+            }
+
+            // Determine alert log path
+            $alertLogPath = $snort->getAlertLogPath();
+            if (!$alertLogPath || !file_exists($alertLogPath)) {
+                Log::debug('Snort alert log not found', ['path' => $alertLogPath]);
+                return;
+            }
+
+            // Track file position to avoid resending alerts
+            $positionFile = storage_path('app/snort_alert_position.txt');
+            $lastPosition = 0;
+            if (file_exists($positionFile)) {
+                $lastPosition = (int) file_get_contents($positionFile);
+            }
+
+            $fileSize = filesize($alertLogPath);
+
+            // File was rotated or truncated — reset position
+            if ($fileSize < $lastPosition) {
+                $lastPosition = 0;
+            }
+
+            // No new data
+            if ($fileSize <= $lastPosition) {
+                return;
+            }
+
+            // Read new lines from the alert log
+            $handle = fopen($alertLogPath, 'r');
+            if (!$handle) {
+                return;
+            }
+
+            fseek($handle, $lastPosition);
+            $newAlerts = [];
+            $maxAlerts = 50; // Rate limit per sync cycle
+
+            while (!feof($handle) && count($newAlerts) < $maxAlerts) {
+                $line = fgets($handle);
+                if ($line === false) {
+                    break;
+                }
+
+                $line = trim($line);
+                if (empty($line)) {
+                    continue;
+                }
+
+                $decoded = json_decode($line, true);
+                if (!$decoded) {
+                    continue;
+                }
+
+                // Map Snort alert fields to Hub format
+                $sourceIp = $decoded['src_addr'] ?? null;
+                if (!$sourceIp) {
+                    // Try alternate field names
+                    $sourceIp = $decoded['src_ap'] ?? null;
+                    if ($sourceIp && str_contains($sourceIp, ':')) {
+                        $sourceIp = explode(':', $sourceIp)[0];
+                    }
+                }
+
+                if (!$sourceIp || !filter_var($sourceIp, FILTER_VALIDATE_IP)) {
+                    continue;
+                }
+
+                $priority = (int) ($decoded['priority'] ?? 3);
+                $severity = match (true) {
+                    $priority <= 1 => 'critical',
+                    $priority <= 2 => 'high',
+                    $priority <= 3 => 'medium',
+                    default => 'low',
+                };
+
+                $msg = $decoded['msg'] ?? $decoded['rule'] ?? 'Snort Alert';
+                $classification = $decoded['class'] ?? $decoded['classtype'] ?? 'snort-detection';
+                $sid = $decoded['sid'] ?? $decoded['gid'] ?? null;
+                $action = $decoded['action'] ?? 'alert';
+                $proto = $decoded['proto'] ?? $decoded['protocol'] ?? 'unknown';
+                $destIp = $decoded['dst_addr'] ?? null;
+                $destPort = $decoded['dst_port'] ?? null;
+
+                $newAlerts[] = [
+                    'source_ip' => $sourceIp,
+                    'severity' => $severity,
+                    'category' => $classification,
+                    'source' => 'snort',
+                    'detections' => "[SNORT] SID:{$sid} {$msg} (Action: {$action}, Priority: {$priority})",
+                    'raw_log' => "{$proto} {$sourceIp} -> {$destIp}:{$destPort} | {$msg}",
+                    'uri' => $destIp ? "{$destIp}:{$destPort}" : null,
+                    'method' => strtoupper($proto),
+                ];
+            }
+
+            // Save position
+            $newPosition = ftell($handle);
+            fclose($handle);
+            file_put_contents($positionFile, $newPosition);
+
+            if (empty($newAlerts)) {
+                return;
+            }
+
+            // Send alerts to Hub
+            $sent = 0;
+            foreach ($newAlerts as $alertData) {
+                try {
+                    $this->syncAlert($alertData);
+                    $sent++;
+                } catch (\Exception $e) {
+                    Log::warning('Failed to send Snort alert: ' . $e->getMessage());
+                }
+            }
+
+            if ($sent > 0) {
+                Log::info("Sent {$sent} Snort alerts to Hub");
+                $this->reportAgentEvent('snort_alert', "已上報 {$sent} 條 Snort 告警至 Hub");
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Snort alert collection failed: ' . $e->getMessage());
         }
     }
 
