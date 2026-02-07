@@ -222,6 +222,16 @@ class SnortEngine
         // Re-detect config path in case it was created after constructor
         $this->configPath = $this->detectConfigPath();
 
+        // Clean up wrong config format from previous runs
+        if ($this->isSnort2()) {
+            // Snort 2 can't use .lua configs — remove if exists alongside .conf
+            $wrongConfig = str_replace('.conf', '.lua', $this->configPath);
+            if ($wrongConfig !== $this->configPath && file_exists($wrongConfig)) {
+                @unlink($wrongConfig);
+                Log::info('Removed incorrect snort.lua config (Snort 2.9 uses .conf)');
+            }
+        }
+
         if (file_exists($this->configPath)) {
             return;
         }
@@ -990,26 +1000,44 @@ LUA;
 
     private function detectConfigPath(): string
     {
-        $paths = $this->isWindows()
-            ? [
+        $isSnort2 = $this->isSnort2();
+
+        if ($this->isWindows()) {
+            $confPaths = [
+                'C:\\Snort\\etc\\snort.conf',
+                'C:\\Snort\\etc\\snort\\snort.conf',
+                'C:\\Program Files\\Snort\\etc\\snort.conf',
+            ];
+            $luaPaths = [
                 'C:\\Snort\\etc\\snort\\snort.lua',
                 'C:\\Snort\\etc\\snort.lua',
-                'C:\\Snort\\etc\\snort\\snort.conf',
                 'C:\\Program Files\\Snort\\etc\\snort\\snort.lua',
-                'C:\\Program Files\\Snort\\etc\\snort.conf',
-            ]
-            : [
-                '/etc/snort/snort.lua',              // Snort 3 system-wide
-                '/etc/snort/snort.conf',             // Snort 2 system-wide
-                '/usr/local/etc/snort/snort.lua',    // Homebrew Intel Mac
+            ];
+        } else {
+            $confPaths = [
+                '/etc/snort/snort.conf',
                 '/usr/local/etc/snort/snort.conf',
-                '/opt/homebrew/etc/snort/snort.lua',  // Homebrew ARM64 Mac
                 '/opt/homebrew/etc/snort/snort.conf',
+            ];
+            $luaPaths = [
+                '/etc/snort/snort.lua',
+                '/usr/local/etc/snort/snort.lua',
+                '/opt/homebrew/etc/snort/snort.lua',
                 '/opt/snort/etc/snort/snort.lua',
                 '/opt/snort/etc/snort.lua',
             ];
+        }
 
-        foreach ($paths as $path) {
+        // Prioritize the correct format based on Snort version
+        $primaryPaths = $isSnort2 ? $confPaths : $luaPaths;
+        $secondaryPaths = $isSnort2 ? $luaPaths : $confPaths;
+
+        foreach ($primaryPaths as $path) {
+            if (file_exists($path)) {
+                return $path;
+            }
+        }
+        foreach ($secondaryPaths as $path) {
             if (file_exists($path)) {
                 return $path;
             }
@@ -1017,9 +1045,9 @@ LUA;
 
         // Return platform-appropriate default
         if ($this->isWindows()) {
-            return $this->isSnort2() ? 'C:\\Snort\\etc\\snort.conf' : 'C:\\Snort\\etc\\snort.lua';
+            return $isSnort2 ? 'C:\\Snort\\etc\\snort.conf' : 'C:\\Snort\\etc\\snort.lua';
         }
-        return $this->isSnort2() ? '/etc/snort/snort.conf' : '/etc/snort/snort.lua';
+        return $isSnort2 ? '/etc/snort/snort.conf' : '/etc/snort/snort.lua';
     }
 
     private function detectLogDir(): string
@@ -1079,6 +1107,10 @@ LUA;
                         }
                     }
                 }
+                // No interfaces found — likely Npcap not installed
+                Log::warning('No Snort interfaces found (Npcap may not be installed)', [
+                    'snort_W_output' => substr($output, 0, 500),
+                ]);
             } catch (\Exception $e) {
                 Log::debug('Failed to detect Windows interface: ' . $e->getMessage());
             }
