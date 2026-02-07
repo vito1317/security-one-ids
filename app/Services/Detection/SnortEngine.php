@@ -144,14 +144,11 @@ class SnortEngine
                 $psCommand = "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c {$escapedCmd}' -WindowStyle Hidden";
                 $result = Process::timeout(15)->run("powershell -NonInteractive -Command \"{$psCommand}\"");
             } else {
-                // Linux/macOS: agent already runs as root, start directly
-                // Snort -D (daemon) forks: redirect stderr to a temp file for debugging
+                // Linux/macOS: Snort -D (daemon mode) forks and detaches itself
+                // No need for nohup (causes errors when no TTY, e.g. launchd)
                 $stderrFile = sys_get_temp_dir() . '/snort_start_stderr_' . uniqid() . '.log';
-                $result = Process::timeout(10)->run("nohup {$cmd} > /dev/null 2>{$stderrFile} & echo $!");
-                $pid = trim($result->output());
-                if (is_numeric($pid)) {
-                    file_put_contents($this->pidFile, $pid);
-                }
+                $result = Process::timeout(15)->run("{$cmd} 2>{$stderrFile}");
+                // Snort -D forks: parent exits immediately, daemon PID is in --pid-path/snort.pid
             }
 
             // Wait for Snort daemon to fork and write its PID file
