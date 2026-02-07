@@ -577,11 +577,20 @@ class WafSyncService
                     $snortInstalled = false;
                     $errors = [];
 
-                    // Method 1: Try Chocolatey
-                    $chocoCheck = Process::run('where choco 2>&1');
-                    if ($chocoCheck->successful()) {
+                    // Method 1: Try Chocolatey (check default path since SYSTEM PATH may not include it)
+                    $chocoPath = 'C:\\ProgramData\\chocolatey\\bin\\choco.exe';
+                    $chocoAvailable = file_exists($chocoPath);
+                    if (!$chocoAvailable) {
+                        $chocoCheck = Process::run('where choco 2>&1');
+                        $chocoAvailable = $chocoCheck->successful();
+                        if ($chocoAvailable) {
+                            $chocoPath = 'choco';
+                        }
+                    }
+
+                    if ($chocoAvailable) {
                         Log::info('Trying Snort install via Chocolatey...');
-                        $r = Process::timeout(600)->run('choco install snort -y 2>&1');
+                        $r = Process::timeout(600)->run("\"{$chocoPath}\" install snort -y 2>&1");
                         if ($r->successful()) {
                             $snortInstalled = true;
                         } else {
@@ -591,12 +600,30 @@ class WafSyncService
                         $errors[] = 'Chocolatey: not installed';
                     }
 
-                    // Method 2: Try WinGet
+                    // Method 2: Try WinGet (check default paths)
                     if (!$snortInstalled) {
-                        $wingetCheck = Process::run('where winget 2>&1');
-                        if ($wingetCheck->successful()) {
+                        $wingetPath = null;
+                        $wingetPaths = [
+                            'C:\\Users\\' . get_current_user() . '\\AppData\\Local\\Microsoft\\WindowsApps\\winget.exe',
+                            'C:\\Program Files\\WindowsApps\\Microsoft.DesktopAppInstaller_*\\winget.exe',
+                        ];
+                        foreach ($wingetPaths as $wp) {
+                            $found = glob($wp);
+                            if (!empty($found)) {
+                                $wingetPath = $found[0];
+                                break;
+                            }
+                        }
+                        if (!$wingetPath) {
+                            $wingetCheck = Process::run('where winget 2>&1');
+                            if ($wingetCheck->successful()) {
+                                $wingetPath = 'winget';
+                            }
+                        }
+
+                        if ($wingetPath) {
                             Log::info('Trying Snort install via WinGet...');
-                            $r = Process::timeout(600)->run('winget install Snort.Snort --accept-package-agreements --accept-source-agreements 2>&1');
+                            $r = Process::timeout(600)->run("\"{$wingetPath}\" install Snort.Snort --accept-package-agreements --accept-source-agreements 2>&1");
                             if ($r->successful()) {
                                 $snortInstalled = true;
                             } else {
@@ -607,12 +634,53 @@ class WafSyncService
                         }
                     }
 
+                    // Method 3: Download from GitHub releases (not Cloudflare-blocked)
+                    if (!$snortInstalled) {
+                        Log::info('Trying Snort install via GitHub release download...');
+                        $scriptContent = "\$ErrorActionPreference = 'Stop'\r\n" .
+                            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\r\n" .
+                            "try {\r\n" .
+                            "    \$apiUrl = 'https://api.github.com/repos/snort3/snort3/releases/latest'\r\n" .
+                            "    \$headers = @{ 'User-Agent' = 'SecurityOneIDS' }\r\n" .
+                            "    \$release = Invoke-RestMethod -Uri \$apiUrl -Headers \$headers -TimeoutSec 30\r\n" .
+                            "    \$msiAsset = \$release.assets | Where-Object { \$_.name -match '\\.msi\\.exe\$|\\.msi\$|\\.exe\$' -and \$_.name -match 'snort' } | Select-Object -First 1\r\n" .
+                            "    if (\$msiAsset) {\r\n" .
+                            "        \$outPath = \"\$env:TEMP\\\\snort_installer.exe\"\r\n" .
+                            "        Invoke-WebRequest -Uri \$msiAsset.browser_download_url -OutFile \$outPath -UseBasicParsing -TimeoutSec 300\r\n" .
+                            "        if (Test-Path \$outPath) {\r\n" .
+                            "            Start-Process -FilePath \$outPath -ArgumentList '/S' -Wait -NoNewWindow\r\n" .
+                            "            Remove-Item \$outPath -Force -ErrorAction SilentlyContinue\r\n" .
+                            "            Write-Output 'INSTALL_OK'\r\n" .
+                            "        } else {\r\n" .
+                            "            Write-Output 'DOWNLOAD_FAILED: file not created'\r\n" .
+                            "        }\r\n" .
+                            "    } else {\r\n" .
+                            "        Write-Output 'NO_ASSET: No Windows installer found in latest release'\r\n" .
+                            "    }\r\n" .
+                            "} catch {\r\n" .
+                            "    Write-Output \"GITHUB_FAILED: \$_\"\r\n" .
+                            "}\r\n";
+
+                        $scriptPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'snort_install_' . uniqid() . '.ps1';
+                        file_put_contents($scriptPath, $scriptContent);
+
+                        $r = Process::timeout(600)->run("powershell -NoProfile -ExecutionPolicy Bypass -File \"{$scriptPath}\" 2>&1");
+                        $output = $r->output();
+                        @unlink($scriptPath);
+
+                        if (str_contains($output, 'INSTALL_OK')) {
+                            $snortInstalled = true;
+                        } else {
+                            $errors[] = 'GitHub: ' . substr($output ?: $r->errorOutput() ?: 'no output', 0, 200);
+                        }
+                    }
+
                     if (!$snortInstalled) {
                         // Create Snort directories as fallback for manual install
                         Process::run('mkdir C:\\Snort\\rules 2>&1');
                         Process::run('mkdir C:\\Snort\\log 2>&1');
                         Process::run('mkdir C:\\Snort\\etc 2>&1');
-                        return ['success' => false, 'error' => 'Windows Snort auto-install failed. ' . implode(' | ', $errors) . ' | Please install Snort manually from snort.org'];
+                        return ['success' => false, 'error' => 'Windows Snort auto-install failed. ' . implode(' | ', $errors)];
                     }
                     break;
 
