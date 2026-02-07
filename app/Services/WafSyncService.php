@@ -219,6 +219,11 @@ class WafSyncService
         // Handle Snort IPS add-on (remote install for existing agents)
         if (!empty($config['addons']['snort_enabled'])) {
             $this->handleSnortAddon($config['addons']['snort_mode'] ?? 'ids');
+
+            // Sync Snort rules from Hub if hash differs
+            if (!empty($config['addons']['snort_rules_hash'])) {
+                $this->syncSnortRules($config['addons']['snort_rules_hash']);
+            }
         }
         
         // Handle IDS update signal
@@ -413,8 +418,12 @@ class WafSyncService
 
                 if ($result['success']) {
                     Log::info('Snort installed successfully');
+                    $this->reportAgentEvent('snort_install', 'Snort 安裝成功', [
+                        'version' => $result['version'] ?? null,
+                    ]);
                 } else {
                     Log::error('Snort installation failed: ' . ($result['error'] ?? 'Unknown error'));
+                    $this->reportAgentEvent('error', 'Snort 安裝失敗：' . ($result['error'] ?? 'Unknown error'));
                     return;
                 }
 
@@ -426,6 +435,7 @@ class WafSyncService
             if (!$snort->isRunning()) {
                 $startResult = $snort->start($mode);
                 Log::info('Snort start result', $startResult);
+                $this->reportAgentEvent('snort_started', "Snort 已啟動（模式：{$mode}）");
             }
 
             // Report status back to Hub via heartbeat
@@ -434,6 +444,7 @@ class WafSyncService
 
         } catch (\Exception $e) {
             Log::error('Snort addon handling failed: ' . $e->getMessage());
+            $this->reportAgentEvent('error', 'Snort 處理失敗：' . $e->getMessage());
         }
     }
 
@@ -510,6 +521,130 @@ class WafSyncService
 
         } catch (\Exception $e) {
             return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Sync Snort rules from Hub if hash differs
+     */
+    private function syncSnortRules(string $hubHash): void
+    {
+        try {
+            $snort = app(\App\Services\Detection\SnortEngine::class);
+            if (!$snort->isInstalled()) {
+                return;
+            }
+
+            // Compare local rules hash with Hub hash
+            $localHash = $this->getLocalSnortRulesHash();
+            if ($localHash === $hubHash) {
+                Log::debug('Snort rules hash matches Hub, no sync needed');
+                return;
+            }
+
+            Log::info('Snort rules hash mismatch, syncing from Hub...', [
+                'local_hash' => $localHash,
+                'hub_hash' => $hubHash,
+            ]);
+
+            // Fetch rules from Hub
+            $hubUrl = config('waf.hub_url', env('WAF_HUB_URL'));
+            $token = config('waf.agent_token', env('WAF_AGENT_TOKEN'));
+
+            $response = \Illuminate\Support\Facades\Http::timeout(30)
+                ->withHeaders(['Authorization' => "Bearer {$token}"])
+                ->get("{$hubUrl}/api/ids/agents/snort-rules", ['token' => $token]);
+
+            if (!$response->successful()) {
+                Log::error('Failed to fetch Snort rules from Hub', ['status' => $response->status()]);
+                $this->reportAgentEvent('error', 'Snort 規則同步失敗：無法從 Hub 下載', [
+                    'http_status' => $response->status(),
+                ]);
+                return;
+            }
+
+            $data = $response->json();
+            if (empty($data['rules'])) {
+                Log::info('No Snort rules received from Hub');
+                return;
+            }
+
+            // Write rules to local Snort config
+            $rulesContent = '';
+            foreach ($data['rules'] as $rule) {
+                $rulesContent .= ($rule['rule_content'] ?? '') . "\n";
+            }
+
+            $rulesPath = '/etc/snort/rules/hub_custom.rules';
+            if (PHP_OS_FAMILY === 'Windows') {
+                $rulesPath = 'C:\\Snort\\rules\\hub_custom.rules';
+            }
+
+            file_put_contents($rulesPath, $rulesContent);
+
+            // Store the new hash locally
+            $hashPath = storage_path('app/snort_rules_hash.txt');
+            file_put_contents($hashPath, $data['rules_hash'] ?? $hubHash);
+
+            // Reload Snort to pick up new rules
+            if ($snort->isRunning()) {
+                $snort->reload();
+            }
+
+            $ruleCount = count($data['rules']);
+            Log::info("Synced {$ruleCount} Snort rules from Hub");
+
+            $this->reportAgentEvent('snort_rule_sync', "已從 Hub 同步 {$ruleCount} 條 Snort 規則", [
+                'rule_count' => $ruleCount,
+                'rules_hash' => $data['rules_hash'] ?? $hubHash,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Snort rules sync failed: ' . $e->getMessage());
+            $this->reportAgentEvent('error', 'Snort 規則同步例外：' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Get local Snort rules hash
+     */
+    private function getLocalSnortRulesHash(): string
+    {
+        $hashPath = storage_path('app/snort_rules_hash.txt');
+        if (file_exists($hashPath)) {
+            return trim(file_get_contents($hashPath));
+        }
+        return '';
+    }
+
+    /**
+     * Report an event to the Hub
+     */
+    private function reportAgentEvent(string $eventType, string $message, array $details = []): void
+    {
+        try {
+            $hubUrl = config('waf.hub_url', env('WAF_HUB_URL'));
+            $token = config('waf.agent_token', env('WAF_AGENT_TOKEN'));
+
+            if (empty($hubUrl) || empty($token)) {
+                Log::warning('Cannot report event: Hub URL or token not configured');
+                return;
+            }
+
+            \Illuminate\Support\Facades\Http::timeout(10)
+                ->post("{$hubUrl}/api/ids/agents/events", [
+                    'token' => $token,
+                    'events' => [
+                        [
+                            'event_type' => $eventType,
+                            'message' => $message,
+                            'details' => $details ?: null,
+                            'created_at' => now()->toIso8601String(),
+                        ],
+                    ],
+                ]);
+        } catch (\Exception $e) {
+            Log::warning('Failed to report event to Hub: ' . $e->getMessage());
         }
     }
     
