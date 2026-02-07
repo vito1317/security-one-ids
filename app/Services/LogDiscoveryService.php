@@ -98,10 +98,11 @@ class LogDiscoveryService
     /**
      * Discover all accessible log files
      */
-    public function discoverLogFiles(): Collection
+    public function discoverLogFiles(bool $includeSystemLogs = true): Collection
     {
         $discovered = collect();
 
+        // Scan web server log paths
         foreach (self::LOG_PATHS as $pattern) {
             $files = glob($pattern);
             if ($files) {
@@ -116,6 +117,35 @@ class LogDiscoveryService
             }
         }
 
+        // Scan system log paths
+        if ($includeSystemLogs) {
+            foreach (self::SYSTEM_LOG_PATHS as $pattern) {
+                $files = glob($pattern);
+                if ($files) {
+                    foreach ($files as $file) {
+                        if (is_readable($file) && is_file($file) && filesize($file) > 0) {
+                            $discovered->push([
+                                'path' => $file,
+                                'type' => 'system',
+                                'format' => 'syslog',
+                                'size' => filesize($file),
+                                'modified' => filemtime($file),
+                                'readable' => true,
+                            ]);
+                        }
+                    }
+                }
+            }
+
+            // Dynamic discovery: scan /var/log for any .log files
+            $this->scanDirectory('/var/log', $discovered, 2);
+
+            // macOS: also scan /private/var/log
+            if (PHP_OS_FAMILY === 'Darwin') {
+                $this->scanDirectory('/private/var/log', $discovered, 2);
+            }
+        }
+
         // Also check custom paths from config
         $customPaths = config('ids.custom_log_paths', []);
         foreach ($customPaths as $path) {
@@ -127,7 +157,72 @@ class LogDiscoveryService
             }
         }
 
+        // Add custom paths from cache
+        foreach ($this->getCustomPaths() as $path) {
+            if (is_readable($path) && is_file($path) && !$discovered->contains('path', $path)) {
+                $discovered->push([
+                    'path' => $path,
+                    'type' => 'custom',
+                    'format' => 'unknown',
+                    'size' => filesize($path),
+                    'modified' => filemtime($path),
+                    'readable' => true,
+                ]);
+            }
+        }
+
         return $discovered->unique('path');
+    }
+
+    /**
+     * Recursively scan a directory for log files
+     */
+    private function scanDirectory(string $dir, Collection &$discovered, int $maxDepth, int $currentDepth = 0): void
+    {
+        if ($currentDepth >= $maxDepth || !is_dir($dir) || !is_readable($dir)) {
+            return;
+        }
+
+        try {
+            $entries = @scandir($dir);
+            if (!$entries) {
+                return;
+            }
+
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+
+                $path = $dir . '/' . $entry;
+
+                if (is_dir($path) && is_readable($path)) {
+                    $this->scanDirectory($path, $discovered, $maxDepth, $currentDepth + 1);
+                } elseif (is_file($path) && is_readable($path) && filesize($path) > 0) {
+                    // Only include .log files or files without extension that look like logs
+                    if (str_ends_with($entry, '.log') || str_ends_with($entry, '_log') || $entry === 'syslog' || $entry === 'messages') {
+                        if (!$discovered->contains('path', $path)) {
+                            $info = $this->getLogInfo($path);
+                            if ($info) {
+                                $discovered->push($info);
+                            } else {
+                                // Still add as system log even if format not recognized
+                                $discovered->push([
+                                    'path' => $path,
+                                    'type' => $this->detectServerType($path),
+                                    'format' => 'unknown',
+                                    'size' => filesize($path),
+                                    'modified' => filemtime($path),
+                                    'readable' => true,
+                                ]);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            Log::debug("Failed to scan directory {$dir}: " . $e->getMessage());
+        }
     }
 
     /**

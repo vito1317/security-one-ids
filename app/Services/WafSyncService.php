@@ -135,6 +135,7 @@ class WafSyncService
                     'version' => config('app.version', '1.0.0'),
                     'version_updated_at' => $this->getLastGitPullTime(),
                     'system_info' => $this->getSystemInfo(),
+                    'discovered_logs' => $this->getDiscoveredLogPaths(),
                 ]);
 
                 if ($response->successful()) {
@@ -1295,6 +1296,9 @@ class WafSyncService
             
             Log::info('Git pull successful', ['output' => $gitResult->output()]);
             
+            // Clear Snort install failure cache — new code might fix the issue
+            @unlink(storage_path('app/snort_install_failed.txt'));
+            
             // Run composer install
             Log::info('Running composer install...');
             
@@ -1700,6 +1704,42 @@ class WafSyncService
         }
         
         return null;
+    }
+
+    /**
+     * Get discovered log file paths for heartbeat
+     *
+     * Cached for 5 minutes to avoid rescanning every heartbeat
+     */
+    protected function getDiscoveredLogPaths(): array
+    {
+        $cacheFile = storage_path('app/discovered_logs_cache.json');
+        
+        // Use cached result if less than 5 minutes old
+        if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 300) {
+            $cached = json_decode(file_get_contents($cacheFile), true);
+            if (is_array($cached)) {
+                return $cached;
+            }
+        }
+
+        try {
+            $discovery = app(\App\Services\LogDiscoveryService::class);
+            $logs = $discovery->discoverLogFiles()->map(fn($log) => [
+                'path' => $log['path'],
+                'type' => $log['type'],
+                'format' => $log['format'] ?? 'unknown',
+                'size' => $log['size'] ?? 0,
+            ])->values()->toArray();
+
+            // Cache the result
+            file_put_contents($cacheFile, json_encode($logs));
+
+            return $logs;
+        } catch (\Exception $e) {
+            Log::debug('Log discovery failed: ' . $e->getMessage());
+            return [];
+        }
     }
 
     /**
