@@ -877,147 +877,106 @@ class WafSyncService
             return;
         }
 
-        // Check cache file — don't re-attempt install every heartbeat
-        $cacheFile = storage_path('app/pcap_verified.txt');
+        // Clean up stale cache files from previous code versions
+        @unlink(storage_path('app/npcap_installed.txt'));
+        @unlink(storage_path('app/pcap_verified.txt'));
+        @unlink(storage_path('app/pcap_cooldown.txt'));
+
+        $cacheFile = storage_path('app/pcap_ok_v3.txt');
         if (file_exists($cacheFile)) {
             return;
         }
 
-        // Cooldown: don't retry install more than once per hour
-        $cooldownFile = storage_path('app/pcap_cooldown.txt');
-        if (file_exists($cooldownFile) && (time() - filemtime($cooldownFile)) < 3600) {
+        $snortPath = 'C:\\Snort\\bin\\snort.exe';
+        if (!file_exists($snortPath)) {
             return;
         }
 
-        Log::info('[WinPcap] Checking packet capture driver status...');
-
-        // The ONLY reliable check: does Snort actually see network interfaces?
-        $snortPath = 'C:\\Snort\\bin\\snort.exe';
-        if (file_exists($snortPath)) {
-            try {
-                $r = Process::timeout(10)->run("\"{$snortPath}\" -W 2>&1");
-                $output = $r->output();
-                if (preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $output)) {
-                    // Snort can see interfaces — driver is working
-                    file_put_contents($cacheFile, date('c'));
-                    Log::info('[WinPcap] Packet capture driver verified via snort -W');
-                    return;
-                }
-                Log::info('[WinPcap] snort -W shows no interfaces, driver not functional');
-            } catch (\Exception $e) {
-                Log::warning('[WinPcap] snort -W check failed: ' . $e->getMessage());
-            }
-        } else {
-            Log::info('[WinPcap] Snort not found at ' . $snortPath);
+        // Check if driver already works
+        if ($this->snortCanSeeInterfaces($snortPath)) {
+            file_put_contents($cacheFile, date('c'));
+            return;
         }
 
-        Log::info('Packet capture driver not found, attempting to install...');
-
+        // Try starting NPF service (WinPcap may be installed from prior attempt)
         try {
-            // Method 1: Try Chocolatey for Npcap (if available)
-            $chocoPath = 'C:\\ProgramData\\chocolatey\\bin\\choco.exe';
-            if (file_exists($chocoPath) || Process::run('where choco 2>&1')->successful()) {
-                $chocoCmd = file_exists($chocoPath) ? "\"{$chocoPath}\"" : 'choco';
-                $r = Process::timeout(120)->run("{$chocoCmd} install npcap -y 2>&1");
-                if ($r->successful()) {
-                    Log::info('Npcap installed via Chocolatey');
-                    file_put_contents($cacheFile, 'verified');
-                    $this->reportAgentEvent('snort_install', 'Npcap packet capture driver installed successfully via Chocolatey');
-                    return;
-                }
-                Log::debug('Chocolatey npcap install failed, trying WinPcap...');
-            }
-
-            // Method 2: Download and install WinPcap 4.1.3 (free, supports silent install /S)
-            // WinPcap is fully compatible with Snort 2.9 on Windows
-            $scriptContent = "\$ErrorActionPreference = 'Stop'\r\n" .
-                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\r\n" .
-                "try {\r\n" .
-                "    \$url = 'https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe'\r\n" .
-                "    \$outPath = \"\$env:TEMP\\WinPcap_4_1_3.exe\"\r\n" .
-                "    Write-Output 'Downloading WinPcap 4.1.3...'\r\n" .
-                "    \$wc = New-Object System.Net.WebClient\r\n" .
-                "    \$wc.Headers.Add('User-Agent', 'Mozilla/5.0 SecurityOneIDS')\r\n" .
-                "    \$wc.DownloadFile(\$url, \$outPath)\r\n" .
-                "    if (Test-Path \$outPath) {\r\n" .
-                "        \$fileSize = (Get-Item \$outPath).Length\r\n" .
-                "        Write-Output \"Downloaded \$fileSize bytes\"\r\n" .
-                "        if (\$fileSize -lt 100000) {\r\n" .
-                "            Write-Output 'WINPCAP_DOWNLOAD_TOO_SMALL'\r\n" .
-                "            Remove-Item \$outPath -Force\r\n" .
-                "            exit 1\r\n" .
-                "        }\r\n" .
-                "        Write-Output 'Installing WinPcap silently...'\r\n" .
-                "        \$proc = Start-Process -FilePath \$outPath -ArgumentList '/S' -Wait -PassThru\r\n" .
-                "        Write-Output \"Installer exit code: \$(\$proc.ExitCode)\"\r\n" .
-                "        Start-Sleep -Seconds 5\r\n" .
-                "        Remove-Item \$outPath -Force -ErrorAction SilentlyContinue\r\n" .
-                "        \r\n" .
-                "        # Try to start the NPF driver service\r\n" .
-                "        Write-Output 'Starting NPF driver service...'\r\n" .
-                "        try { net start npf 2>&1 | Out-String | Write-Output } catch { }\r\n" .
-                "        \r\n" .
-                "        # Check NPF service status\r\n" .
-                "        try { sc.exe query npf 2>&1 | Out-String | Write-Output } catch { }\r\n" .
-                "        \r\n" .
-                "        # Check DLL in multiple locations\r\n" .
-                "        \$dllPaths = @(\r\n" .
-                "            'C:\\Windows\\System32\\wpcap.dll',\r\n" .
-                "            'C:\\Windows\\SysWOW64\\wpcap.dll',\r\n" .
-                "            'C:\\Windows\\System32\\Npcap\\wpcap.dll',\r\n" .
-                "            'C:\\Windows\\System32\\Packet.dll'\r\n" .
-                "        )\r\n" .
-                "        \$found = \$false\r\n" .
-                "        foreach (\$dll in \$dllPaths) {\r\n" .
-                "            if (Test-Path \$dll) {\r\n" .
-                "                Write-Output \"FOUND: \$dll\"\r\n" .
-                "                \$found = \$true\r\n" .
-                "            }\r\n" .
-                "        }\r\n" .
-                "        \r\n" .
-                "        if (\$found) {\r\n" .
-                "            Write-Output 'WINPCAP_INSTALL_OK'\r\n" .
-                "        } else {\r\n" .
-                "            # Diagnostic: list what the installer actually put on disk\r\n" .
-                "            Write-Output 'DLL not found in expected paths. Checking WinPcap dirs:'\r\n" .
-                "            try { Get-ChildItem 'C:\\Program Files (x86)\\WinPcap' -ErrorAction SilentlyContinue | ForEach-Object { Write-Output \$_.FullName } } catch { }\r\n" .
-                "            try { Get-ChildItem 'C:\\Program Files\\WinPcap' -ErrorAction SilentlyContinue | ForEach-Object { Write-Output \$_.FullName } } catch { }\r\n" .
-                "            Write-Output 'WINPCAP_INSTALL_NO_DLL'\r\n" .
-                "        }\r\n" .
-                "    } else {\r\n" .
-                "        Write-Output 'WINPCAP_DOWNLOAD_FAILED'\r\n" .
-                "    }\r\n" .
-                "} catch {\r\n" .
-                "    Write-Output \"WINPCAP_ERROR: \$_\"\r\n" .
-                "}\r\n";
-
-            $scriptPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'winpcap_install_' . uniqid() . '.ps1';
-            file_put_contents($scriptPath, $scriptContent);
-
-            $r = Process::timeout(180)->run("powershell -NoProfile -ExecutionPolicy Bypass -File \"{$scriptPath}\" 2>&1");
-            $output = $r->output();
-            @unlink($scriptPath);
-
-            Log::info('[WinPcap] Install script output: ' . substr($output, 0, 800));
-
-            if (str_contains($output, 'WINPCAP_INSTALL_OK')) {
-                Log::info('WinPcap 4.1.3 installed successfully');
+            Process::timeout(10)->run('net start npf 2>&1');
+            sleep(2);
+            if ($this->snortCanSeeInterfaces($snortPath)) {
                 file_put_contents($cacheFile, date('c'));
-                @unlink($cooldownFile);
-                $this->reportAgentEvent('snort_install', 'WinPcap packet capture driver installed successfully');
-            } elseif (str_contains($output, 'WINPCAP_INSTALL_NO_DLL')) {
-                Log::warning('WinPcap installer ran but DLL not found — will retry in 1 hour');
-                file_put_contents($cooldownFile, date('c')); // Cooldown, NOT permanent cache
-                $this->reportAgentEvent('snort_error', 'WinPcap installed but driver not loaded. May need manual install or reboot.');
-            } else {
-                Log::warning('WinPcap auto-install failed: ' . substr($output, 0, 500));
-                file_put_contents($cooldownFile, date('c')); // Cooldown
-                $this->reportAgentEvent('snort_error', 'WinPcap auto-install failed: ' . substr($output, 0, 200));
+                Log::info('[Pcap] NPF service started, interfaces now visible');
+                $this->reportAgentEvent('snort_install', 'Packet capture activated');
+                return;
             }
         } catch (\Exception $e) {
-            Log::error('Packet capture driver installation error: ' . $e->getMessage());
+            // Service does not exist
+        }
+
+        // Rate-limit install (once per hour)
+        $attemptFile = storage_path('app/pcap_attempt.txt');
+        if (file_exists($attemptFile) && (time() - filemtime($attemptFile)) < 3600) {
+            return;
+        }
+        file_put_contents($attemptFile, date('c'));
+
+        Log::info('[Pcap] Installing WinPcap 4.1.3...');
+
+        try {
+            $script = "\$ErrorActionPreference='Stop'\r\n" .
+                "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
+                "try {\r\n" .
+                "  \$f=\"\$env:TEMP\\WinPcap_4_1_3.exe\"\r\n" .
+                "  (New-Object Net.WebClient).DownloadFile('https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe',\$f)\r\n" .
+                "  \$sz=(Get-Item \$f).Length; Write-Output \"DL:\$sz\"\r\n" .
+                "  if(\$sz -lt 100000){Write-Output 'SMALL'; exit 1}\r\n" .
+                "  \$p=Start-Process \$f -ArgumentList '/S' -Wait -PassThru\r\n" .
+                "  Write-Output \"EXIT:\$(\$p.ExitCode)\"\r\n" .
+                "  Start-Sleep 5\r\n" .
+                "  Remove-Item \$f -Force -EA SilentlyContinue\r\n" .
+                "  net start npf 2>&1|Write-Output\r\n" .
+                "  sc.exe query npf 2>&1|Write-Output\r\n" .
+                "  foreach(\$d in 'C:\\Windows\\System32\\wpcap.dll','C:\\Windows\\SysWOW64\\wpcap.dll','C:\\Windows\\System32\\Packet.dll'){\r\n" .
+                "    if(Test-Path \$d){Write-Output \"FOUND:\$d\"}\r\n" .
+                "  }\r\n" .
+                "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "  Write-Output \"SNORT_W:\$w\"\r\n" .
+                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'}else{Write-Output 'PCAP_FAIL'}\r\n" .
+                "}catch{Write-Output \"ERR:\$_\"}\r\n";
+
+            $path = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pcap_' . uniqid() . '.ps1';
+            file_put_contents($path, $script);
+            $r = Process::timeout(300)->run("powershell -NoProfile -ExecutionPolicy Bypass -File \"{$path}\" 2>&1");
+            $out = $r->output();
+            @unlink($path);
+
+            Log::info('[Pcap] Output: ' . substr($out, 0, 1000));
+
+            if (str_contains($out, 'PCAP_OK')) {
+                file_put_contents($cacheFile, date('c'));
+                @unlink($attemptFile);
+                Log::info('[Pcap] WinPcap installed and verified');
+                $this->reportAgentEvent('snort_install', 'WinPcap installed successfully');
+            } else {
+                $this->reportAgentEvent('snort_error', 'WinPcap install incomplete: ' . substr($out, 0, 300));
+            }
+        } catch (\Exception $e) {
+            Log::error('[Pcap] Error: ' . $e->getMessage());
         }
     }
+
+    /**
+     * Check if Snort can see network interfaces (packet capture driver working)
+     */
+    private function snortCanSeeInterfaces(string $snortPath): bool
+    {
+        try {
+            $r = Process::timeout(10)->run("\"{$snortPath}\" -W 2>&1");
+            return (bool) preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $r->output());
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
+
 
     /**
      * Compile Snort 3 from source (Ubuntu/Debian fallback)
