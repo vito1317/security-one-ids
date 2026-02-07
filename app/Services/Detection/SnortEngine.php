@@ -37,10 +37,21 @@ class SnortEngine
     }
 
     /**
-     * Get the alert log file path
+     * Get the alert log file path (auto-detects Snort 2 vs Snort 3)
      */
     public function getAlertLogPath(): string
     {
+        // Snort 3: alert_json.txt
+        if (file_exists($this->alertLogPath)) {
+            return $this->alertLogPath;
+        }
+
+        // Snort 2: snort.alert.fast (text format)
+        $fastAlert = $this->logDir . '/snort.alert.fast';
+        if (file_exists($fastAlert)) {
+            return $fastAlert;
+        }
+
         return $this->alertLogPath;
     }
 

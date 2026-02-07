@@ -1021,6 +1021,63 @@ class WafSyncService
                     continue;
                 }
 
+                // Try Snort 2.9 alert.fast text format first:
+                // 02/07-06:37:14.011770  [**] [1:527:8] BAD-TRAFFIC same SRC/DST [**] [Classification: ...] [Priority: 2] {UDP} 0.0.0.0:68 -> 255.255.255.255:67
+                if (preg_match('/^\d{2}\/\d{2}-[\d:.]+\s+\[\*\*\]\s+\[(\d+:\d+:\d+)\]\s+(.+?)\s+\[\*\*\]/', $line, $m)) {
+                    $sid = $m[1];
+                    $msg = $m[2];
+
+                    $classification = 'snort-detection';
+                    if (preg_match('/\[Classification:\s*(.+?)\]/', $line, $cm)) {
+                        $classification = $cm[1];
+                    }
+
+                    $priority = 3;
+                    if (preg_match('/\[Priority:\s*(\d+)\]/', $line, $pm)) {
+                        $priority = (int) $pm[1];
+                    }
+
+                    $proto = 'unknown';
+                    if (preg_match('/\{(\w+)\}/', $line, $protom)) {
+                        $proto = $protom[1];
+                    }
+
+                    $sourceIp = null;
+                    $sourcePort = null;
+                    $destIp = null;
+                    $destPort = null;
+                    if (preg_match('/\}\s+([\d.]+):?(\d+)?\s*->\s*([\d.]+):?(\d+)?/', $line, $ipm)) {
+                        $sourceIp = $ipm[1];
+                        $sourcePort = !empty($ipm[2]) ? $ipm[2] : null;
+                        $destIp = $ipm[3];
+                        $destPort = !empty($ipm[4]) ? $ipm[4] : null;
+                    }
+
+                    if (!$sourceIp || !filter_var($sourceIp, FILTER_VALIDATE_IP)) {
+                        continue;
+                    }
+
+                    $severity = match (true) {
+                        $priority <= 1 => 'critical',
+                        $priority <= 2 => 'high',
+                        $priority <= 3 => 'medium',
+                        default => 'low',
+                    };
+
+                    $newAlerts[] = [
+                        'source_ip' => $sourceIp,
+                        'severity' => $severity,
+                        'category' => $classification,
+                        'source' => 'snort',
+                        'detections' => "[SNORT] SID:{$sid} {$msg} (Priority: {$priority})",
+                        'raw_log' => $line,
+                        'uri' => $destIp ? "{$destIp}:{$destPort}" : null,
+                        'method' => strtoupper($proto),
+                    ];
+                    continue;
+                }
+
+                // Try JSON (Snort 3 alert_json.txt)
                 $decoded = json_decode($line, true);
                 if (!$decoded) {
                     continue;
