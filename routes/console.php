@@ -43,8 +43,30 @@ Artisan::command('waf:heartbeat-if-scanning', function (WafSyncService $wafSync,
     }
 })->purpose('Send heartbeat only if scan is running');
 
-// Send heartbeat to WAF every minute (normal mode)
-Schedule::command('waf:heartbeat')->everyMinute();
+// Dynamic heartbeat command that respects heartbeat_interval from Hub config
+Artisan::command('waf:heartbeat-dynamic', function (WafSyncService $wafSync) {
+    // Check configured interval from Hub config
+    $configPath = storage_path('app/waf_config.json');
+    $interval = 60; // Default
+    if (file_exists($configPath)) {
+        $config = json_decode(file_get_contents($configPath), true) ?: [];
+        $interval = (int) ($config['heartbeat_interval'] ?? 60);
+        $interval = max(10, min(300, $interval)); // Clamp 10-300s
+    }
+
+    // Check if enough time has passed since last heartbeat
+    $lastBeatFile = storage_path('app/last_heartbeat.txt');
+    $lastBeat = file_exists($lastBeatFile) ? (int) file_get_contents($lastBeatFile) : 0;
+    $elapsed = time() - $lastBeat;
+
+    if ($elapsed >= $interval) {
+        $wafSync->heartbeat();
+        file_put_contents($lastBeatFile, time());
+    }
+})->purpose('Send heartbeat respecting configured interval');
+
+// Run heartbeat check every 10 seconds (actual interval controlled by heartbeat_interval config)
+Schedule::command('waf:heartbeat-dynamic')->everyTenSeconds();
 
 // Fast heartbeat during scanning - every 10 seconds
 Schedule::command('waf:heartbeat-if-scanning')->everyTenSeconds();
