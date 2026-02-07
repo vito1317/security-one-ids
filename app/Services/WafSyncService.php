@@ -883,22 +883,26 @@ class WafSyncService
             return;
         }
 
+        Log::info('[WinPcap] Checking packet capture driver status...');
+
         // The ONLY reliable check: does Snort actually see network interfaces?
-        // File/directory/registry checks are unreliable — partial installs create
-        // those artifacts without functional drivers.
-        try {
-            $snort = app(\App\Services\Detection\SnortEngine::class);
-            if ($snort->isInstalled()) {
-                $r = Process::timeout(10)->run($snort->getSnortPath() . ' -W 2>&1');
-                if (preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $r->output())) {
-                    // Snort can see interfaces — packet capture driver is working
+        $snortPath = 'C:\\Snort\\bin\\snort.exe';
+        if (file_exists($snortPath)) {
+            try {
+                $r = Process::timeout(10)->run("\"{$snortPath}\" -W 2>&1");
+                $output = $r->output();
+                if (preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $output)) {
+                    // Snort can see interfaces — driver is working
                     file_put_contents($cacheFile, date('c'));
-                    Log::debug('Packet capture driver verified via snort -W');
+                    Log::info('[WinPcap] Packet capture driver verified via snort -W');
                     return;
                 }
+                Log::info('[WinPcap] snort -W shows no interfaces, driver not functional');
+            } catch (\Exception $e) {
+                Log::warning('[WinPcap] snort -W check failed: ' . $e->getMessage());
             }
-        } catch (\Exception $e) {
-            // Continue to install
+        } else {
+            Log::info('[WinPcap] Snort not found at ' . $snortPath);
         }
 
         Log::info('Packet capture driver not found, attempting to install...');
