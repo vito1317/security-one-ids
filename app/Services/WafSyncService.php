@@ -610,12 +610,14 @@ class WafSyncService
             ]);
 
             // Fetch rules from Hub
-            $hubUrl = config('waf.hub_url', env('WAF_HUB_URL'));
-            $token = config('waf.agent_token', env('WAF_AGENT_TOKEN'));
+            if (empty($this->wafUrl) || empty($this->agentToken)) {
+                Log::warning('Cannot sync Snort rules: Hub URL or token not configured');
+                return;
+            }
 
             $response = \Illuminate\Support\Facades\Http::timeout(30)
-                ->withHeaders(['Authorization' => "Bearer {$token}"])
-                ->get("{$hubUrl}/api/ids/agents/snort-rules", ['token' => $token]);
+                ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
+                ->get("{$this->wafUrl}/api/ids/agents/snort-rules", ['token' => $this->agentToken]);
 
             if (!$response->successful()) {
                 Log::error('Failed to fetch Snort rules from Hub', ['status' => $response->status()]);
@@ -685,17 +687,14 @@ class WafSyncService
     private function reportAgentEvent(string $eventType, string $message, array $details = []): void
     {
         try {
-            $hubUrl = config('waf.hub_url', env('WAF_HUB_URL'));
-            $token = config('waf.agent_token', env('WAF_AGENT_TOKEN'));
-
-            if (empty($hubUrl) || empty($token)) {
+            if (empty($this->wafUrl) || empty($this->agentToken)) {
                 Log::warning('Cannot report event: Hub URL or token not configured');
                 return;
             }
 
             \Illuminate\Support\Facades\Http::timeout(10)
-                ->post("{$hubUrl}/api/ids/agents/events", [
-                    'token' => $token,
+                ->post("{$this->wafUrl}/api/ids/agents/events", [
+                    'token' => $this->agentToken,
                     'events' => [
                         [
                             'event_type' => $eventType,
