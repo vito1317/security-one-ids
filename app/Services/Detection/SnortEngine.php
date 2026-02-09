@@ -879,13 +879,14 @@ LUA;
     private function collectWindowsPacketStats(array &$stats, string $interface): void
     {
         try {
-            // Try Get-NetAdapterStatistics (available on modern Windows)
+            // Sum ReceivedUnicastPackets across all active adapters
             $result = Process::timeout(10)->run(
-                "powershell -NoProfile -Command \"Get-NetAdapterStatistics | Select-Object -First 1 -Property ReceivedUnicastPackets | Format-List\" 2>&1"
+                "powershell -NoProfile -Command \"(Get-NetAdapterStatistics | Measure-Object -Property ReceivedUnicastPackets -Sum).Sum\" 2>&1"
             );
             if ($result->successful()) {
-                if (preg_match('/ReceivedUnicastPackets\s*:\s*(\d+)/i', $result->output(), $m)) {
-                    $stats['packets_analyzed'] = (int) $m[1];
+                $sum = trim($result->output());
+                if (is_numeric($sum) && (int) $sum > 0) {
+                    $stats['packets_analyzed'] = (int) $sum;
                     return;
                 }
             }
@@ -893,7 +894,6 @@ LUA;
             // Fallback: netstat -e
             $result = Process::timeout(5)->run('netstat -e 2>&1');
             if ($result->successful()) {
-                // "Bytes  Received      Sent"
                 if (preg_match('/Unicast Packets\s+(\d+)/i', $result->output(), $m)) {
                     $stats['packets_analyzed'] = (int) $m[1];
                 }
