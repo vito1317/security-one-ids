@@ -884,6 +884,14 @@ class WafSyncService
                 "  Start-Sleep 3\r\n" .
                 "}\r\n" .
                 "\r\n" .
+                "# Install Chocolatey if not present\r\n" .
+                "if(-not(Get-Command choco -EA SilentlyContinue)){\r\n" .
+                "  Write-Output 'Installing Chocolatey...'\r\n" .
+                "  Set-ExecutionPolicy Bypass -Scope Process -Force\r\n" .
+                "  iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))\r\n" .
+                "  \$env:Path=[System.Environment]::GetEnvironmentVariable('Path','Machine')+';'+[System.Environment]::GetEnvironmentVariable('Path','User')\r\n" .
+                "}\r\n" .
+                "\r\n" .
                 "# Strategy 1: Chocolatey (handles licensing & silent install)\r\n" .
                 "if(Get-Command choco -EA SilentlyContinue){\r\n" .
                 "  Write-Output 'STRATEGY:choco'\r\n" .
