@@ -135,7 +135,9 @@ class DesktopSecurityScan extends Command
                             if (!empty($ai['findings'])) {
                                 $this->line("    Findings:");
                                 foreach (array_slice($ai['findings'], 0, 5) as $finding) {
-                                    $this->line("      • [{$finding['severity']}] {$finding['description']}");
+                                    $fSeverity = $finding['severity'] ?? 'info';
+                                    $fDesc = $finding['description'] ?? 'N/A';
+                                    $this->line("      • [{$fSeverity}] {$fDesc}");
                                 }
                             }
                             
@@ -229,7 +231,9 @@ class DesktopSecurityScan extends Command
                             if (!empty($ai['findings'])) {
                                 $this->line("    Findings:");
                                 foreach (array_slice($ai['findings'], 0, 5) as $finding) {
-                                    $this->line("      • [{$finding['severity']}] {$finding['description']}");
+                                    $fSeverity = $finding['severity'] ?? 'info';
+                                    $fDesc = $finding['description'] ?? 'N/A';
+                                    $this->line("      • [{$fSeverity}] {$fDesc}");
                                 }
                             }
                             

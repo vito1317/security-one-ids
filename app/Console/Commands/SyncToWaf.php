@@ -62,7 +62,7 @@ class SyncToWaf extends Command
                     ->command([$phpBinary, 'artisan', 'ids:sync-quick']);
                 
                 $pool->path($basePath)
-                    ->timeout(300)
+                    ->timeout(600)
                     ->command([$phpBinary, 'artisan', 'ids:sync-snort']);
                 
                 $pool->path($basePath)
