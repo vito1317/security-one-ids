@@ -403,12 +403,29 @@ class SnortEngine
                     'white_list.rules',
                     'black_list.rules',
                     'local.rules',
+                    'hub_custom.rules',
                 ];
                 foreach ($placeholderFiles as $file) {
                     $filePath = $rulesDir . DIRECTORY_SEPARATOR . $file;
                     if (!file_exists($filePath)) {
                         file_put_contents($filePath, "# Auto-created by Security One IDS\n");
                         Log::debug("Created placeholder rule file: {$filePath}");
+                    }
+                }
+
+                // Ensure snort.conf includes Hub rules and local rules
+                // (original include lines may have been commented out due to missing files)
+                $includeFiles = [
+                    $rulesDir . DIRECTORY_SEPARATOR . 'hub_custom.rules',
+                    $rulesDir . DIRECTORY_SEPARATOR . 'local.rules',
+                ];
+                foreach ($includeFiles as $includeFile) {
+                    $normalizedInclude = str_replace('/', '\\', $includeFile);
+                    // Check if this include already exists (active, not commented)
+                    if (!str_contains($configContent, "include {$normalizedInclude}")
+                        && !str_contains($configContent, "include {$includeFile}")) {
+                        $configContent .= "\n# Security One IDS - Hub rules\ninclude {$normalizedInclude}\n";
+                        Log::info("Added include for rules file in snort.conf: {$normalizedInclude}");
                     }
                 }
 
