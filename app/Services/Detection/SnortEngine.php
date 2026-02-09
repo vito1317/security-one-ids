@@ -143,10 +143,19 @@ class SnortEngine
 
         // On Windows, if no valid interface was found (Npcap missing), don't attempt start
         if ($this->isWindows() && $interface === '1') {
+            // Ensure Npcap DLLs are findable (PATH may not be updated in this process)
+            $npcapDir = 'C:\\Windows\\System32\\Npcap';
+            if (is_dir($npcapDir) && !str_contains(getenv('PATH') ?: '', 'Npcap')) {
+                putenv('PATH=' . getenv('PATH') . ';' . $npcapDir);
+            }
             // Verify interface 1 actually exists
             try {
-                $result = Process::timeout(10)->run("{$this->snortPath} -W 2>&1");
+                $result = Process::timeout(10)->run('"' . $this->snortPath . '" -W 2>&1');
                 $output = $result->output();
+                Log::debug('snort -W verify in start()', [
+                    'output_length' => strlen($output),
+                    'output_preview' => substr($output, 0, 500),
+                ]);
                 if (!preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $output)) {
                     return [
                         'success' => false,
@@ -1180,15 +1189,27 @@ LUA;
         if ($this->isWindows()) {
             // Windows Snort uses device index from `snort -W`
             // Try to detect the active adapter
+            // Ensure Npcap DLLs are findable (PATH may not be updated in this PHP process)
+            $npcapDir = 'C:\\Windows\\System32\\Npcap';
+            if (is_dir($npcapDir) && !str_contains(getenv('PATH') ?: '', 'Npcap')) {
+                putenv('PATH=' . getenv('PATH') . ';' . $npcapDir);
+            }
             try {
-                $result = Process::timeout(10)->run("{$this->snortPath} -W 2>&1");
+                $cmd = '"' . $this->snortPath . '" -W 2>&1';
+                $result = Process::timeout(10)->run($cmd);
                 $output = $result->output();
+                Log::debug('snort -W result', [
+                    'cmd' => $cmd,
+                    'exit_code' => $result->exitCode(),
+                    'output_length' => strlen($output),
+                    'output_preview' => substr($output, 0, 800),
+                ]);
                 // Parse the interface list — look for an adapter with an IP address
                 // Format: "1  \Device\NPF_...   192.168.1.x   Description"
                 if (preg_match_all('/^\s*(\d+)\s+\S+\s+(\d+\.\d+\.\d+\.\d+)/m', $output, $matches)) {
                     foreach ($matches[2] as $idx => $ip) {
-                        // Skip loopback/zero IPs
-                        if ($ip !== '0.0.0.0' && $ip !== '127.0.0.1') {
+                        // Skip loopback, zero, and link-local (169.254.x.x) IPs
+                        if ($ip !== '0.0.0.0' && $ip !== '127.0.0.1' && !str_starts_with($ip, '169.254.')) {
                             Log::debug('Detected Windows Snort interface', [
                                 'index' => $matches[1][$idx],
                                 'ip' => $ip,
