@@ -1612,9 +1612,15 @@ RULES;
     }
 
     /**
-     * Convert Hub rules from Snort 2 format to Snort 3 compatible format.
-     * Transforms incompatible keywords, removes deprecated options,
-     * and skips rules that cannot be converted.
+     * Convert Hub rules for Snort 3 compatibility.
+     *
+     * Hub rules are MOSTLY already in Snort 3 IPS format (comma-separated
+     * content modifiers like content:"foo",fast_pattern,nocase and sticky
+     * buffers like http_uri; before content:). Only a small subset (~715)
+     * use Snort 2-only keywords (uricontent, threshold type, rawbytes).
+     *
+     * IMPORTANT: Do NOT remove http_uri, http_header, file_data, etc.
+     * These are VALID Snort 3 sticky buffers, not deprecated keywords.
      *
      * @return array{content: string, stats: array}
      */
@@ -1674,25 +1680,16 @@ RULES;
                 continue;
             }
 
-            // --- Apply conversions ---
+            // --- Minimal conversions for actual Snort 2-only keywords ---
+            // Most Hub rules are already Snort 3 format — only touch what's needed
             $rule = $trimmed;
             $wasConverted = false;
 
-            // 1. Remove rawbytes (no Snort 3 equivalent)
+            // 1. Remove rawbytes; (no Snort 3 equivalent)
             $rule = preg_replace('/\s*rawbytes\s*;/', '', $rule, -1, $c);
             if ($c) { $wasConverted = true; }
 
-            // 2. Remove urilen (not supported)
-            $rule = preg_replace('/\s*urilen\s*:[^;]*;/', '', $rule, -1, $c);
-            if ($c) { $wasConverted = true; }
-
-            // 3. Remove fast_pattern_offset/length (removed in Snort 3)
-            $rule = preg_replace('/\s*fast_pattern_offset\s*:\s*\d+\s*;/', '', $rule, -1, $c);
-            if ($c) { $wasConverted = true; }
-            $rule = preg_replace('/\s*fast_pattern_length\s*:\s*\d+\s*;/', '', $rule, -1, $c);
-            if ($c) { $wasConverted = true; }
-
-            // 4. Convert threshold → detection_filter
+            // 2. Convert Snort 2 threshold → detection_filter
             $rule = preg_replace(
                 '/\bthreshold\s*:\s*type\s+(?:both|limit|threshold)\s*,\s*track\s+(by_src|by_dst)\s*,\s*count\s+(\d+)\s*,\s*seconds\s+(\d+)\s*;/',
                 'detection_filter: track $1, count $2, seconds $3;',
@@ -1700,28 +1697,12 @@ RULES;
             );
             if ($c) { $wasConverted = true; }
 
-            // 5. Convert uricontent → content
+            // 3. Convert uricontent: → content: (Snort 2-only keyword)
             $rule = preg_replace('/\buricontent\s*:/', 'content:', $rule, -1, $c);
             if ($c) { $wasConverted = true; }
 
-            // 6. Remove standalone http_* content modifiers (Snort 3 uses sticky buffers)
-            $httpModifiers = [
-                'http_uri', 'http_header', 'http_client_body', 'http_cookie',
-                'http_raw_uri', 'http_raw_header', 'http_raw_cookie',
-                'http_stat_code', 'http_stat_msg', 'http_method',
-            ];
-            foreach ($httpModifiers as $mod) {
-                $rule = preg_replace('/\s*' . $mod . '\s*;/', ';', $rule, -1, $c);
-                if ($c) { $wasConverted = true; }
-            }
-
-            // 7. Remove file_data; (preprocessor-specific in Snort 2)
-            $rule = preg_replace('/\s*file_data\s*;/', ';', $rule, -1, $c);
-            if ($c) { $wasConverted = true; }
-
-            // 8. Clean up double semicolons and empty parens
+            // 4. Clean up double semicolons if any
             $rule = preg_replace('/;\s*;/', ';', $rule);
-            $rule = preg_replace('/\(\s*;/', '(', $rule);
 
             if ($wasConverted) {
                 $converted++;
