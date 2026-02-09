@@ -953,11 +953,16 @@ class WafSyncService
                 "Write-Output \"SNORT_W:\$w\"\r\n" .
                 "if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'}else{Write-Output 'PCAP_FAIL'}\r\n";
 
-            $path = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pcap_' . uniqid() . '.ps1';
+            // Use a fixed path under Snort directory (avoids AV flagging random scripts in temp)
+            $scriptDir = 'C:\\Snort\\scripts';
+            if (!is_dir($scriptDir)) {
+                @mkdir($scriptDir, 0755, true);
+            }
+            $path = $scriptDir . DIRECTORY_SEPARATOR . 'npcap_setup.ps1';
             file_put_contents($path, $script);
             $r = Process::timeout(300)->run("powershell -NoProfile -ExecutionPolicy Bypass -File \"{$path}\" 2>&1");
             $out = $r->output();
-            @unlink($path);
+            // Don't delete — keep for diagnostics and AV whitelisting
 
             Log::info('[Pcap] Output: ' . substr($out, 0, 2000));
 
