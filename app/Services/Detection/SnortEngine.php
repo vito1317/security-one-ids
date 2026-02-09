@@ -262,7 +262,9 @@ class SnortEngine
                 'platform' => PHP_OS_FAMILY,
                 'exit_code' => $result->exitCode(),
                 'stdout' => substr($stdOutput, 0, 500),
-                'stderr' => substr($errorOutput, 0, 1000),
+                'stderr_start' => substr($errorOutput, 0, 500),
+                'stderr_end' => substr($errorOutput, -2000),
+                'stderr_length' => strlen($errorOutput),
             ]);
 
             return ['success' => false, 'error' => 'Snort started but not running: ' . substr($errorOutput ?: $stdOutput, 0, 200)];
