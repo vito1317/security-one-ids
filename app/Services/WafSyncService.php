@@ -912,10 +912,10 @@ class WafSyncService
                 "}\r\n" .
                 "\r\n" .
                 "# Download Npcap\r\n" .
-                "\$npcapExe=\"\$env:TEMP\\npcap-1.80.exe\"\r\n" .
+                "\$npcapExe=\"\$env:TEMP\\npcap-1.87.exe\"\r\n" .
                 "if(-not(Test-Path \$npcapExe)){\r\n" .
-                "  Write-Output 'Downloading Npcap 1.80...'\r\n" .
-                "  (New-Object Net.WebClient).DownloadFile('https://github.com/nmap/npcap/releases/download/v1.80/npcap-1.80.exe',\$npcapExe)\r\n" .
+                "  Write-Output 'Downloading Npcap 1.87...'\r\n" .
+                "  (New-Object Net.WebClient).DownloadFile('https://npcap.com/dist/npcap-1.87.exe',\$npcapExe)\r\n" .
                 "}\r\n" .
                 "\$sz=(Get-Item \$npcapExe).Length; Write-Output \"DL:\$sz\"\r\n" .
                 "if(\$sz -lt 500000){Write-Output 'DL_TOO_SMALL'; exit 1}\r\n" .
