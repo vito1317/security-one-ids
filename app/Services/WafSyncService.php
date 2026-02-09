@@ -871,37 +871,66 @@ class WafSyncService
         }
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing Npcap (signed driver for modern Windows)...');
+        Log::info('[Pcap] Installing Npcap for Windows...');
 
         try {
-            $script = "\$ErrorActionPreference='Stop'\r\n" .
+            $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
-                "try {\r\n" .
-                "  # Try Npcap 1.80 (signed driver, works on modern Windows)\r\n" .
-                "  \$f=\"\$env:TEMP\\npcap-1.80.exe\"\r\n" .
-                "  Write-Output 'Downloading Npcap 1.80...'\r\n" .
-                "  (New-Object Net.WebClient).DownloadFile('https://npcap.com/dist/npcap-1.80.exe',\$f)\r\n" .
-                "  \$sz=(Get-Item \$f).Length; Write-Output \"DL:\$sz\"\r\n" .
-                "  if(\$sz -lt 500000){Write-Output 'TOO_SMALL'; exit 1}\r\n" .
-                "  Write-Output 'Installing Npcap silently...'\r\n" .
-                "  \$p=Start-Process \$f -ArgumentList '/S','/winpcap_mode=yes' -Wait -PassThru\r\n" .
-                "  Write-Output \"EXIT:\$(\$p.ExitCode)\"\r\n" .
+                "\r\n" .
+                "# Uninstall old WinPcap to avoid conflicts\r\n" .
+                "if(Test-Path 'C:\\Program Files\\WinPcap\\Uninstall.exe'){\r\n" .
+                "  Write-Output 'Removing old WinPcap...'\r\n" .
+                "  Start-Process 'C:\\Program Files\\WinPcap\\Uninstall.exe' -ArgumentList '/S' -Wait -EA SilentlyContinue\r\n" .
+                "  Start-Sleep 3\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "# Strategy 1: Chocolatey (handles licensing & silent install)\r\n" .
+                "if(Get-Command choco -EA SilentlyContinue){\r\n" .
+                "  Write-Output 'STRATEGY:choco'\r\n" .
+                "  choco install npcap -y --no-progress 2>&1|Write-Output\r\n" .
                 "  Start-Sleep 5\r\n" .
-                "  Remove-Item \$f -Force -EA SilentlyContinue\r\n" .
-                "  # Try starting npcap service\r\n" .
+                "  # Start services\r\n" .
                 "  net start npcap 2>&1|Write-Output\r\n" .
-                "  sc.exe query npcap 2>&1|Write-Output\r\n" .
-                "  # Also try npf (WinPcap compat mode)\r\n" .
                 "  net start npf 2>&1|Write-Output\r\n" .
-                "  # Check DLLs\r\n" .
-                "  foreach(\$d in 'C:\\Windows\\System32\\Npcap\\wpcap.dll','C:\\Windows\\System32\\wpcap.dll','C:\\Windows\\SysWOW64\\wpcap.dll'){\r\n" .
-                "    if(Test-Path \$d){Write-Output \"FOUND:\$d\"}\r\n" .
-                "  }\r\n" .
-                "  # Verify with snort\r\n" .
+                "  # Verify\r\n" .
                 "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
                 "  Write-Output \"SNORT_W:\$w\"\r\n" .
-                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'}else{Write-Output 'PCAP_FAIL'}\r\n" .
-                "}catch{Write-Output \"ERR:\$_\"}\r\n";
+                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
+                "  Write-Output 'CHOCO_NPCAP_NO_INTERFACE'\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "# Strategy 2: winget\r\n" .
+                "if(Get-Command winget -EA SilentlyContinue){\r\n" .
+                "  Write-Output 'STRATEGY:winget'\r\n" .
+                "  winget install --id Insecure.Npcap --accept-source-agreements --accept-package-agreements --silent 2>&1|Write-Output\r\n" .
+                "  Start-Sleep 5\r\n" .
+                "  net start npcap 2>&1|Write-Output\r\n" .
+                "  net start npf 2>&1|Write-Output\r\n" .
+                "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "  Write-Output \"SNORT_W:\$w\"\r\n" .
+                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
+                "  Write-Output 'WINGET_NPCAP_NO_INTERFACE'\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "# Strategy 3: Direct download + attempt install (may show GUI)\r\n" .
+                "Write-Output 'STRATEGY:direct'\r\n" .
+                "\$f=\"\$env:TEMP\\npcap-1.80.exe\"\r\n" .
+                "if(-not(Test-Path \$f)){\r\n" .
+                "  Write-Output 'Downloading Npcap 1.80...'\r\n" .
+                "  (New-Object Net.WebClient).DownloadFile('https://npcap.com/dist/npcap-1.80.exe',\$f)\r\n" .
+                "}\r\n" .
+                "\$sz=(Get-Item \$f).Length; Write-Output \"DL:\$sz\"\r\n" .
+                "if(\$sz -lt 500000){Write-Output 'TOO_SMALL'; exit 1}\r\n" .
+                "Write-Output 'Attempting Npcap install (may require GUI interaction)...'\r\n" .
+                "\$p=Start-Process \$f -ArgumentList '/winpcap_mode=yes','/loopback_support=yes' -Wait -PassThru\r\n" .
+                "Write-Output \"EXIT:\$(\$p.ExitCode)\"\r\n" .
+                "Start-Sleep 5\r\n" .
+                "Remove-Item \$f -Force -EA SilentlyContinue\r\n" .
+                "net start npcap 2>&1|Write-Output\r\n" .
+                "net start npf 2>&1|Write-Output\r\n" .
+                "\$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "Write-Output \"SNORT_W:\$w\"\r\n" .
+                "if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'}else{Write-Output 'PCAP_FAIL'}\r\n";
 
             $path = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pcap_' . uniqid() . '.ps1';
             file_put_contents($path, $script);
@@ -909,7 +938,7 @@ class WafSyncService
             $out = $r->output();
             @unlink($path);
 
-            Log::info('[Pcap] Output: ' . substr($out, 0, 1500));
+            Log::info('[Pcap] Output: ' . substr($out, 0, 2000));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
@@ -917,7 +946,12 @@ class WafSyncService
                 Log::info('[Pcap] Npcap installed and verified');
                 $this->reportAgentEvent('snort_install', 'Npcap installed successfully');
             } else {
-                $this->reportAgentEvent('snort_error', 'Npcap install incomplete: ' . substr($out, 0, 500));
+                $strategy = 'unknown';
+                if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
+                    $strategy = $m[1];
+                }
+                Log::warning('[Pcap] Npcap install failed', ['strategy' => $strategy, 'output' => substr($out, 0, 1000)]);
+                $this->reportAgentEvent('snort_error', "Npcap install failed (strategy: {$strategy}). Manual install may be required from https://npcap.com");
             }
         } catch (\Exception $e) {
             Log::error('[Pcap] Error: ' . $e->getMessage());
