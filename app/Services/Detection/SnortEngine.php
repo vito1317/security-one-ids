@@ -365,9 +365,31 @@ class SnortEngine
                     $configContent
                 );
 
+                // Comment out include lines for missing rule files
+                $configDir = dirname($this->configPath);
+                $configContent = preg_replace_callback(
+                    '/^(include\s+(.+))$/m',
+                    function ($m) use ($configDir) {
+                        $rulePath = trim($m[2]);
+                        // Resolve relative paths against config directory
+                        if (!preg_match('/^[A-Z]:\\\\/i', $rulePath) && $rulePath[0] !== '/') {
+                            $fullPath = $configDir . '/' . $rulePath;
+                        } else {
+                            $fullPath = $rulePath;
+                        }
+                        // Normalize path separators
+                        $fullPath = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $fullPath);
+                        if (!file_exists($fullPath)) {
+                            return '# ' . $m[1] . ' # Commented by Security One IDS (file not found)';
+                        }
+                        return $m[1];
+                    },
+                    $configContent
+                );
+
                 if ($configContent !== $originalContent) {
                     file_put_contents($this->configPath, $configContent);
-                    Log::info('Fixed Linux paths in Windows snort.conf');
+                    Log::info('Fixed Windows snort.conf: commented out missing paths');
                 }
             }
 
