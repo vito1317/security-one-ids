@@ -791,7 +791,7 @@ LUA;
                 $logFiles = @scandir($this->logDir);
                 if ($logFiles) {
                     $logFiles = array_filter($logFiles, fn($f) => $f !== '.' && $f !== '..');
-                    Log::debug('[Snort Alert Debug] Files in log dir', [
+                    Log::info('[Snort Alert Debug] Files in log dir', [
                         'log_dir' => $this->logDir,
                         'files' => array_values($logFiles),
                         'alert_json_exists' => file_exists($this->alertLogPath),
