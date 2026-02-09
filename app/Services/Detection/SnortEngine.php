@@ -284,12 +284,12 @@ class SnortEngine
 
     /**
      * Start Snort with automatic retry: if startup fails due to a rule error,
-     * comment out the offending line and retry (up to $maxRetries times).
+     * comment out ALL offending lines and retry (up to $maxRetries times).
      *
-     * This handles config-dependent errors (unknown ClassType, deprecated
-     * keywords, etc.) that can't be predicted by static validation.
+     * Only matches ERROR: lines (not WARNING:) — warnings are non-fatal.
+     * Comments out ALL error lines at once per retry to avoid wasting retries.
      *
-     * The error line is extracted from the FULL stderr log file (not the
+     * The error lines are extracted from the FULL stderr log file (not the
      * truncated error string from start()), since Snort outputs ~14KB of
      * initialization text before the actual error at the end.
      */
@@ -302,7 +302,7 @@ class SnortEngine
 
             if ($result['success']) {
                 if ($attempt > 1) {
-                    Log::info("Snort started successfully after {$attempt} attempts (commented out " . ($attempt - 1) . " bad rules)");
+                    Log::info("Snort started successfully after {$attempt} attempts");
                 }
                 return $result;
             }
@@ -321,43 +321,45 @@ class SnortEngine
                     $stderrContent = file_get_contents($stderrFile);
                 }
             } else {
-                // On Unix, check for any recent stderr temp files
                 $tmpDir = sys_get_temp_dir();
                 $stderrFiles = glob($tmpDir . '/snort_start_stderr_*.log');
                 if (!empty($stderrFiles)) {
-                    // Get the most recent one
                     usort($stderrFiles, fn($a, $b) => filemtime($b) - filemtime($a));
                     $stderrContent = file_get_contents($stderrFiles[0]);
                 }
             }
 
-            // Parse error to find failing line number
-            // Snort 2 format: ERROR: ... hub_custom.rules(LINE_NUM) error message
-            // Also match: ERROR: ... hub_custom.rules(LINE_NUM): error message
-            $errorLine = null;
-            $errorMsg = '';
-            if (preg_match('/hub_custom\.rules\((\d+)\)[:\s]+(.+?)(?:\r?\n|$)/i', $stderrContent, $match)) {
-                $errorLine = (int) $match[1];
-                $errorMsg = trim($match[2]);
-            }
-
-            if ($errorLine) {
-                Log::info("Snort startup retry: commenting out line {$errorLine}", [
-                    'attempt' => $attempt,
-                    'error' => $errorMsg,
-                ]);
-
-                // Comment out the offending line
-                $lines = file($rulesFile, FILE_IGNORE_NEW_LINES);
-                if (isset($lines[$errorLine - 1])) {
-                    $lines[$errorLine - 1] = '# [auto-disabled] ' . $lines[$errorLine - 1];
-                    file_put_contents($rulesFile, implode("\n", $lines));
-                    continue; // Retry with fixed rules
+            // Only match ERROR: lines (not WARNING: — warnings are non-fatal)
+            // Find ALL error line numbers at once to fix them in a single pass
+            // Pattern: ERROR: ... hub_custom.rules(LINE): error message
+            $errorLines = [];
+            if (preg_match_all('/ERROR:.*?hub_custom\.rules\((\d+)\)[:\s]+(.+?)(?:\r?\n|$)/i', $stderrContent, $matches, PREG_SET_ORDER)) {
+                foreach ($matches as $match) {
+                    $errorLines[(int) $match[1]] = trim($match[2]);
                 }
             }
 
-            // No parseable error line — return the failure
-            Log::warning('Snort startWithRetry: could not parse error line from stderr', [
+            if (!empty($errorLines)) {
+                Log::info("Snort startup retry: commenting out " . count($errorLines) . " error lines", [
+                    'attempt' => $attempt,
+                    'lines' => array_keys($errorLines),
+                    'errors' => $errorLines,
+                ]);
+
+                // Comment out ALL offending lines at once
+                $lines = file($rulesFile, FILE_IGNORE_NEW_LINES);
+                foreach ($errorLines as $lineNum => $errorMsg) {
+                    $idx = $lineNum - 1;
+                    if (isset($lines[$idx]) && !str_starts_with($lines[$idx], '# [auto-disabled]')) {
+                        $lines[$idx] = '# [auto-disabled] ' . $lines[$idx];
+                    }
+                }
+                file_put_contents($rulesFile, implode("\n", $lines));
+                continue; // Retry with fixed rules
+            }
+
+            // No parseable ERROR lines — return the failure
+            Log::warning('Snort startWithRetry: could not parse error lines from stderr', [
                 'attempt' => $attempt,
                 'stderr_length' => strlen($stderrContent),
                 'stderr_tail' => substr($stderrContent, -500),
