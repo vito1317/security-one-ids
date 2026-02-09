@@ -1077,7 +1077,7 @@ LUA;
     }
 
     /**
-     * Reload Snort configuration (SIGHUP)
+     * Reload Snort configuration (SIGHUP on Unix, stop+start on Windows)
      */
     public function reload(): bool
     {
@@ -1086,12 +1086,19 @@ LUA;
         }
 
         try {
+            // Windows: SIGHUP not available, do full stop+start
+            if ($this->isWindows()) {
+                Log::info('Reloading Snort on Windows via stop+start (SIGHUP not available)');
+                $this->stop();
+                sleep(2); // Wait for Snort to fully stop
+                $this->start();
+                return true;
+            }
+
             if (file_exists($this->pidFile)) {
                 $pid = trim(file_get_contents($this->pidFile));
-                if (!$this->isWindows()) {
-                    Process::run("kill -HUP {$pid}");
-                    return true;
-                }
+                Process::run("kill -HUP {$pid}");
+                return true;
             }
         } catch (\Exception $e) {
             Log::warning('Failed to reload Snort: ' . $e->getMessage());
