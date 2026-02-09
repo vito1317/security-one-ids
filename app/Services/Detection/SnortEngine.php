@@ -1733,9 +1733,19 @@ LUA;
                 return 0;
             }
 
-            // Use PHP native file() which handles all line endings (CRLF, LF, CR)
-            $lines = @file($file, FILE_SKIP_EMPTY_LINES);
-            return $lines !== false ? count($lines) : 0;
+            // Stream line-by-line to avoid loading entire file into memory
+            // (alert files can be 100K+ lines, file() caused OOM on macOS)
+            $count = 0;
+            $handle = @fopen($file, 'r');
+            if ($handle === false) {
+                return 0;
+            }
+            while (fgets($handle) !== false) {
+                $count++;
+            }
+            fclose($handle);
+
+            return $count;
         } catch (\Exception $e) {
             return 0;
         }

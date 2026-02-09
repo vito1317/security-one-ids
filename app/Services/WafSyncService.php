@@ -1180,14 +1180,15 @@ class WafSyncService
             }
 
             // IPS mode: convert alert → drop to actually block traffic
-            // Only on platforms that support inline mode (-Q with DAQ)
-            // Windows/macOS Snort 2 runs passive-only (WinPcap/pcap DAQ) — drop rules
-            // are silently ignored, producing 0 alerts. Keep them as alert for visibility.
-            $canInline = PHP_OS_FAMILY === 'Linux';
+            // - Snort 3 (any Unix): supports inline via DAQ (AFPacket on Linux, pcap with NFQ on macOS)
+            // - Snort 2 on Linux: supports inline via -Q with afpacket DAQ
+            // - Snort 2 on Windows/macOS: passive-only (WinPcap/pcap DAQ) — drop rules
+            //   are silently ignored, producing 0 alerts. Keep as alert for visibility.
+            $canInline = !$snort->isSnort2() || PHP_OS_FAMILY === 'Linux';
             if ($mode === 'ips' && $canInline) {
                 $rulesContent = $snort->applyIpsMode($rulesContent);
             } elseif ($mode === 'ips') {
-                Log::info('IPS mode: skipping alert→drop conversion (platform lacks inline DAQ support, rules stay as alert for visibility)');
+                Log::info('IPS mode: skipping alert→drop conversion (Snort 2 on ' . PHP_OS_FAMILY . ' lacks inline DAQ, rules stay as alert)');
             }
 
             // For Snort 2: prepend variable/ClassType definitions that may be missing
