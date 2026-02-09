@@ -779,8 +779,18 @@ LUA;
             ];
             foreach ($snort2AlertPaths as $snort2AlertPath) {
                 if (file_exists($snort2AlertPath)) {
-                    $stats['alerts_total'] = $this->countLines($snort2AlertPath);
+                    $lineCount = $this->countLines($snort2AlertPath);
+                    $fileSize = @filesize($snort2AlertPath);
+                    Log::info('[Snort Alert Debug] Checking Snort 2 alert file', [
+                        'path' => $snort2AlertPath,
+                        'size_bytes' => $fileSize,
+                        'line_count' => $lineCount,
+                        'readable' => is_readable($snort2AlertPath),
+                    ]);
+                    $stats['alerts_total'] = $lineCount;
                     if ($stats['alerts_total'] > 0) {
+                        // Count today's alerts from this file
+                        $stats['alerts_today'] = $this->countSnort2AlertsToday($snort2AlertPath);
                         break;
                     }
                 }
@@ -791,9 +801,13 @@ LUA;
                 $logFiles = @scandir($this->logDir);
                 if ($logFiles) {
                     $logFiles = array_filter($logFiles, fn($f) => $f !== '.' && $f !== '..');
+                    $fileSizes = [];
+                    foreach ($logFiles as $f) {
+                        $fileSizes[$f] = @filesize($this->logDir . '/' . $f);
+                    }
                     Log::info('[Snort Alert Debug] Files in log dir', [
                         'log_dir' => $this->logDir,
-                        'files' => array_values($logFiles),
+                        'files_with_sizes' => $fileSizes,
                         'alert_json_exists' => file_exists($this->alertLogPath),
                     ]);
                 }
@@ -1530,6 +1544,34 @@ LUA;
             $lines = $this->tailFile($this->alertLogPath, 500);
             foreach ($lines as $line) {
                 if (str_contains($line, $today)) {
+                    $count++;
+                }
+            }
+        } catch (\Exception $e) {
+            // Ignore
+        }
+
+        return $count;
+    }
+
+    /**
+     * Count Snort 2 fast-format alerts for today.
+     * Snort 2 fast alert format: MM/DD-HH:MM:SS.SSSSSS [**] [gid:sid:rev] msg [**] ...
+     */
+    private function countSnort2AlertsToday(string $alertFile): int
+    {
+        if (!file_exists($alertFile)) {
+            return 0;
+        }
+
+        // Snort 2 uses MM/DD format, e.g. "02/09-12:30:45.123456"
+        $todayPrefix = date('m/d');
+        $count = 0;
+
+        try {
+            $lines = $this->tailFile($alertFile, 500);
+            foreach ($lines as $line) {
+                if (str_starts_with(trim($line), $todayPrefix)) {
                     $count++;
                 }
             }
