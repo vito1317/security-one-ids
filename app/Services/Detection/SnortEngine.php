@@ -335,13 +335,15 @@ class SnortEngine
                 $originalContent = $configContent;
 
                 // Replace Linux dynamic library paths with Windows equivalents
+                // Include both with and without trailing slashes
                 $linuxToWindows = [
                     '/usr/local/lib/snort_dynamicpreprocessor/' => 'C:\\Snort\\lib\\snort_dynamicpreprocessor',
+                    '/usr/local/lib/snort_dynamicpreprocessor' => 'C:\\Snort\\lib\\snort_dynamicpreprocessor',
                     '/usr/local/lib/snort_dynamicengine/' => 'C:\\Snort\\lib\\snort_dynamicengine',
+                    '/usr/local/lib/snort_dynamicengine' => 'C:\\Snort\\lib\\snort_dynamicengine',
                     '/usr/local/lib/snort_dynamicrules/' => 'C:\\Snort\\lib\\snort_dynamicrules',
-                    '/usr/local/lib64/snort_dynamicpreprocessor/' => 'C:\\Snort\\lib\\snort_dynamicpreprocessor',
-                    '/usr/local/lib64/snort_dynamicengine/' => 'C:\\Snort\\lib\\snort_dynamicengine',
-                    '/usr/local/lib64/snort_dynamicrules/' => 'C:\\Snort\\lib\\snort_dynamicrules',
+                    '/usr/local/lib/snort_dynamicrules' => 'C:\\Snort\\lib\\snort_dynamicrules',
+                    '/usr/local/lib64/' => 'C:\\Snort\\lib\\',
                     '/usr/local/etc/snort/' => 'C:\\Snort\\etc\\',
                     '/etc/snort/' => 'C:\\Snort\\etc\\',
                 ];
@@ -349,27 +351,14 @@ class SnortEngine
                     $configContent = str_replace($linux, $windows, $configContent);
                 }
 
-                // Comment out any remaining dynamicdetection/dynamicpreprocessor/dynamicengine
-                // lines that reference non-existent directories
+                // Comment out ANY dynamic* directive that references a non-existent path
                 $configContent = preg_replace_callback(
-                    '/^(dynamicpreprocessor\s+directory\s+.+)$/m',
+                    '/^(dynamic(?:preprocessor|engine|detection)\s+(?:directory\s+)?(.+))$/m',
                     function ($m) {
-                        $dir = trim(preg_replace('/^dynamicpreprocessor\s+directory\s+/', '', $m[1]));
-                        if (!is_dir($dir)) {
-                            Log::debug("Commenting out missing dynamic path: {$dir}");
-                            return '# ' . $m[1] . ' # Commented by Security One IDS (path not found on Windows)';
-                        }
-                        return $m[1];
-                    },
-                    $configContent
-                );
-                $configContent = preg_replace_callback(
-                    '/^(dynamicengine\s+.+)$/m',
-                    function ($m) {
-                        $parts = preg_split('/\s+/', trim($m[1]), 2);
-                        $path = $parts[1] ?? '';
-                        if (!empty($path) && !file_exists($path)) {
-                            return '# ' . $m[1] . ' # Commented by Security One IDS (not found on Windows)';
+                        $path = trim($m[2]);
+                        if (!empty($path) && !is_dir($path) && !file_exists($path)) {
+                            Log::debug("Commenting out missing dynamic path: {$path}");
+                            return '# ' . $m[1] . ' # Commented by Security One IDS (not found)';
                         }
                         return $m[1];
                     },
