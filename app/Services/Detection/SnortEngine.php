@@ -1132,16 +1132,25 @@ LUA;
 
     /**
      * Detect if this is Snort 2.x (vs Snort 3.x)
-     * Snort 2 and 3 have different CLI flags.
+     * Snort 2 and 3 have different CLI flags and rule syntax.
      */
     public function isSnort2(): bool
     {
         $version = $this->getVersion();
-        if (!$version) {
-            return false;
+        if ($version) {
+            return version_compare($version, '3.0.0', '<');
         }
 
-        return version_compare($version, '3.0.0', '<');
+        // Version detection failed — fall back to platform heuristic:
+        // Windows almost always has Snort 2 (Snort 3 has no official Windows build)
+        // macOS/Linux with Homebrew/apt typically have Snort 3
+        if ($this->isWindows()) {
+            Log::debug('Snort version undetectable on Windows, assuming Snort 2');
+            return true;
+        }
+
+        Log::debug('Snort version undetectable on Unix, assuming Snort 3');
+        return false;
     }
 
     /**
