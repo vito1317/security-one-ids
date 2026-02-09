@@ -2182,6 +2182,13 @@ RULES;
                 $skip = true;
             }
 
+            // Check for negated variables that resolve to !any in Snort 2
+            // When $HOME_NET = any, then $DNS_SERVERS = $HOME_NET = any, and !$DNS_SERVERS = !any
+            // Snort 2 fatally rejects "!any" with: "!any is not allowed"
+            if (preg_match('/!\$(?:DNS_SERVERS|SMTP_SERVERS|SQL_SERVERS|HTTP_SERVERS|TELNET_SERVERS|AIM_SERVERS|SIP_SERVERS|ENIP_CLIENT|ENIP_SERVER)/', $trimmed)) {
+                $skip = true;
+            }
+
             if ($skip) {
                 $removed++;
                 $result[] = '# [Snort2-invalid] ' . $trimmed;
