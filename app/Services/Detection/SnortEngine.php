@@ -1796,7 +1796,7 @@ RULES;
             //    Before: content:"YMSG"; depth:4; nocase; content:"|00 01|"; depth:2; offset:10;
             //    After:  content:"YMSG",depth 4,nocase; content:"|00 01|",depth 2,offset 10;
             $rule = preg_replace_callback(
-                '/content\s*:\s*"([^"]*)"(\s*;\s*(?:nocase|depth\s*:\s*\d+|offset\s*:\s*\d+|distance\s*:\s*\d+|within\s*:\s*\d+|fast_pattern)\s*)+;/',
+                '/content\s*:\s*"([^"]*)"(\s*;\s*(?:nocase|depth\s*:\s*-?\d+|offset\s*:\s*-?\d+|distance\s*:\s*-?\d+|within\s*:\s*-?\d+|fast_pattern)\s*)+;/',
                 function ($match) {
                     $full = $match[0];
                     if (!preg_match('/content\s*:\s*"([^"]*)"/', $full, $cm)) {
@@ -1806,7 +1806,7 @@ RULES;
                     $afterContent = substr($full, strlen($cm[0]));
                     $modifiers = [];
 
-                    preg_match_all('/(\w+)(?:\s*:\s*(\d+))?/', $afterContent, $mods, PREG_SET_ORDER);
+                    preg_match_all('/(\w+)(?:\s*:\s*(-?\d+))?/', $afterContent, $mods, PREG_SET_ORDER);
                     foreach ($mods as $mod) {
                         $name = $mod[1];
                         if (in_array($name, ['nocase', 'fast_pattern'])) {
@@ -1850,14 +1850,26 @@ RULES;
             );
             if ($c) { $wasConverted = true; }
 
-            // 8. Clean up double semicolons and trailing commas before semicolons
+            // 8. Normalize flow values to lowercase (Snort 3 is case-sensitive)
+            //    e.g. flow:to_Server → flow:to_server
+            $rule = preg_replace_callback(
+                '/flow\s*:\s*([^;]+);/',
+                function ($match) {
+                    return 'flow:' . strtolower($match[1]) . ';';
+                },
+                $rule, -1, $c
+            );
+            if ($c) { $wasConverted = true; }
+
+            // 9. Clean up double semicolons and trailing commas before semicolons
             $rule = preg_replace('/;\s*;/', ';', $rule);
             $rule = preg_replace('/,\s*;/', ';', $rule);
 
-            // 9. Safety fallback: if rule STILL has standalone Snort 2 content
-            //    modifiers that we couldn't fold (e.g. separated by http_uri;),
-            //    comment it out rather than let Snort 3 fail on it
-            if (preg_match('/;\s*(?:nocase|depth\s*:\s*\d+|offset\s*:\s*\d+|within\s*:\s*\d+|distance\s*:\s*\d+)\s*;/', $rule)) {
+            // 10. Safety fallback: if rule STILL has standalone Snort 2 content
+            //     modifiers or fast_pattern_offset that we couldn't remove,
+            //     comment it out rather than let Snort 3 fail on it
+            if (preg_match('/;\s*(?:nocase|depth\s*:\s*-?\d+|offset\s*:\s*-?\d+|within\s*:\s*-?\d+|distance\s*:\s*-?\d+)\s*;/', $rule)
+                || preg_match('/fast_pattern_offset/', $rule)) {
                 $removed++;
                 $result[] = '# [Snort2-unfoldable] ' . $rule;
                 continue;
