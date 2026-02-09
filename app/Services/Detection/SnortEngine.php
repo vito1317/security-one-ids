@@ -387,6 +387,25 @@ class SnortEngine
                     $configContent
                 );
 
+                // Create empty placeholder files for any referenced but missing files
+                // (e.g., white_list.rules, black_list.rules for Reputation preprocessor)
+                $rulesDir = $this->detectRulesDir();
+                if (!is_dir($rulesDir)) {
+                    @mkdir($rulesDir, 0755, true);
+                }
+                $placeholderFiles = [
+                    'white_list.rules',
+                    'black_list.rules',
+                    'local.rules',
+                ];
+                foreach ($placeholderFiles as $file) {
+                    $filePath = $rulesDir . DIRECTORY_SEPARATOR . $file;
+                    if (!file_exists($filePath)) {
+                        file_put_contents($filePath, "# Auto-created by Security One IDS\n");
+                        Log::debug("Created placeholder rule file: {$filePath}");
+                    }
+                }
+
                 if ($configContent !== $originalContent) {
                     file_put_contents($this->configPath, $configContent);
                     Log::info('Fixed Windows snort.conf: commented out missing paths');
