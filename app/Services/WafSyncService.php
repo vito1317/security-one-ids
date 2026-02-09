@@ -1145,10 +1145,7 @@ class WafSyncService
                 return;
             }
 
-            $rulesPath = '/etc/snort/rules/hub_custom.rules';
-            if (PHP_OS_FAMILY === 'Windows') {
-                $rulesPath = 'C:\\Snort\\rules\\hub_custom.rules';
-            }
+            $rulesPath = $snort->getDetectedRulesDir() . '/hub_custom.rules';
 
             file_put_contents($rulesPath, $rulesContent);
 
@@ -1156,9 +1153,11 @@ class WafSyncService
             $hashPath = storage_path('app/snort_rules_hash.txt');
             file_put_contents($hashPath, $data['rules_hash'] ?? $hubHash);
 
-            // Reload Snort to pick up new rules
+            // Restart Snort to pick up new rules (stop+start needed for -R flag changes)
             if ($snort->isRunning()) {
-                $snort->reload();
+                $snort->stop();
+                sleep(2);
+                $snort->start();
             }
 
             Log::info("Synced {$ruleCount} Snort rules from Hub");

@@ -1101,6 +1101,17 @@ LUA;
         // Don't specify fields — Snort 3 default fields include all necessary info
         $cmd .= " --lua 'alert_json = { file = true, limit = 100 }'";
 
+    // Load rules files
+    $rulesDir = $this->detectRulesDir();
+    $hubRules = $rulesDir . '/hub_custom.rules';
+    $localRules = $rulesDir . '/local.rules';
+    if (file_exists($hubRules)) {
+        $cmd .= " -R {$hubRules}";
+    }
+    if (file_exists($localRules)) {
+        $cmd .= " -R {$localRules}";
+    }
+
         if ($mode === 'ips') {
             // -Q (inline) requires DAQ support (afpacket/nfq) which only works on Linux
             // macOS only has pcap DAQ (passive/read-only), so skip -Q on macOS
@@ -1232,11 +1243,16 @@ LUA;
         return $dir;
     }
 
+    public function getDetectedRulesDir(): string
+    {
+        return $this->detectRulesDir();
+    }
+
     private function detectRulesDir(): string
     {
         $paths = $this->isWindows()
             ? ['C:\\Snort\\rules', 'C:\\Snort\\etc\\snort\\rules']
-            : ['/etc/snort/rules', '/usr/local/etc/snort/rules', '/opt/snort/rules'];
+            : ['/opt/homebrew/etc/snort/rules', '/etc/snort/rules', '/usr/local/etc/snort/rules', '/opt/snort/rules'];
 
         foreach ($paths as $path) {
             if (is_dir($path)) {
