@@ -785,6 +785,19 @@ LUA;
                     }
                 }
             }
+
+            // Debug: list all files in log directory to find alert file
+            if ($stats['alerts_total'] === 0 && is_dir($this->logDir)) {
+                $logFiles = @scandir($this->logDir);
+                if ($logFiles) {
+                    $logFiles = array_filter($logFiles, fn($f) => $f !== '.' && $f !== '..');
+                    Log::debug('[Snort Alert Debug] Files in log dir', [
+                        'log_dir' => $this->logDir,
+                        'files' => array_values($logFiles),
+                        'alert_json_exists' => file_exists($this->alertLogPath),
+                    ]);
+                }
+            }
         }
 
         // Try to get packet stats from Snort
