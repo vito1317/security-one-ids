@@ -54,10 +54,16 @@ class SnortEngine
             return $this->alertLogPath;
         }
 
-        // Snort 2: snort.alert.fast (text format)
-        $fastAlert = $this->logDir . '/snort.alert.fast';
-        if (file_exists($fastAlert)) {
-            return $fastAlert;
+        // Snort 2: check multiple possible filenames
+        $snort2Paths = [
+            $this->logDir . '/alert',           // Default -A fast output
+            $this->logDir . '/alert.ids',       // Alternative filename
+            $this->logDir . '/snort.alert.fast', // Named fast output
+        ];
+        foreach ($snort2Paths as $path) {
+            if (file_exists($path)) {
+                return $path;
+            }
         }
 
         return $this->alertLogPath;
@@ -764,10 +770,21 @@ LUA;
             $stats['alerts_today'] = $this->countAlertsToday();
         }
 
-        // Also check Snort 2 fast alert format
-        $snort2AlertPath = $this->logDir . '/snort.alert.fast';
-        if ($stats['alerts_total'] === 0 && file_exists($snort2AlertPath)) {
-            $stats['alerts_total'] = $this->countLines($snort2AlertPath);
+        // Also check Snort 2 fast alert format (multiple possible filenames)
+        if ($stats['alerts_total'] === 0) {
+            $snort2AlertPaths = [
+                $this->logDir . '/alert',           // Default Snort 2 -A fast output
+                $this->logDir . '/alert.ids',       // Alternative Snort 2 filename
+                $this->logDir . '/snort.alert.fast', // Named fast output
+            ];
+            foreach ($snort2AlertPaths as $snort2AlertPath) {
+                if (file_exists($snort2AlertPath)) {
+                    $stats['alerts_total'] = $this->countLines($snort2AlertPath);
+                    if ($stats['alerts_total'] > 0) {
+                        break;
+                    }
+                }
+            }
         }
 
         // Try to get packet stats from Snort

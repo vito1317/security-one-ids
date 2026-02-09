@@ -1511,7 +1511,7 @@ class WafSyncService
             $totalImported = 0;
 
             foreach ($batches as $batch) {
-                $response = \Illuminate\Support\Facades\Http::timeout(30)
+                $response = \Illuminate\Support\Facades\Http::timeout(60)
                     ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
                     ->post("{$this->wafUrl}/api/ids/agents/snort-rules/upload", [
                         'token' => $this->agentToken,
