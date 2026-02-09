@@ -275,11 +275,29 @@ class SnortEngine
             // For Snort 3: ensure alert_json output is enabled in existing config
             if (!$this->isSnort2() && str_ends_with($this->configPath, '.lua')) {
                 $configContent = file_get_contents($this->configPath);
-                if (!str_contains($configContent, 'alert_json')) {
-                    $alertJsonBlock = "\n-- Added by Security One IDS for alert file output\nalert_json = {\n  file = true,\n  limit = 100,\n  fields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority',\n}\n";
-                    file_put_contents($this->configPath, $configContent . $alertJsonBlock);
-                    Log::info('Injected alert_json config into existing snort.lua, restarting Snort', ['path' => $this->configPath]);
+                $needsRewrite = false;
 
+                // Fix: remove previously injected bad alert_json with fields string
+                // (Snort 3 fields must be a Lua table, not a space-separated string)
+                if (str_contains($configContent, "fields = 'timestamp")) {
+                    $configContent = preg_replace(
+                        '/\n?-- Added by Security One IDS[^\n]*\nalert_json\s*=\s*\{[^}]+\}\s*\n?/',
+                        '',
+                        $configContent
+                    );
+                    $needsRewrite = true;
+                    Log::info('Removed bad alert_json config with fields string from snort.lua');
+                }
+
+                if (!str_contains($configContent, 'alert_json')) {
+                    $alertJsonBlock = "\n-- Added by Security One IDS for alert file output\nalert_json = {\n  file = true,\n  limit = 100,\n}\n";
+                    $configContent .= $alertJsonBlock;
+                    $needsRewrite = true;
+                    Log::info('Injected alert_json config into existing snort.lua', ['path' => $this->configPath]);
+                }
+
+                if ($needsRewrite) {
+                    file_put_contents($this->configPath, $configContent);
                     // Restart Snort to pick up the new config
                     if ($this->isRunning()) {
                         $this->stop();
@@ -357,7 +375,6 @@ ips = {
 alert_json = {
     file = true,
     limit = 100,
-    fields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority',
 }
 LUA;
 
