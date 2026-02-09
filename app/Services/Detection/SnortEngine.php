@@ -1000,8 +1000,8 @@ LUA;
 
         // JSON alert output — use --lua to force file=true
         // Without file=true, alerts go to stdout (lost when daemonized with -D)
-        $alertFields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority';
-        $cmd .= " --lua 'alert_json = { file = true, limit = 100, fields = \"" . $alertFields . "\" }'";
+        // Don't specify fields — Snort 3 default fields include all necessary info
+        $cmd .= " --lua 'alert_json = { file = true, limit = 100 }'";
 
         if ($mode === 'ips') {
             // -Q (inline) requires DAQ support (afpacket/nfq) which only works on Linux
