@@ -554,7 +554,7 @@ PS;
     /**
      * Collect macOS unified logs using log command
      */
-    public function collectMacOsLogs(int $minutes = 60): array
+    public function collectMacOsLogs(int $minutes = 15): array
     {
         $logs = [];
         
@@ -581,13 +581,14 @@ PS;
             ];
             
             foreach ($predicates as $predicate) {
-                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null");
+                // Limit output to 500KB to prevent memory exhaustion (unified log can be hundreds of MB)
+                $output = shell_exec("log show --predicate '{$predicate}' --last {$minutes}m --style json 2>/dev/null | head -c 500000");
                 
                 if ($output && strlen($output) > 10) {
-                    $events = json_decode($output, true);
+                    $events = @json_decode($output, true);
                     if (is_array($events) && !empty($events)) {
                         Log::debug("macOS unified log matched " . count($events) . " events with predicate: {$predicate}");
-                        foreach ($events as $event) {
+                        foreach (array_slice($events, 0, 100) as $event) {
                             $parsed = $this->parseMacOsEvent($event);
                             // Only add if it's a recognized authentication event
                             if ($parsed['type'] !== 'unknown') {

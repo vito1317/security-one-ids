@@ -58,7 +58,7 @@ class SyncToWaf extends Command
         try {
             $pool = Process::pool(function ($pool) use ($phpBinary, $basePath) {
                 $pool->path($basePath)
-                    ->timeout(60)
+                    ->timeout(120)
                     ->command([$phpBinary, 'artisan', 'ids:sync-quick']);
                 
                 $pool->path($basePath)
