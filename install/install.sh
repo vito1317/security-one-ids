@@ -207,49 +207,75 @@ install_snort() {
         fi
     elif [ "$OS" = "debian" ]; then
         apt-get update -qq
-        # Try Snort 3 package first
-        if apt-cache show snort3 &>/dev/null 2>&1; then
-            apt-get install -y snort3
-        elif apt-cache show snort &>/dev/null 2>&1; then
-            apt-get install -y snort
+        # Check if Snort 3 is already installed
+        if command -v snort &>/dev/null; then
+            EXISTING_VER=$(snort -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || echo "")
+            MAJOR=$(echo "$EXISTING_VER" | cut -d. -f1)
+            if [ "$MAJOR" = "3" ]; then
+                echo -e "${GREEN}✅ Snort 3 ($EXISTING_VER) already installed${NC}"
+                return 0
+            fi
+        fi
+        
+        echo -e "${YELLOW}Building Snort 3 from source for Linux...${NC}"
+        
+        # Install all build dependencies
+        apt-get install -y build-essential libpcap-dev libpcre2-dev \
+            libdnet-dev zlib1g-dev cmake libhwloc-dev pkg-config \
+            libluajit-5.1-dev libssl-dev libsafec-dev \
+            flex bison curl jq git autoconf automake libtool \
+            libgoogle-perftools-dev 2>/dev/null || true
+        
+        # Build libdaq from source (required by Snort 3, not in most repos)
+        echo -e "${CYAN}Building libdaq...${NC}"
+        cd /tmp
+        rm -rf libdaq
+        git clone --depth 1 https://github.com/snort3/libdaq.git
+        cd libdaq
+        ./bootstrap 2>/dev/null
+        ./configure --prefix=/usr/local 2>/dev/null
+        make -j$(nproc) 2>/dev/null
+        make install 2>/dev/null
+        ldconfig
+        cd /tmp && rm -rf libdaq
+        echo -e "${GREEN}✅ libdaq built and installed${NC}"
+        
+        # Fetch latest Snort 3 version from GitHub
+        echo -e "${CYAN}Fetching latest Snort 3 version...${NC}"
+        SNORT_VER=$(curl -fsSL https://api.github.com/repos/snort3/snort3/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '[0-9][0-9.]*' || echo "")
+        if [ -z "$SNORT_VER" ]; then
+            SNORT_VER="3.6.2.0"  # Fallback to known stable version
+            echo -e "${YELLOW}Could not fetch latest version, using fallback: $SNORT_VER${NC}"
         else
-            echo -e "${YELLOW}Snort not in repos, building from source...${NC}"
-            # Install build dependencies
-            apt-get install -y build-essential libpcap-dev libpcre3-dev \
-                libdnet-dev zlib1g-dev cmake libhwloc-dev \
-                libluajit-5.1-dev libssl-dev libsafec-dev \
-                libdaq-dev flex bison curl jq 2>/dev/null || true
+            echo -e "${GREEN}Latest Snort 3 version: $SNORT_VER${NC}"
+        fi
+        
+        # Download and build Snort 3
+        echo -e "${CYAN}Building Snort 3 v${SNORT_VER} (this may take 5-10 minutes)...${NC}"
+        cd /tmp
+        curl -fsSL -o snort3-${SNORT_VER}.tar.gz \
+            "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz" 2>/dev/null || \
+        wget -q -O snort3-${SNORT_VER}.tar.gz \
+            "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz"
+        
+        if [ -f "snort3-${SNORT_VER}.tar.gz" ]; then
+            tar xzf snort3-${SNORT_VER}.tar.gz
+            cd snort3-${SNORT_VER}
+            mkdir -p build && cd build
+            cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local -DENABLE_TCMALLOC=ON 2>/dev/null
+            make -j$(nproc) 2>/dev/null
+            make install 2>/dev/null
+            ldconfig
+            cd /tmp && rm -rf snort3-${SNORT_VER}*
             
-            # Fetch latest Snort 3 version from GitHub
-            echo -e "${CYAN}Fetching latest Snort 3 version...${NC}"
-            SNORT_VER=$(curl -fsSL https://api.github.com/repos/snort3/snort3/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '[0-9][0-9.]*' || echo "")
-            if [ -z "$SNORT_VER" ]; then
-                SNORT_VER="3.6.2.0"  # Fallback to known stable version
-                echo -e "${YELLOW}Could not fetch latest version, using fallback: $SNORT_VER${NC}"
-            else
-                echo -e "${GREEN}Latest Snort 3 version: $SNORT_VER${NC}"
+            # Ensure snort is in PATH
+            if [ -f /usr/local/bin/snort ] && ! command -v snort &>/dev/null; then
+                ln -sf /usr/local/bin/snort /usr/bin/snort
             fi
-            
-            # Download and build Snort 3
-            cd /tmp
-            curl -fsSL -o snort3-${SNORT_VER}.tar.gz \
-                "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz" 2>/dev/null || \
-            wget -q -O snort3-${SNORT_VER}.tar.gz \
-                "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz"
-            
-            if [ -f "snort3-${SNORT_VER}.tar.gz" ]; then
-                tar xzf snort3-${SNORT_VER}.tar.gz
-                cd snort3-${SNORT_VER}
-                mkdir build && cd build
-                cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local 2>/dev/null
-                make -j$(nproc) 2>/dev/null
-                make install 2>/dev/null
-                ldconfig 2>/dev/null
-                cd /tmp && rm -rf snort3-${SNORT_VER}*
-            else
-                echo -e "${RED}Failed to download Snort 3 source${NC}"
-                return 1
-            fi
+            echo -e "${GREEN}✅ Snort 3 built and installed${NC}"
+        else
+            echo -e "${RED}Failed to download Snort 3 source${NC}"
+            return 1
         fi
     elif [ "$OS" = "redhat" ]; then
         if command -v dnf &> /dev/null; then

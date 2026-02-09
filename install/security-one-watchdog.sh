@@ -140,6 +140,147 @@ log_message "INFO" "Install Dir: $INSTALL_DIR"
 log_message "INFO" "Scan Interval: ${SCAN_INTERVAL}s"
 log_message "INFO" "Default Heartbeat Interval: ${DEFAULT_HEARTBEAT_INTERVAL}s (overridden by Hub config)"
 
+# Auto-install Snort 3 on Linux if not found
+ensure_snort_installed() {
+    # Only run on Linux
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        return 0
+    fi
+
+    # Check if Snort is already installed
+    if command -v snort &>/dev/null || command -v snort3 &>/dev/null; then
+        local ver=$(snort -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || snort3 -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || echo "unknown")
+        log_message "INFO" "Snort already installed: $ver"
+        return 0
+    fi
+
+    # Check common paths
+    for p in /usr/local/bin/snort /usr/sbin/snort /usr/bin/snort /usr/local/bin/snort3; do
+        if [ -x "$p" ]; then
+            log_message "INFO" "Snort found at $p"
+            return 0
+        fi
+    done
+
+    log_message "INFO" "Snort not found, auto-installing Snort 3..."
+    local MARKER="$INSTALL_DIR/storage/snort3_install_attempted"
+
+    # Prevent repeated install attempts
+    if [ -f "$MARKER" ]; then
+        local age=$(( $(date +%s) - $(stat -c %Y "$MARKER" 2>/dev/null || echo 0) ))
+        if [ "$age" -lt 86400 ]; then
+            log_message "WARNING" "Snort 3 install was attempted less than 24h ago, skipping"
+            return 1
+        fi
+    fi
+    touch "$MARKER"
+
+    # Detect package manager
+    if command -v apt-get &>/dev/null; then
+        log_message "INFO" "Installing build dependencies (apt)..."
+        apt-get update -qq 2>/dev/null
+        apt-get install -y build-essential libpcap-dev libpcre2-dev \
+            libdnet-dev zlib1g-dev cmake libhwloc-dev pkg-config \
+            libluajit-5.1-dev libssl-dev libsafec-dev \
+            flex bison curl git autoconf automake libtool \
+            libgoogle-perftools-dev 2>/dev/null || true
+    elif command -v yum &>/dev/null; then
+        log_message "INFO" "Installing build dependencies (yum)..."
+        yum install -y gcc gcc-c++ make libpcap-devel pcre2-devel \
+            libdnet-devel zlib-devel cmake hwloc-devel \
+            luajit-devel openssl-devel \
+            flex bison curl git autoconf automake libtool \
+            gperftools-devel 2>/dev/null || true
+    else
+        log_message "ERROR" "No supported package manager found (apt/yum)"
+        return 1
+    fi
+
+    # Build libdaq from source
+    log_message "INFO" "Building libdaq..."
+    cd /tmp
+    rm -rf libdaq
+    if git clone --depth 1 https://github.com/snort3/libdaq.git 2>/dev/null; then
+        cd libdaq
+        ./bootstrap 2>/dev/null && ./configure --prefix=/usr/local 2>/dev/null && \
+        make -j$(nproc) 2>/dev/null && make install 2>/dev/null && ldconfig
+        cd /tmp && rm -rf libdaq
+        log_message "INFO" "libdaq installed"
+    else
+        log_message "ERROR" "Failed to clone libdaq"
+        return 1
+    fi
+
+    # Fetch latest Snort 3 version
+    local SNORT_VER=$(curl -fsSL https://api.github.com/repos/snort3/snort3/releases/latest 2>/dev/null \
+        | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '[0-9][0-9.]*' || echo "")
+    if [ -z "$SNORT_VER" ]; then
+        SNORT_VER="3.6.2.0"
+        log_message "INFO" "Using fallback Snort version: $SNORT_VER"
+    else
+        log_message "INFO" "Latest Snort 3 version: $SNORT_VER"
+    fi
+
+    # Download and build Snort 3
+    log_message "INFO" "Building Snort 3 v${SNORT_VER} (this may take 5-10 minutes)..."
+    cd /tmp
+    curl -fsSL -o "snort3-${SNORT_VER}.tar.gz" \
+        "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz" 2>/dev/null
+
+    if [ ! -f "snort3-${SNORT_VER}.tar.gz" ]; then
+        log_message "ERROR" "Failed to download Snort 3 source"
+        return 1
+    fi
+
+    tar xzf "snort3-${SNORT_VER}.tar.gz"
+    cd "snort3-${SNORT_VER}"
+    mkdir -p build && cd build
+    if cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local -DENABLE_TCMALLOC=ON 2>/dev/null && \
+       make -j$(nproc) 2>/dev/null && \
+       make install 2>/dev/null; then
+        ldconfig
+        cd /tmp && rm -rf "snort3-${SNORT_VER}"*
+
+        # Ensure snort is in PATH
+        if [ -f /usr/local/bin/snort ] && ! command -v snort &>/dev/null; then
+            ln -sf /usr/local/bin/snort /usr/bin/snort
+        fi
+
+        # Create default directories and config
+        mkdir -p /var/log/snort /etc/snort/rules 2>/dev/null
+        chmod 755 /var/log/snort /etc/snort /etc/snort/rules
+
+        if [ ! -f /etc/snort/snort.lua ]; then
+            cat > /etc/snort/snort.lua << 'SNORTLUA'
+-- Security One IDS - Auto-generated Snort 3 config
+HOME_NET = 'any'
+EXTERNAL_NET = 'any'
+
+ips = {
+    variables = default_variables,
+}
+
+alert_json = {
+    file = true,
+    limit = 100,
+    fields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority',
+}
+SNORTLUA
+        fi
+
+        local installed_ver=$(snort -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || echo "unknown")
+        log_message "INFO" "Snort 3 installed successfully: v${installed_ver}"
+        return 0
+    else
+        log_message "ERROR" "Failed to build Snort 3"
+        cd /tmp && rm -rf "snort3-${SNORT_VER}"*
+        return 1
+    fi
+}
+
+# Auto-install Snort if not present
+ensure_snort_installed
+
 # Reset crash count on fresh start
 reset_crash_count
 
