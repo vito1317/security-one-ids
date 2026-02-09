@@ -1135,11 +1135,9 @@ LUA;
         $rulesDir = $this->detectRulesDir();
         $localRules = $rulesDir . '/local.rules';
 
-        // Load rules files — Hub rules are filtered for compatibility during sync
-        $hubRules = $rulesDir . '/hub_custom.rules';
-        if (file_exists($hubRules) && filesize($hubRules) > 0) {
-            $cmd .= " -R {$hubRules}";
-        }
+        // Hub rules are Snort 2 format — cannot be loaded by Snort 3
+        // Snort 3 uses its built-in community ruleset (8000+ rules)
+        // Only Snort 2 systems load Hub rules via buildSnort2Command()
 
         // Always load local.rules (contains Snort 3 compatible test/custom rules)
         $this->ensureLocalRules($rulesDir);

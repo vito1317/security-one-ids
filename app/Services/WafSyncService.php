@@ -1147,19 +1147,24 @@ class WafSyncService
 
             $rulesPath = $snort->getDetectedRulesDir() . '/hub_custom.rules';
 
-            // If Snort 3: filter out incompatible Snort 2-only rules
-            if (!$snort->isSnort2()) {
-                $rulesContent = $snort->filterRulesForSnort3($rulesContent);
+            // Snort 3 cannot load Snort 2 format rules — skip writing Hub rules
+            // but still store the hash to avoid re-downloading every cycle
+            if ($snort->isSnort2()) {
+                file_put_contents($rulesPath, $rulesContent);
+            } else {
+                // Clear any previously written Hub rules that might cause errors
+                if (file_exists($rulesPath)) {
+                    @unlink($rulesPath);
+                }
+                Log::info('Skipped Hub rules for Snort 3 (incompatible Snort 2 format)');
             }
 
-            file_put_contents($rulesPath, $rulesContent);
-
-            // Store the new hash locally
+            // Store the new hash locally (prevents re-download every cycle)
             $hashPath = storage_path('app/snort_rules_hash.txt');
             file_put_contents($hashPath, $data['rules_hash'] ?? $hubHash);
 
-            // Reload Snort to pick up new rules (avoid full restart loop)
-            if ($snort->isRunning()) {
+            // Reload Snort to pick up new rules (Snort 2 only)
+            if ($snort->isSnort2() && $snort->isRunning()) {
                 $snort->reload();
             }
 
