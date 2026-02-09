@@ -1656,13 +1656,14 @@ RULES;
     /**
      * Convert Hub rules for Snort 3 compatibility.
      *
-     * Hub rules are MOSTLY already in Snort 3 IPS format (comma-separated
-     * content modifiers like content:"foo",fast_pattern,nocase and sticky
-     * buffers like http_uri; before content:). Only a small subset (~715)
-     * use Snort 2-only keywords (uricontent, threshold type, rawbytes).
+     * Hub rules are a mix of:
+     * - Snort 3 IPS format (comma-separated: content:"x",nocase,depth N;) — ~3600 rules
+     * - Snort 2 text format (semicolon-separated: content:"x"; nocase; depth:N;) — ~1400 rules
      *
-     * IMPORTANT: Do NOT remove http_uri, http_header, file_data, etc.
-     * These are VALID Snort 3 sticky buffers, not deprecated keywords.
+     * Snort 3 REJECTS the semicolon-separated content modifier format.
+     * This converter folds "; nocase;", "; depth:N;", "; offset:N;" etc.
+     * back into the preceding content option using comma-separated format.
+     * It also strips Snort 2-only pcre modifiers (U, P, H, D, I, B, C, K).
      *
      * @return array{content: string, stats: array}
      */
@@ -1700,7 +1701,7 @@ RULES;
                 continue;
             }
 
-            // Check for undefined variables
+            // Check for undefined variables and unconvertible features
             $skip = false;
             foreach ($undefinedVars as $var) {
                 if (str_contains($trimmed, $var)) {
@@ -1722,8 +1723,6 @@ RULES;
                 continue;
             }
 
-            // --- Minimal conversions for actual Snort 2-only keywords ---
-            // Most Hub rules are already Snort 3 format — only touch what's needed
             $rule = $trimmed;
             $wasConverted = false;
 
@@ -1743,8 +1742,71 @@ RULES;
             $rule = preg_replace('/\buricontent\s*:/', 'content:', $rule, -1, $c);
             if ($c) { $wasConverted = true; }
 
-            // 4. Clean up double semicolons if any
+            // 4. Fold Snort 2 semicolon-separated content modifiers into
+            //    Snort 3 comma-separated format. Uses a single-pass approach
+            //    to capture content:"..." followed by its modifiers.
+            //
+            //    Before: content:"YMSG"; depth:4; nocase; content:"|00 01|"; depth:2; offset:10;
+            //    After:  content:"YMSG",depth 4,nocase; content:"|00 01|",depth 2,offset 10;
+            $rule = preg_replace_callback(
+                '/content\s*:\s*"([^"]*)"(\s*;\s*(?:nocase|depth\s*:\s*\d+|offset\s*:\s*\d+|distance\s*:\s*\d+|within\s*:\s*\d+|fast_pattern)\s*)+;/',
+                function ($match) {
+                    $full = $match[0];
+                    // Extract the content value
+                    if (!preg_match('/content\s*:\s*"([^"]*)"/', $full, $cm)) {
+                        return $full;
+                    }
+                    $contentVal = $cm[1];
+
+                    // Extract all modifiers after the content value
+                    $afterContent = substr($full, strlen($cm[0]));
+                    $modifiers = [];
+
+                    // Parse each ; modifier ;
+                    preg_match_all('/(\w+)(?:\s*:\s*(\d+))?/', $afterContent, $mods, PREG_SET_ORDER);
+                    foreach ($mods as $mod) {
+                        $name = $mod[1];
+                        if (in_array($name, ['nocase', 'fast_pattern'])) {
+                            $modifiers[] = $name;
+                        } elseif (in_array($name, ['depth', 'offset', 'distance', 'within']) && isset($mod[2])) {
+                            $modifiers[] = $name . ' ' . $mod[2];
+                        }
+                    }
+
+                    if (empty($modifiers)) {
+                        return $full;
+                    }
+
+                    return 'content:"' . $contentVal . '",' . implode(',', $modifiers) . ';';
+                },
+                $rule, -1, $c
+            );
+            if ($c) { $wasConverted = true; }
+
+            // 5. Strip Snort 2-only pcre HTTP modifiers (U, P, H, D, I, B, C, K)
+            //    pcre:"/regex/Ui" → pcre:"/regex/i"
+            $rule = preg_replace_callback(
+                '/pcre\s*:\s*"(\/[^"]*\/[a-zA-Z]*)"/',
+                function ($match) {
+                    $pcreVal = $match[1];
+                    // Find the trailing modifier string after the last /
+                    if (preg_match('/^(.*\/[^\/]*)\/([a-zA-Z]*)$/', $pcreVal, $pm) ||
+                        preg_match('/(.*\/)([a-zA-Z]*)$/', $pcreVal, $pm)) {
+                        $pattern = $pm[1];
+                        $mods = $pm[2];
+                        // Remove Snort 2-only modifiers
+                        $cleanMods = preg_replace('/[UPHDIBRCK]/', '', $mods);
+                        return 'pcre:"' . $pattern . $cleanMods . '"';
+                    }
+                    return $match[0];
+                },
+                $rule, -1, $c
+            );
+            if ($c) { $wasConverted = true; }
+
+            // 6. Clean up double semicolons and trailing commas before semicolons
             $rule = preg_replace('/;\s*;/', ';', $rule);
+            $rule = preg_replace('/,\s*;/', ';', $rule);
 
             if ($wasConverted) {
                 $converted++;
