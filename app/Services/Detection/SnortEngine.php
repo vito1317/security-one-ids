@@ -432,6 +432,11 @@ class SnortEngine
                 if ($configContent !== $originalContent) {
                     file_put_contents($this->configPath, $configContent);
                     Log::info('Fixed Windows snort.conf: commented out missing paths');
+                    // Restart Snort to pick up the new config (includes, path fixes)
+                    if ($this->isRunning()) {
+                        Log::info('Restarting Snort to load updated snort.conf');
+                        $this->stop();
+                    }
                 }
             }
 

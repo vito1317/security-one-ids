@@ -2274,6 +2274,10 @@ class WafSyncService
             
             // Clear Snort install failure cache — new code might fix the issue
             @unlink(storage_path('app/snort_install_failed.txt'));
+
+            // Clear Snort rules hash — force re-sync so updated converter re-processes rules
+            @unlink(storage_path('app/snort_rules_hash.txt'));
+            Log::info('Cleared Snort rules hash to force re-conversion with updated code');
             
             // Run composer install
             Log::info('Running composer install...');
