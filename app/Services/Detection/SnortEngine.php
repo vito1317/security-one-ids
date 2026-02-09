@@ -1135,9 +1135,11 @@ LUA;
         $rulesDir = $this->detectRulesDir();
         $localRules = $rulesDir . '/local.rules';
 
-        // Hub rules are Snort 2 format — cannot be loaded by Snort 3
-        // Snort 3 uses its built-in community ruleset (8000+ rules)
-        // Only Snort 2 systems load Hub rules via buildSnort2Command()
+        // Hub rules are converted from Snort 2→3 format during sync
+        $hubRules = $rulesDir . '/hub_custom.rules';
+        if (file_exists($hubRules) && filesize($hubRules) > 0) {
+            $cmd .= " -R {$hubRules}";
+        }
 
         // Always load local.rules (contains Snort 3 compatible test/custom rules)
         $this->ensureLocalRules($rulesDir);
@@ -1580,84 +1582,138 @@ RULES;
     }
 
     /**
-     * Filter Hub rules to remove Snort 2-only keywords incompatible with Snort 3.
-     * Returns filtered rules text with only Snort 3-compatible rules.
+     * Convert Hub rules from Snort 2 format to Snort 3 compatible format.
+     * Transforms incompatible keywords, removes deprecated options,
+     * and skips rules that cannot be converted.
+     *
+     * @return array{content: string, stats: array}
      */
-    public function filterRulesForSnort3(string $rulesContent): string
+    public function convertRulesForSnort3(string $rulesContent): array
     {
         $lines = explode("\n", $rulesContent);
-        $filtered = [];
+        $result = [];
+        $converted = 0;
         $removed = 0;
         $kept = 0;
 
-        // Snort 2 keywords that cause FATAL errors in Snort 3
-        $incompatiblePatterns = [
-            '/\buricontent\s*:/',           // Removed in Snort 3 (use content + http_uri)
-            '/\burilen\s*:/',               // Removed in Snort 3
-            '/\bbase_protect\b/',           // Snort 2 preprocessor-specific
-            '/\bftpbounce\b/',              // Removed preprocessor keyword
-            '/\basn1\s*:/',                 // Removed in Snort 3
-            '/\bcvs\s*:/',                  // Removed in Snort 3
+        // Rules with these features CANNOT be converted — skip entirely
+        $skipPatterns = [
+            '/\bftpbounce\b/',
+            '/\bbase_protect\b/',
+            '/\basn1\s*:/',
+            '/\bcvs\s*:/',
         ];
 
-        // Snort 2 variables that don't exist in Snort 3 default config
-        $incompatibleVars = [
-            '$SHELLCODE_PORTS',
-            '$AIM_SERVERS',
-            '$ORACLE_PORTS',
-        ];
+        // Variables undefined in Snort 3 default config
+        $undefinedVars = ['$SHELLCODE_PORTS', '$AIM_SERVERS'];
 
         foreach ($lines as $line) {
             $trimmed = trim($line);
 
             // Keep comments and empty lines
             if (empty($trimmed) || $trimmed[0] === '#') {
-                $filtered[] = $line;
+                $result[] = $line;
                 continue;
             }
 
-            // Only process actual rule lines (alert, drop, pass, etc.)
+            // Only process actual rule lines
             if (!preg_match('/^(alert|drop|pass|reject|log|sdrop)\s/', $trimmed)) {
-                $filtered[] = $line;
+                $result[] = $line;
                 continue;
             }
 
+            // Check for undefined variables
             $skip = false;
-
-            // Check for incompatible keywords
-            foreach ($incompatiblePatterns as $pattern) {
-                if (preg_match($pattern, $trimmed)) {
+            foreach ($undefinedVars as $var) {
+                if (str_contains($trimmed, $var)) {
                     $skip = true;
                     break;
                 }
             }
-
-            // Check for incompatible variables
             if (!$skip) {
-                foreach ($incompatibleVars as $var) {
-                    if (str_contains($trimmed, $var)) {
+                foreach ($skipPatterns as $pattern) {
+                    if (preg_match($pattern, $trimmed)) {
                         $skip = true;
                         break;
                     }
                 }
             }
-
             if ($skip) {
                 $removed++;
-                // Comment out the rule with a reason
-                $filtered[] = '# [Snort3-incompatible] ' . $line;
+                $result[] = '# [Snort2-only] ' . $line;
+                continue;
+            }
+
+            // --- Apply conversions ---
+            $rule = $trimmed;
+            $wasConverted = false;
+
+            // 1. Remove rawbytes (no Snort 3 equivalent)
+            $rule = preg_replace('/\s*rawbytes\s*;/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+
+            // 2. Remove urilen (not supported)
+            $rule = preg_replace('/\s*urilen\s*:[^;]*;/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+
+            // 3. Remove fast_pattern_offset/length (removed in Snort 3)
+            $rule = preg_replace('/\s*fast_pattern_offset\s*:\s*\d+\s*;/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+            $rule = preg_replace('/\s*fast_pattern_length\s*:\s*\d+\s*;/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+
+            // 4. Convert threshold → detection_filter
+            $rule = preg_replace(
+                '/\bthreshold\s*:\s*type\s+(?:both|limit|threshold)\s*,\s*track\s+(by_src|by_dst)\s*,\s*count\s+(\d+)\s*,\s*seconds\s+(\d+)\s*;/',
+                'detection_filter: track $1, count $2, seconds $3;',
+                $rule, -1, $c
+            );
+            if ($c) { $wasConverted = true; }
+
+            // 5. Convert uricontent → content
+            $rule = preg_replace('/\buricontent\s*:/', 'content:', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+
+            // 6. Remove standalone http_* content modifiers (Snort 3 uses sticky buffers)
+            $httpModifiers = [
+                'http_uri', 'http_header', 'http_client_body', 'http_cookie',
+                'http_raw_uri', 'http_raw_header', 'http_raw_cookie',
+                'http_stat_code', 'http_stat_msg', 'http_method',
+            ];
+            foreach ($httpModifiers as $mod) {
+                $rule = preg_replace('/\s*' . $mod . '\s*;/', ';', $rule, -1, $c);
+                if ($c) { $wasConverted = true; }
+            }
+
+            // 7. Remove file_data; (preprocessor-specific in Snort 2)
+            $rule = preg_replace('/\s*file_data\s*;/', ';', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+
+            // 8. Clean up double semicolons and empty parens
+            $rule = preg_replace('/;\s*;/', ';', $rule);
+            $rule = preg_replace('/\(\s*;/', '(', $rule);
+
+            if ($wasConverted) {
+                $converted++;
             } else {
                 $kept++;
-                $filtered[] = $line;
             }
+
+            $result[] = $rule;
         }
 
-        Log::info('Filtered Hub rules for Snort 3 compatibility', [
-            'total' => $kept + $removed,
-            'kept' => $kept,
+        $stats = [
+            'total' => $kept + $converted + $removed,
+            'kept_as_is' => $kept,
+            'converted' => $converted,
             'removed' => $removed,
-        ]);
+        ];
 
-        return implode("\n", $filtered);
+        Log::info('Converted Hub rules for Snort 3', $stats);
+
+        return [
+            'content' => implode("\n", $result),
+            'stats' => $stats,
+        ];
     }
 }
