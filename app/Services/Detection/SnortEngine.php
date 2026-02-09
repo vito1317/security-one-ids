@@ -2140,6 +2140,12 @@ RULES;
                 $skip = true;
             }
 
+            // Check for DCE/RPC keywords with Snort 3 syntax (invalid UUID format, etc.)
+            // These cause "Invalid uuid" errors in Snort 2 — safer to strip all dce_ rules
+            if (preg_match('/\b(dce_iface|dce_opnum|dce_stub_data)\b/', $trimmed)) {
+                $skip = true;
+            }
+
             // Check for http_uri/http_header BEFORE content (Snort 3 "sticky buffer" syntax)
             // Snort 2 requires: content:"foo"; http_uri; (modifier AFTER content)
             // Snort 3 allows: http_uri; content:"foo"; (sticky buffer BEFORE content)
