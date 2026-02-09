@@ -328,6 +328,60 @@ class SnortEngine
                     }
                 }
             }
+
+            // For Windows Snort 2: fix Linux paths in snort.conf
+            if ($this->isWindows() && $this->isSnort2()) {
+                $configContent = file_get_contents($this->configPath);
+                $originalContent = $configContent;
+
+                // Replace Linux dynamic library paths with Windows equivalents
+                $linuxToWindows = [
+                    '/usr/local/lib/snort_dynamicpreprocessor/' => 'C:\\Snort\\lib\\snort_dynamicpreprocessor',
+                    '/usr/local/lib/snort_dynamicengine/' => 'C:\\Snort\\lib\\snort_dynamicengine',
+                    '/usr/local/lib/snort_dynamicrules/' => 'C:\\Snort\\lib\\snort_dynamicrules',
+                    '/usr/local/lib64/snort_dynamicpreprocessor/' => 'C:\\Snort\\lib\\snort_dynamicpreprocessor',
+                    '/usr/local/lib64/snort_dynamicengine/' => 'C:\\Snort\\lib\\snort_dynamicengine',
+                    '/usr/local/lib64/snort_dynamicrules/' => 'C:\\Snort\\lib\\snort_dynamicrules',
+                    '/usr/local/etc/snort/' => 'C:\\Snort\\etc\\',
+                    '/etc/snort/' => 'C:\\Snort\\etc\\',
+                ];
+                foreach ($linuxToWindows as $linux => $windows) {
+                    $configContent = str_replace($linux, $windows, $configContent);
+                }
+
+                // Comment out any remaining dynamicdetection/dynamicpreprocessor/dynamicengine
+                // lines that reference non-existent directories
+                $configContent = preg_replace_callback(
+                    '/^(dynamicpreprocessor\s+directory\s+.+)$/m',
+                    function ($m) {
+                        $dir = trim(preg_replace('/^dynamicpreprocessor\s+directory\s+/', '', $m[1]));
+                        if (!is_dir($dir)) {
+                            Log::debug("Commenting out missing dynamic path: {$dir}");
+                            return '# ' . $m[1] . ' # Commented by Security One IDS (path not found on Windows)';
+                        }
+                        return $m[1];
+                    },
+                    $configContent
+                );
+                $configContent = preg_replace_callback(
+                    '/^(dynamicengine\s+.+)$/m',
+                    function ($m) {
+                        $parts = preg_split('/\s+/', trim($m[1]), 2);
+                        $path = $parts[1] ?? '';
+                        if (!empty($path) && !file_exists($path)) {
+                            return '# ' . $m[1] . ' # Commented by Security One IDS (not found on Windows)';
+                        }
+                        return $m[1];
+                    },
+                    $configContent
+                );
+
+                if ($configContent !== $originalContent) {
+                    file_put_contents($this->configPath, $configContent);
+                    Log::info('Fixed Linux paths in Windows snort.conf');
+                }
+            }
+
             return;
         }
 
@@ -670,6 +724,9 @@ LUA;
             'rules_loaded' => 0,
             'uptime' => null,
         ];
+
+        // Fix log permissions on every stats collection (Snort runs as root)
+        $this->fixLogPermissions();
 
         // Count alerts from log file
         if (file_exists($this->alertLogPath)) {
@@ -1306,7 +1363,7 @@ LUA;
      * Fix log directory permissions so non-root PHP agent can read alert files.
      * Snort runs as root (needed for pcap), creating root-owned files.
      */
-    private function fixLogPermissions(): void
+    public function fixLogPermissions(): void
     {
         if ($this->isWindows()) {
             return; // Windows doesn't have this issue
