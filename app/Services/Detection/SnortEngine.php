@@ -258,6 +258,15 @@ class SnortEngine
         }
 
         if (file_exists($this->configPath)) {
+            // For Snort 3: ensure alert_json output is enabled in existing config
+            if (!$this->isSnort2() && str_ends_with($this->configPath, '.lua')) {
+                $configContent = file_get_contents($this->configPath);
+                if (!str_contains($configContent, 'alert_json')) {
+                    $alertJsonBlock = "\n-- Added by Security One IDS for alert file output\nalert_json = {\n  file = true,\n  limit = 100,\n  fields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority',\n}\n";
+                    file_put_contents($this->configPath, $configContent . $alertJsonBlock);
+                    Log::info('Injected alert_json config into existing snort.lua', ['path' => $this->configPath]);
+                }
+            }
             return;
         }
 
