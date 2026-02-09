@@ -1698,10 +1698,12 @@ RULES;
             '/\bbase_protect\b/',
             '/\basn1\s*:/',
             '/\bcvs\s*:/',
+            '/\bsameip\b/',           // Snort 2-only, no Snort 3 equivalent
+            '/\btag\s*:/',            // Snort 3 tag syntax incompatible
         ];
 
         // Variables undefined in Snort 3 default config
-        $undefinedVars = ['$SHELLCODE_PORTS', '$AIM_SERVERS'];
+        $undefinedVars = ['$SHELLCODE_PORTS', '$AIM_SERVERS', '$DNS_SERVERS'];
 
         foreach ($lines as $line) {
             $trimmed = trim($line);
@@ -1748,9 +1750,15 @@ RULES;
             if ($c) { $wasConverted = true; }
 
             // 2. Remove fast_pattern_offset/length (removed in Snort 3)
+            //    Handles both semicolon format: fast_pattern_offset:N;
+            //    and comma format inside content: ,fast_pattern_offset:N,
             $rule = preg_replace('/\s*fast_pattern_offset\s*:\s*\d+\s*;/', '', $rule, -1, $c);
             if ($c) { $wasConverted = true; }
+            $rule = preg_replace('/,\s*fast_pattern_offset\s*:\s*\d+/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
             $rule = preg_replace('/\s*fast_pattern_length\s*:\s*\d+\s*;/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+            $rule = preg_replace('/,\s*fast_pattern_length\s*:\s*\d+/', '', $rule, -1, $c);
             if ($c) { $wasConverted = true; }
 
             // 3. Remove urilen; (not supported in Snort 3)
@@ -1809,10 +1817,9 @@ RULES;
             // 7. Strip Snort 2-only pcre HTTP modifiers (U, P, H, D, I, B, C, K)
             //    pcre:"/regex/Ui" → pcre:"/regex/i"
             //    Uses strrpos to reliably find the closing / delimiter
-            static $pcreDebugCount = 0;
             $rule = preg_replace_callback(
                 '/pcre\s*:\s*"(\/[^"]*)"/',
-                function ($match) use (&$pcreDebugCount) {
+                function ($match) {
                     $pcreVal = $match[1]; // e.g. /path=(https?|ftp)/Ui
                     $lastSlash = strrpos($pcreVal, '/');
                     if ($lastSlash === false || $lastSlash === 0) {
@@ -1825,22 +1832,7 @@ RULES;
                     }
                     // Remove Snort 2-only modifiers, keep standard ones (i, m, s, x, g)
                     $cleanMods = preg_replace('/[UPHDIBRCK]/', '', $mods);
-                    $result = 'pcre:"' . $pattern . $cleanMods . '"';
-
-                    if ($pcreDebugCount < 3) {
-                        Log::info('[pcre convert debug]', [
-                            'input' => $match[0],
-                            'pcreVal' => $pcreVal,
-                            'lastSlash' => $lastSlash,
-                            'pattern' => $pattern,
-                            'mods' => $mods,
-                            'cleanMods' => $cleanMods,
-                            'result' => $result,
-                        ]);
-                        $pcreDebugCount++;
-                    }
-
-                    return $result;
+                    return 'pcre:"' . $pattern . $cleanMods . '"';
                 },
                 $rule, -1, $c
             );
