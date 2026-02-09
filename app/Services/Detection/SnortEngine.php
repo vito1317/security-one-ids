@@ -1729,20 +1729,16 @@ LUA;
     private function countLines(string $file): int
     {
         try {
-            if ($this->isWindows()) {
-                $result = Process::run("find /c /v \"\" \"{$file}\" 2>nul");
-                if (preg_match('/(\d+)/', $result->output(), $m)) {
-                    return (int) $m[1];
-                }
-            } else {
-                $result = Process::run("wc -l < '{$file}' 2>/dev/null");
-                return (int) trim($result->output());
+            if (!file_exists($file) || filesize($file) === 0) {
+                return 0;
             }
-        } catch (\Exception $e) {
-            // Ignore
-        }
 
-        return 0;
+            // Use PHP native file() which handles all line endings (CRLF, LF, CR)
+            $lines = @file($file, FILE_SKIP_EMPTY_LINES);
+            return $lines !== false ? count($lines) : 0;
+        } catch (\Exception $e) {
+            return 0;
+        }
     }
 
     private function countAlertsToday(): int
