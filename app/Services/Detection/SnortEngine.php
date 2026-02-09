@@ -1730,7 +1730,17 @@ RULES;
             $rule = preg_replace('/\s*rawbytes\s*;/', '', $rule, -1, $c);
             if ($c) { $wasConverted = true; }
 
-            // 2. Convert Snort 2 threshold → detection_filter
+            // 2. Remove fast_pattern_offset/length (removed in Snort 3)
+            $rule = preg_replace('/\s*fast_pattern_offset\s*:\s*\d+\s*;/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+            $rule = preg_replace('/\s*fast_pattern_length\s*:\s*\d+\s*;/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+
+            // 3. Remove urilen; (not supported in Snort 3)
+            $rule = preg_replace('/\s*urilen\s*:[^;]*;/', '', $rule, -1, $c);
+            if ($c) { $wasConverted = true; }
+
+            // 4. Convert Snort 2 threshold → detection_filter
             $rule = preg_replace(
                 '/\bthreshold\s*:\s*type\s+(?:both|limit|threshold)\s*,\s*track\s+(by_src|by_dst)\s*,\s*count\s+(\d+)\s*,\s*seconds\s+(\d+)\s*;/',
                 'detection_filter: track $1, count $2, seconds $3;',
@@ -1738,11 +1748,11 @@ RULES;
             );
             if ($c) { $wasConverted = true; }
 
-            // 3. Convert uricontent: → content: (Snort 2-only keyword)
+            // 5. Convert uricontent: → content: (Snort 2-only keyword)
             $rule = preg_replace('/\buricontent\s*:/', 'content:', $rule, -1, $c);
             if ($c) { $wasConverted = true; }
 
-            // 4. Fold Snort 2 semicolon-separated content modifiers into
+            // 6. Fold Snort 2 semicolon-separated content modifiers into
             //    Snort 3 comma-separated format. Uses a single-pass approach
             //    to capture content:"..." followed by its modifiers.
             //
@@ -1752,17 +1762,13 @@ RULES;
                 '/content\s*:\s*"([^"]*)"(\s*;\s*(?:nocase|depth\s*:\s*\d+|offset\s*:\s*\d+|distance\s*:\s*\d+|within\s*:\s*\d+|fast_pattern)\s*)+;/',
                 function ($match) {
                     $full = $match[0];
-                    // Extract the content value
                     if (!preg_match('/content\s*:\s*"([^"]*)"/', $full, $cm)) {
                         return $full;
                     }
                     $contentVal = $cm[1];
-
-                    // Extract all modifiers after the content value
                     $afterContent = substr($full, strlen($cm[0]));
                     $modifiers = [];
 
-                    // Parse each ; modifier ;
                     preg_match_all('/(\w+)(?:\s*:\s*(\d+))?/', $afterContent, $mods, PREG_SET_ORDER);
                     foreach ($mods as $mod) {
                         $name = $mod[1];
@@ -1783,30 +1789,42 @@ RULES;
             );
             if ($c) { $wasConverted = true; }
 
-            // 5. Strip Snort 2-only pcre HTTP modifiers (U, P, H, D, I, B, C, K)
+            // 7. Strip Snort 2-only pcre HTTP modifiers (U, P, H, D, I, B, C, K)
             //    pcre:"/regex/Ui" → pcre:"/regex/i"
+            //    Uses strrpos to reliably find the closing / delimiter
             $rule = preg_replace_callback(
-                '/pcre\s*:\s*"(\/[^"]*\/[a-zA-Z]*)"/',
+                '/pcre\s*:\s*"(\/[^"]*)"/',
                 function ($match) {
-                    $pcreVal = $match[1];
-                    // Find the trailing modifier string after the last /
-                    if (preg_match('/^(.*\/[^\/]*)\/([a-zA-Z]*)$/', $pcreVal, $pm) ||
-                        preg_match('/(.*\/)([a-zA-Z]*)$/', $pcreVal, $pm)) {
-                        $pattern = $pm[1];
-                        $mods = $pm[2];
-                        // Remove Snort 2-only modifiers
-                        $cleanMods = preg_replace('/[UPHDIBRCK]/', '', $mods);
-                        return 'pcre:"' . $pattern . $cleanMods . '"';
+                    $pcreVal = $match[1]; // e.g. /path=(https?|ftp)/Ui
+                    $lastSlash = strrpos($pcreVal, '/');
+                    if ($lastSlash === false || $lastSlash === 0) {
+                        return $match[0]; // Only one slash = no modifiers
                     }
-                    return $match[0];
+                    $pattern = substr($pcreVal, 0, $lastSlash + 1); // includes closing /
+                    $mods = substr($pcreVal, $lastSlash + 1);
+                    if (empty($mods)) {
+                        return $match[0]; // no modifiers to strip
+                    }
+                    // Remove Snort 2-only modifiers, keep standard ones (i, m, s, x, g)
+                    $cleanMods = preg_replace('/[UPHDIBRCK]/', '', $mods);
+                    return 'pcre:"' . $pattern . $cleanMods . '"';
                 },
                 $rule, -1, $c
             );
             if ($c) { $wasConverted = true; }
 
-            // 6. Clean up double semicolons and trailing commas before semicolons
+            // 8. Clean up double semicolons and trailing commas before semicolons
             $rule = preg_replace('/;\s*;/', ';', $rule);
             $rule = preg_replace('/,\s*;/', ';', $rule);
+
+            // 9. Safety fallback: if rule STILL has standalone Snort 2 content
+            //    modifiers that we couldn't fold (e.g. separated by http_uri;),
+            //    comment it out rather than let Snort 3 fail on it
+            if (preg_match('/;\s*(?:nocase|depth\s*:\s*\d+|offset\s*:\s*\d+|within\s*:\s*\d+|distance\s*:\s*\d+)\s*;/', $rule)) {
+                $removed++;
+                $result[] = '# [Snort2-unfoldable] ' . $rule;
+                continue;
+            }
 
             if ($wasConverted) {
                 $converted++;
