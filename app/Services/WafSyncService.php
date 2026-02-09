@@ -1190,6 +1190,14 @@ class WafSyncService
                 Log::info('IPS mode: skipping alert→drop conversion (platform lacks inline DAQ support, rules stay as alert for visibility)');
             }
 
+            // For Snort 2: prepend variable/ClassType definitions that may be missing
+            // from the Windows snort.conf. Without these, rules referencing undefined
+            // variables or ClassTypes cause fatal errors at startup.
+            if ($snort->isSnort2()) {
+                $rulesHeader = $this->buildSnort2RulesHeader($rulesContent);
+                $rulesContent = $rulesHeader . $rulesContent;
+            }
+
             file_put_contents($rulesPath, $rulesContent);
 
             // Store the new hash locally (prevents re-download every cycle)
@@ -1218,6 +1226,79 @@ class WafSyncService
             $this->reportAgentEvent('error', 'Snort 規則同步例外：' . $e->getMessage());
         }
     }
+
+    /**
+     * Build a header with variable and ClassType definitions for Snort 2 rules.
+     * Scans the rules content for referenced variables and ClassTypes, then
+     * generates definitions for any that may be missing from the base config.
+     */
+    private function buildSnort2RulesHeader(string $rulesContent): string
+    {
+        $header = "# Auto-generated Snort 2 compatibility definitions\n";
+        $added = false;
+
+        // Common variables that may not be defined in a basic Windows snort.conf
+        // Default them to $HOME_NET (safest fallback)
+        $optionalVars = [
+            'DNS_SERVERS', 'SMTP_SERVERS', 'SQL_SERVERS', 'TELNET_SERVERS',
+            'SSH_SERVERS', 'FTP_SERVERS', 'SIP_SERVERS', 'SNMP_SERVERS',
+        ];
+        foreach ($optionalVars as $var) {
+            if (preg_match('/\$' . $var . '\b/', $rulesContent)) {
+                $header .= "var {$var} \$HOME_NET\n";
+                $added = true;
+            }
+        }
+
+        // Port variables that may be missing
+        $optionalPorts = [
+            'SHELLCODE_PORTS' => '!80',
+            'FILE_DATA_PORTS' => '[$HTTP_PORTS,110,143]',
+            'GTP_PORTS' => '2152',
+            'SSH_PORTS' => '22',
+        ];
+        foreach ($optionalPorts as $var => $default) {
+            if (preg_match('/\$' . $var . '\b/', $rulesContent)) {
+                $header .= "portvar {$var} {$default}\n";
+                $added = true;
+            }
+        }
+
+        // Find all ClassTypes used in rules and define any non-standard ones
+        $standardClassTypes = [
+            'attempted-admin', 'attempted-user', 'inappropriate-content',
+            'policy-violation', 'shellcode-detect', 'successful-admin',
+            'successful-user', 'trojan-activity', 'unsuccessful-user',
+            'web-application-attack', 'attempted-dos', 'attempted-recon',
+            'bad-unknown', 'default-login-attempt', 'denial-of-service',
+            'misc-attack', 'non-standard-protocol', 'rpc-portmap-decode',
+            'successful-dos', 'successful-recon-largescale', 'successful-recon-limited',
+            'suspicious-filename-detect', 'suspicious-login', 'system-call-detect',
+            'unusual-client-port-connection', 'web-application-activity',
+            'icmp-event', 'misc-activity', 'network-scan', 'not-suspicious',
+            'protocol-command-decode', 'string-detect', 'unknown',
+            'tcp-connection', 'pup-activity',
+        ];
+
+        if (preg_match_all('/classtype\s*:\s*([a-zA-Z0-9_-]+)\s*;/', $rulesContent, $matches)) {
+            $usedTypes = array_unique($matches[1]);
+            foreach ($usedTypes as $ct) {
+                if (!in_array(strtolower($ct), $standardClassTypes, true)) {
+                    // Define as priority 1 (lowest severity) — safe default
+                    $header .= "config classification: {$ct},{$ct},1\n";
+                    $added = true;
+                }
+            }
+        }
+
+        if ($added) {
+            $header .= "\n";
+            return $header;
+        }
+
+        return '';
+    }
+
 
     /**
      * Collect new Snort alerts and send them to Hub

@@ -1747,13 +1747,16 @@ LUA;
             return 0;
         }
 
-        $today = date('Y-m-d');
+        // Snort 2 fast format: "02/09-23:55:24.812484 [**] ..."
+        // Snort 3 JSON: contains "2026-02-09" in timestamp
+        $todayYmd = date('Y-m-d');      // 2026-02-09
+        $todayMd = date('m/d');         // 02/09
         $count = 0;
 
         try {
             $lines = $this->tailFile($this->alertLogPath, 500);
             foreach ($lines as $line) {
-                if (str_contains($line, $today)) {
+                if (str_contains($line, $todayYmd) || str_starts_with(trim($line), $todayMd)) {
                     $count++;
                 }
             }
