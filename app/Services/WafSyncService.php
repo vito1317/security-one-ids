@@ -182,7 +182,7 @@ class WafSyncService
     }
 
     /**
-     * Sync config received from WAF Hub
+     * Sync config received from WAF Hub (save only, tasks dispatched by sub-commands)
      */
     private function syncConfigFromHub(array $config): void
     {
@@ -211,174 +211,124 @@ class WafSyncService
             'scan_now' => $config['addons']['scan_now'] ?? false,
             'scan_type' => $config['addons']['scan_type'] ?? 'quick',
         ]);
-        
-        // Handle ClamAV add-on
-        if (!empty($config['addons']['clamav_enabled'])) {
-            $this->handleClamavAddon();
+    }
+
+    /**
+     * Get saved WAF config from storage
+     */
+    public function getWafConfig(): array
+    {
+        $configPath = storage_path('app/waf_config.json');
+        if (!file_exists($configPath)) {
+            return [];
         }
-        
-        // Handle Snort IPS add-on (remote install for existing agents)
-        if (!empty($config['addons']['snort_enabled'])) {
-            $this->handleSnortAddon($config['addons']['snort_mode'] ?? 'ids');
 
-            // Sync Snort rules from Hub if hash differs
-            if (!empty($config['addons']['snort_rules_hash'])) {
-                $this->syncSnortRules($config['addons']['snort_rules_hash']);
+        return json_decode(file_get_contents($configPath), true) ?: [];
+    }
+
+    /**
+     * Run quick sync tasks: rules, signatures, alerts, blocked IPs
+     */
+    public function runQuickSync(): void
+    {
+        $config = $this->getWafConfig();
+        $addons = $config['addons'] ?? [];
+
+        // Snort rules & alerts (only if Snort enabled)
+        if (!empty($addons['snort_enabled'])) {
+            if (!empty($addons['snort_rules_hash'])) {
+                $this->syncSnortRules($addons['snort_rules_hash']);
             }
-
-            // Upload local Snort rules to Hub
             $this->uploadSnortRulesToHub();
-
-            // Collect and send new Snort alerts to Hub
             $this->collectSnortAlerts();
         }
-        
-        // Handle IDS update signal (manual trigger from Hub)
-        if (!empty($config['addons']['update_ids'])) {
-            $this->handleIdsUpdate();
-        } else {
-            // Auto-update: check if remote has newer commits
-            $this->checkAndAutoUpdate();
-        }
-        
-        // Handle virus definitions update signal
-        if (!empty($config['addons']['update_definitions'])) {
-            $this->handleDefinitionsUpdate();
-        }
-        
-        // Handle scan now signal - run in background to not block heartbeat
-        if (!empty($config['addons']['scan_now'])) {
-            $scanType = $config['addons']['scan_type'] ?? 'quick';
-            Log::info("Scan now signal received (type: {$scanType}), dispatching to background...");
-            
-            // Run scan in background process so it doesn't block heartbeat
-            $basePath = base_path();
-            $logPath = storage_path('logs/scan-output.log');
-            $phpPath = PHP_BINARY ?: 'php';  // Use PHP_BINARY for correct PHP path
-            
-            // Platform-specific background execution
-            if (PHP_OS_FAMILY === 'Darwin') {
-                // macOS: Use pcntl_fork for truly detached process
-                // Process::start() child dies when parent ends
-                $phpPath = PHP_BINARY ?: '/opt/homebrew/bin/php';
-                
-                Log::info('Starting macOS async scan with fork', [
-                    'php' => $phpPath,
-                    'type' => $scanType,
-                ]);
-                
-                if (function_exists('pcntl_fork')) {
-                    $pid = pcntl_fork();
-                    
-                    if ($pid == -1) {
-                        // Fork failed, fallback to direct exec
-                        Log::error('pcntl_fork failed, running scan directly');
-                        Artisan::call('ids:scan', ['--type' => $scanType]);
-                    } elseif ($pid == 0) {
-                        // Child process - run the scan
-                        // Detach from parent's session
-                        if (function_exists('posix_setsid')) {
-                            posix_setsid();
-                        }
-                        
-                        // Set PATH for homebrew
-                        putenv('PATH=/opt/homebrew/bin:/usr/local/bin:' . getenv('PATH'));
-                        
-                        // Run the scan (this will block in child)
-                        Artisan::call('ids:scan', ['--type' => $scanType]);
-                        
-                        // Exit child process when done
-                        exit(0);
-                    } else {
-                        // Parent process - just continue
-                        Log::info('Scan process forked', ['child_pid' => $pid]);
-                        // Don't wait for child
-                    }
-                } else {
-                    // pcntl not available - run in foreground as last resort
-                    Log::warning('pcntl_fork not available, running scan in foreground');
-                    Artisan::call('ids:scan', ['--type' => $scanType]);
-                }
-            } elseif (PHP_OS_FAMILY === 'Windows') {
-                // Windows: Use PowerShell Start-Process for background execution
-                $logPath = str_replace('/', '\\', $logPath);
-                $basePath = str_replace('/', '\\', $basePath);
-                
-                // Build PowerShell command to run scan in background
-                $command = "powershell -Command \"Start-Process -FilePath '{$phpPath}' -ArgumentList 'artisan','ids:scan','--type={$scanType}' -WorkingDirectory '{$basePath}' -WindowStyle Hidden -RedirectStandardOutput '{$logPath}'\"";
-                
-                Log::info('Executing Windows background scan command', ['command' => $command]);
-                pclose(popen($command, 'r'));
-                Log::info('Scan dispatched to background');
-            } elseif (file_exists('/.dockerenv')) {
-                // Docker: cd to container path for Laravel to work
-                $command = "cd /var/www/html && nohup {$phpPath} artisan ids:scan --type={$scanType} >> /var/www/html/storage/logs/scan-output.log 2>&1 &";
-                Log::info('Executing background scan command', ['command' => $command]);
-                shell_exec($command);
-                Log::info('Scan dispatched to background');
-            } else {
-                // Linux: cd to base path for Laravel to work
-                $command = "cd {$basePath} && nohup {$phpPath} artisan ids:scan --type={$scanType} >> {$logPath} 2>&1 &";
-                Log::info('Executing background scan command', ['command' => $command]);
-                shell_exec($command);
-                Log::info('Scan dispatched to background');
-            }
-        }
-        
-        // Handle reboot signal from WAF Hub
-        if (!empty($config['addons']['reboot'])) {
-            echo "🔴 REBOOT SIGNAL DETECTED in config!\n";
-            Log::warning('Reboot signal received from WAF Hub, initiating system restart...');
-            $this->handleSystemReboot();
-        } else {
-            // Debug: show what addons we received
-            $rebootValue = $config['addons']['reboot'] ?? 'NOT SET';
-            echo "📋 Addons reboot value: " . json_encode($rebootValue) . "\n";
-        }
-        
-        // DEBUG: Log all addons to sync.log
-        $syncLogFile = PHP_OS_FAMILY === 'Windows' 
-            ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\sync.log'
-            : base_path('storage/logs/sync.log');
-        $timestamp = date('Y-m-d H:i:s');
-        $addonsJson = json_encode($config['addons'] ?? []);
-        file_put_contents($syncLogFile, "[{$timestamp}] Received addons: {$addonsJson}\n", FILE_APPEND);
-        
-        // Handle lock signal from WAF Hub
-        $lockValue = $config['addons']['lock'] ?? false;
-        file_put_contents($syncLogFile, "[{$timestamp}] Lock value: " . json_encode($lockValue) . "\n", FILE_APPEND);
-        
-        if (!empty($config['addons']['lock'])) {
-            echo "🔒 LOCK SIGNAL DETECTED in config!\n";
-            file_put_contents($syncLogFile, "[{$timestamp}] LOCK TRIGGERED!\n", FILE_APPEND);
-            Log::warning('Lock signal received from WAF Hub, locking system...');
-            $this->handleSystemLock();
-        }
-        
-        // Handle unlock signal from WAF Hub
-        if (!empty($config['addons']['unlock'])) {
-            echo "🔓 UNLOCK SIGNAL DETECTED in config!\n";
-            Log::warning('Unlock signal received from WAF Hub, attempting to unlock...');
-            $this->handleSystemUnlock();
-        }
-        
-        // Handle disable login signal from WAF Hub
-        if (!empty($config['addons']['disable_login'])) {
-            echo "🚫 DISABLE LOGIN SIGNAL DETECTED in config!\n";
-            Log::warning('Disable login signal received from WAF Hub, disabling password login...');
-            $this->handleDisableLogin();
-        }
-        
-        // Handle enable login signal from WAF Hub
-        if (!empty($config['addons']['enable_login'])) {
-            echo "✅ ENABLE LOGIN SIGNAL DETECTED in config!\n";
-            Log::warning('Enable login signal received from WAF Hub, restoring password login...');
-            $this->handleEnableLogin();
-        }
-        
-        // Handle blocked IPs from WAF Hub
+
+        // Blocked IPs
         if (!empty($config['blocked_ips'])) {
             $this->handleBlockedIps($config['blocked_ips']);
+        }
+
+        // Fetch rules from WAF and sync to local DB
+        $rules = $this->fetchRules();
+        if ($rules && isset($rules['rules']) && count($rules['rules']) > 0) {
+            $synced = $this->syncRulesToDatabase($rules['rules']);
+            Log::info("Synced {$synced} rules from WAF to local database");
+            cache()->put('ids_rules', $rules['rules'], now()->addHour());
+        }
+
+        // Upload local signatures
+        $this->uploadSignatures();
+    }
+
+    /**
+     * Run Snort management tasks: install, Npcap, start, auto-update
+     */
+    public function runSnortSync(): void
+    {
+        $config = $this->getWafConfig();
+        $addons = $config['addons'] ?? [];
+
+        if (empty($addons['snort_enabled'])) {
+            return;
+        }
+
+        $this->handleSnortAddon($addons['snort_mode'] ?? 'ids');
+    }
+
+    /**
+     * Run maintenance tasks: ClamAV, updates, definitions, scan, system signals
+     */
+    public function runMaintenanceSync(): void
+    {
+        $config = $this->getWafConfig();
+        $addons = $config['addons'] ?? [];
+
+        // ClamAV
+        if (!empty($addons['clamav_enabled'])) {
+            $this->handleClamavAddon();
+        }
+
+        // IDS update (manual or auto)
+        if (!empty($addons['update_ids'])) {
+            $this->handleIdsUpdate();
+        } else {
+            $this->checkAndAutoUpdate();
+        }
+
+        // Virus definitions update
+        if (!empty($addons['update_definitions'])) {
+            $this->handleDefinitionsUpdate();
+        }
+
+        // Scan now
+        if (!empty($addons['scan_now'])) {
+            $this->handleScanNow();
+        }
+
+        // System signals (reboot, lock, unlock, login controls)
+        if (!empty($addons['reboot'])) {
+            Log::warning('Reboot signal received from WAF Hub');
+            $this->handleSystemReboot();
+        }
+
+        if (!empty($addons['lock'])) {
+            Log::warning('Lock signal received from WAF Hub');
+            $this->handleSystemLock();
+        }
+
+        if (!empty($addons['unlock'])) {
+            Log::warning('Unlock signal received from WAF Hub');
+            $this->handleSystemUnlock();
+        }
+
+        if (!empty($addons['disable_login'])) {
+            Log::warning('Disable login signal received from WAF Hub');
+            $this->handleDisableLogin();
+        }
+
+        if (!empty($addons['enable_login'])) {
+            Log::warning('Enable login signal received from WAF Hub');
+            $this->handleEnableLogin();
         }
     }
     
@@ -3431,9 +3381,9 @@ while ($true) {
     try {
         Set-Location $InstallDir
         
-        # Run sync command with timeout (2 min max)
+        # Run sync command with timeout (6 min max for concurrent tasks)
         $proc = Start-Process -FilePath $PhpPath -ArgumentList 'artisan','waf:sync' -WorkingDirectory $InstallDir -NoNewWindow -PassThru -Wait:$false
-        $exited = $proc.WaitForExit(120000)  # 2 min timeout
+        $exited = $proc.WaitForExit(360000)  # 6 min timeout
         
         if (-not $exited) {
             Log "waf:sync timeout - killing process" 'WARN'

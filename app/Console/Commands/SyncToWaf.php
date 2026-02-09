@@ -4,6 +4,8 @@ namespace App\Console\Commands;
 
 use App\Services\WafSyncService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Process;
 
 class SyncToWaf extends Command
 {
@@ -11,7 +13,7 @@ class SyncToWaf extends Command
         {--register : Force registration}
         {--once : Run once and exit (for debugging)}
         {--debug : Show debug information}';
-    protected $description = 'Sync this IDS Agent with the central WAF';
+    protected $description = 'Sync this IDS Agent with the central WAF (concurrent)';
 
     public function handle(WafSyncService $wafSync): int
     {
@@ -36,37 +38,10 @@ class SyncToWaf extends Command
 
         // Debug output if requested
         if ($this->option('debug')) {
-            $this->info('=== DEBUG INFO ===');
-            $this->info('PHP_OS_FAMILY: ' . PHP_OS_FAMILY);
-            $this->info('PHP_OS: ' . PHP_OS);
-            $this->info('php_uname: ' . php_uname('s'));
-            
-            // Test network stats directly
-            $this->info('Testing network stats collection...');
-            if (PHP_OS_FAMILY === 'Darwin') {
-                $this->info('Detected macOS, testing netstat...');
-                $output = shell_exec('netstat -I en0 -b 2>&1');
-                $this->info("netstat -I en0 -b output:\n" . $output);
-                
-                // Parse and show result
-                $lines = explode("\n", trim($output ?? ''));
-                if (isset($lines[1])) {
-                    $parts = preg_split('/\s+/', trim($lines[1]));
-                    $this->info('Parsed columns: ' . count($parts));
-                    if (count($parts) >= 10) {
-                        $this->info("Ibytes (col 6): " . ($parts[6] ?? 'N/A'));
-                        $this->info("Obytes (col 9): " . ($parts[9] ?? 'N/A'));
-                    }
-                }
-            } elseif (PHP_OS_FAMILY === 'Windows') {
-                $this->info('Detected Windows');
-            } else {
-                $this->info('Detected Linux');
-            }
-            $this->info('=== END DEBUG ===');
+            $this->showDebugInfo();
         }
 
-        // Send heartbeat
+        // === Phase 1: Heartbeat (must run first to get config) ===
         $this->info('Sending heartbeat...');
         if ($wafSync->heartbeat()) {
             $this->info('✓ Heartbeat sent');
@@ -74,33 +49,89 @@ class SyncToWaf extends Command
             $this->warn('✗ Heartbeat failed');
         }
 
-        // Fetch latest rules and sync to database
-        $this->info('Fetching rules from WAF...');
-        $rules = $wafSync->fetchRules();
-        if ($rules && isset($rules['rules']) && count($rules['rules']) > 0) {
-            $count = count($rules['rules']);
-            $this->info("✓ Received {$count} rules from WAF");
-            
-            // Sync rules to local database
-            $synced = $wafSync->syncRulesToDatabase($rules['rules']);
-            $this->info("✓ Synced {$synced} rules to local database");
-            
-            // Also cache for quick access
-            cache()->put('ids_rules', $rules['rules'], now()->addHour());
-        } else {
-            $this->warn('No rules received from WAF');
-        }
+        // === Phase 2: Run 3 task groups concurrently ===
+        $this->info('Dispatching concurrent task groups...');
+        $phpBinary = PHP_BINARY ?: 'php';
+        $basePath = base_path();
+        $startTime = microtime(true);
 
-        // Upload local signatures to WAF Hub
-        $this->info('Uploading local signatures to WAF...');
-        $uploaded = $wafSync->uploadSignatures();
-        if ($uploaded > 0) {
-            $this->info("✓ Uploaded {$uploaded} signatures to WAF");
-        } else {
-            $this->warn('No signatures uploaded to WAF');
+        try {
+            $pool = Process::pool(function ($pool) use ($phpBinary, $basePath) {
+                $pool->path($basePath)
+                    ->timeout(60)
+                    ->command([$phpBinary, 'artisan', 'ids:sync-quick']);
+                
+                $pool->path($basePath)
+                    ->timeout(300)
+                    ->command([$phpBinary, 'artisan', 'ids:sync-snort']);
+                
+                $pool->path($basePath)
+                    ->timeout(600)
+                    ->command([$phpBinary, 'artisan', 'ids:sync-maintenance']);
+            })->start()->wait();
+
+            $elapsed = round(microtime(true) - $startTime, 1);
+            $results = $pool->results();
+            
+            $labels = ['Quick', 'Snort', 'Maintenance'];
+            foreach ($results as $i => $result) {
+                $label = $labels[$i] ?? "Group {$i}";
+                if ($result->successful()) {
+                    $this->info("  ✓ {$label} completed");
+                } else {
+                    $this->warn("  ✗ {$label} failed (exit: {$result->exitCode()})");
+                    $output = $result->errorOutput() ?: $result->output();
+                    if ($output) {
+                        Log::warning("[{$label}] Output: " . substr($output, 0, 500));
+                    }
+                }
+            }
+
+            $this->info("Concurrent sync completed in {$elapsed}s");
+        } catch (\Exception $e) {
+            $this->error('Concurrent dispatch failed: ' . $e->getMessage());
+            Log::error('Process::pool() failed, falling back to sequential: ' . $e->getMessage());
+            
+            // Fallback: run sequentially if pool fails
+            $this->info('Running tasks sequentially...');
+            $wafSync->runQuickSync();
+            $wafSync->runSnortSync();
+            $wafSync->runMaintenanceSync();
         }
 
         $this->info('Sync completed!');
         return 0;
+    }
+
+    /**
+     * Show debug information
+     */
+    private function showDebugInfo(): void
+    {
+        $this->info('=== DEBUG INFO ===');
+        $this->info('PHP_OS_FAMILY: ' . PHP_OS_FAMILY);
+        $this->info('PHP_OS: ' . PHP_OS);
+        $this->info('php_uname: ' . php_uname('s'));
+        
+        if (PHP_OS_FAMILY === 'Darwin') {
+            $this->info('Detected macOS, testing netstat...');
+            $output = shell_exec('netstat -I en0 -b 2>&1');
+            $this->info("netstat -I en0 -b output:\n" . $output);
+            
+            $lines = explode("\n", trim($output ?? ''));
+            if (isset($lines[1])) {
+                $parts = preg_split('/\s+/', trim($lines[1]));
+                $this->info('Parsed columns: ' . count($parts));
+                if (count($parts) >= 10) {
+                    $this->info("Ibytes (col 6): " . ($parts[6] ?? 'N/A'));
+                    $this->info("Obytes (col 9): " . ($parts[9] ?? 'N/A'));
+                }
+            }
+        } elseif (PHP_OS_FAMILY === 'Windows') {
+            $this->info('Detected Windows');
+        } else {
+            $this->info('Detected Linux');
+        }
+        $this->info('=== END DEBUG ===');
     }
 }

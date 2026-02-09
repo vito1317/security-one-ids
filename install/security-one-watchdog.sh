@@ -168,7 +168,7 @@ while true; do
     
     # === WAF Sync (Heartbeat) ===
     log_message "INFO" "Running WAF sync (heartbeat)..."
-    if run_artisan "waf:sync" 60; then
+    if run_artisan "waf:sync" 300; then
         log_message "INFO" "WAF sync completed successfully"
         consecutive_failures=0
     else
@@ -232,7 +232,7 @@ while true; do
         elapsed_since_scan=$((elapsed_since_scan + heartbeat_interval))
         
         # Run heartbeat sync
-        if run_artisan "waf:sync" 60; then
+        if run_artisan "waf:sync" 300; then
             log_message "INFO" "Heartbeat sync OK"
         else
             log_message "WARNING" "Heartbeat sync failed"
