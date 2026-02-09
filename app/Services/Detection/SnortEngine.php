@@ -935,6 +935,21 @@ LUA;
     {
         $installed = $this->isInstalled();
 
+        // Determine current Snort mode from Hub config
+        $snortMode = config('ids.snort_mode', 'ids');
+        // Also check if stored in cache/settings
+        if ($snortMode === 'ids') {
+            $settingsPath = storage_path('app/hub_config.json');
+            if (file_exists($settingsPath)) {
+                try {
+                    $config = json_decode(file_get_contents($settingsPath), true);
+                    $snortMode = $config['addons']['snort_mode'] ?? 'ids';
+                } catch (\Exception $e) {
+                    // ignore
+                }
+            }
+        }
+
         return [
             'installed' => $installed,
             'version' => $installed ? $this->getVersion() : null,
@@ -942,6 +957,7 @@ LUA;
             'path' => $this->snortPath,
             'config_path' => $this->configPath,
             'log_dir' => $this->logDir,
+            'snort_mode' => $snortMode,
             'stats' => $installed ? $this->getStats() : null,
         ];
     }
