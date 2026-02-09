@@ -831,6 +831,7 @@ class WafSyncService
         @unlink(storage_path('app/npcap_installed.txt'));
         @unlink(storage_path('app/pcap_verified.txt'));
         @unlink(storage_path('app/pcap_cooldown.txt'));
+        @unlink(storage_path('app/pcap_attempt.txt'));
 
         $cacheFile = storage_path('app/pcap_ok_v3.txt');
         if (file_exists($cacheFile)) {
@@ -863,8 +864,9 @@ class WafSyncService
         }
 
         // Rate-limit install (once per hour)
-        $attemptFile = storage_path('app/pcap_attempt.txt');
+        $attemptFile = storage_path('app/npcap_attempt_v2.txt');
         if (file_exists($attemptFile) && (time() - filemtime($attemptFile)) < 3600) {
+            Log::debug('[Pcap] Cooldown active, skipping install attempt');
             return;
         }
         file_put_contents($attemptFile, date('c'));
