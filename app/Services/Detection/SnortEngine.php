@@ -284,25 +284,31 @@ class SnortEngine
 
     /**
      * Start Snort with automatic retry: if startup fails due to a rule error,
-     * comment out ALL offending lines and retry (up to $maxRetries times).
+     * proactively find ALL rules with the same error pattern and comment them out.
      *
-     * Only matches ERROR: lines (not WARNING:) — warnings are non-fatal.
-     * Comments out ALL error lines at once per retry to avoid wasting retries.
+     * Snort only reports ONE error per run then quits. So instead of fixing
+     * just the reported line, we analyze the error type and fix ALL similar
+     * rules in one pass. This turns 50+ retries into 2-3 retries.
      *
-     * The error lines are extracted from the FULL stderr log file (not the
-     * truncated error string from start()), since Snort outputs ~14KB of
-     * initialization text before the actual error at the end.
+     * Error types handled:
+     *  - Unknown ClassType: X → comment out ALL rules with classtype:X
+     *  - dce_iface invalid uuid → comment out ALL rules with dce_iface
+     *  - !any is not allowed: !$VAR → comment out ALL rules referencing $VAR
+     *  - Other errors → comment out just the reported line
      */
-    public function startWithRetry(string $mode = 'ids', ?string $interface = null, int $maxRetries = 5): array
+    public function startWithRetry(string $mode = 'ids', ?string $interface = null, int $maxRetries = 10): array
     {
         $rulesFile = $this->getDetectedRulesDir() . '/hub_custom.rules';
+        $totalDisabled = 0;
 
         for ($attempt = 1; $attempt <= $maxRetries + 1; $attempt++) {
             $result = $this->start($mode, $interface);
 
             if ($result['success']) {
                 if ($attempt > 1) {
-                    Log::info("Snort started successfully after {$attempt} attempts");
+                    Log::info("Snort started successfully after {$attempt} attempts", [
+                        'total_disabled' => $totalDisabled,
+                    ]);
                 }
                 return $result;
             }
@@ -312,8 +318,7 @@ class SnortEngine
                 return $result;
             }
 
-            // Read FULL stderr from the log file (not the truncated error string)
-            // start() only returns first 200 chars, but the actual error is at the end
+            // Read FULL stderr from the log file
             $stderrContent = '';
             if ($this->isWindows()) {
                 $stderrFile = $this->logDir . '\\snort_stderr.log';
@@ -329,45 +334,96 @@ class SnortEngine
                 }
             }
 
-            // Only match ERROR: lines (not WARNING: — warnings are non-fatal)
-            // Find ALL error line numbers at once to fix them in a single pass
-            // Pattern: ERROR: ... hub_custom.rules(LINE): error message
-            $errorLines = [];
-            if (preg_match_all('/ERROR:.*?hub_custom\.rules\((\d+)\)[:\s]+(.+?)(?:\r?\n|$)/i', $stderrContent, $matches, PREG_SET_ORDER)) {
-                foreach ($matches as $match) {
-                    $errorLines[(int) $match[1]] = trim($match[2]);
-                }
+            // Only match ERROR: lines (not WARNING:)
+            if (!preg_match('/ERROR:.*?hub_custom\.rules\((\d+)\)[:\s]+(.+?)(?:\r?\n|$)/i', $stderrContent, $match)) {
+                Log::warning('Snort startWithRetry: could not parse error from stderr', [
+                    'attempt' => $attempt,
+                    'stderr_length' => strlen($stderrContent),
+                    'stderr_tail' => substr($stderrContent, -500),
+                ]);
+                return $result;
             }
 
-            if (!empty($errorLines)) {
-                Log::info("Snort startup retry: commenting out " . count($errorLines) . " error lines", [
-                    'attempt' => $attempt,
-                    'lines' => array_keys($errorLines),
-                    'errors' => $errorLines,
-                ]);
+            $errorLine = (int) $match[1];
+            $errorMsg = trim($match[2]);
 
-                // Comment out ALL offending lines at once
-                $lines = file($rulesFile, FILE_IGNORE_NEW_LINES);
-                foreach ($errorLines as $lineNum => $errorMsg) {
-                    $idx = $lineNum - 1;
-                    if (isset($lines[$idx]) && !str_starts_with($lines[$idx], '# [auto-disabled]')) {
-                        $lines[$idx] = '# [auto-disabled] ' . $lines[$idx];
+            // Proactively find ALL rules with the same error pattern
+            $lines = file($rulesFile, FILE_IGNORE_NEW_LINES);
+            $disabledCount = 0;
+            $pattern = $this->buildProactivePattern($errorMsg);
+
+            if ($pattern) {
+                // Comment out ALL matching rules (not just the one Snort reported)
+                foreach ($lines as $idx => &$line) {
+                    if (!str_starts_with($line, '#') && preg_match($pattern, $line)) {
+                        $line = '# [auto-disabled] ' . $line;
+                        $disabledCount++;
                     }
                 }
-                file_put_contents($rulesFile, implode("\n", $lines));
-                continue; // Retry with fixed rules
+                unset($line);
+            } else {
+                // Unknown error type — just comment out the specific line
+                $idx = $errorLine - 1;
+                if (isset($lines[$idx]) && !str_starts_with($lines[$idx], '# [auto-disabled]')) {
+                    $lines[$idx] = '# [auto-disabled] ' . $lines[$idx];
+                    $disabledCount = 1;
+                }
             }
 
-            // No parseable ERROR lines — return the failure
-            Log::warning('Snort startWithRetry: could not parse error lines from stderr', [
+            $totalDisabled += $disabledCount;
+            Log::info("Snort startup retry: disabled {$disabledCount} rules matching error pattern", [
                 'attempt' => $attempt,
-                'stderr_length' => strlen($stderrContent),
-                'stderr_tail' => substr($stderrContent, -500),
+                'trigger_line' => $errorLine,
+                'error' => $errorMsg,
+                'pattern' => $pattern ?? 'single-line',
+                'total_disabled' => $totalDisabled,
             ]);
-            return $result;
+
+            file_put_contents($rulesFile, implode("\n", $lines));
+            continue;
         }
 
-        return ['success' => false, 'error' => 'Max retries exceeded'];
+        return ['success' => false, 'error' => "Max retries exceeded (disabled {$totalDisabled} rules total)"];
+    }
+
+    /**
+     * Build a regex pattern to find ALL rules with the same error as the one Snort reported.
+     * Returns null if the error type is unknown (fallback to single-line disable).
+     */
+    private function buildProactivePattern(string $errorMsg): ?string
+    {
+        // "Unknown ClassType: kickass-porn" → match all rules with classtype:kickass-porn
+        if (preg_match('/Unknown ClassType:\s*(\S+)/i', $errorMsg, $m)) {
+            $classtype = preg_quote($m[1], '/');
+            return '/classtype\s*:\s*' . $classtype . '/i';
+        }
+
+        // "dce_iface" rule option → match all rules with dce_iface
+        if (str_contains($errorMsg, 'dce_iface')) {
+            return '/\bdce_iface\b/';
+        }
+
+        // "dce_opnum" or "dce_stub_data" → match all rules with that keyword
+        if (str_contains($errorMsg, 'dce_opnum')) {
+            return '/\bdce_opnum\b/';
+        }
+        if (str_contains($errorMsg, 'dce_stub_data')) {
+            return '/\bdce_stub_data\b/';
+        }
+
+        // "!any is not allowed: !$DNS_SERVERS" → match all rules referencing that variable
+        if (preg_match('/!\$(\w+)/', $errorMsg, $m)) {
+            $varName = preg_quote($m[1], '/');
+            return '/\$' . $varName . '/';
+        }
+
+        // "Undefined variable name: $SHELLCODE_PORTS" → match all rules using that variable
+        if (preg_match('/Undefined.*?\$(\w+)/i', $errorMsg, $m)) {
+            $varName = preg_quote($m[1], '/');
+            return '/\$' . $varName . '/';
+        }
+
+        return null; // Unknown error type, fall back to single-line
     }
 
     /**
