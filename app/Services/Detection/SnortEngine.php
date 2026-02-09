@@ -1963,6 +1963,18 @@ RULES;
                 $skip = true;
             }
 
+            // Check for Snort 3-only keywords that don't exist in Snort 2
+            if (preg_match('/\b(service\s*:|sticky_buffer|http2_header|http_trailer|js_data|vba_data|file_data\s*;)/', $trimmed)) {
+                $skip = true;
+            }
+
+            // Check for http_uri/http_header BEFORE content (Snort 3 "sticky buffer" syntax)
+            // Snort 2 requires: content:"foo"; http_uri; (modifier AFTER content)
+            // Snort 3 allows: http_uri; content:"foo"; (sticky buffer BEFORE content)
+            if (preg_match('/;\s*http_(uri|header|cookie|method|stat_code|stat_msg|raw_uri|raw_header|raw_cookie|client_body)\s*;\s*content\s*:/', $trimmed)) {
+                $skip = true;
+            }
+
             if ($skip) {
                 $removed++;
                 $result[] = '# [Snort2-invalid] ' . $trimmed;
