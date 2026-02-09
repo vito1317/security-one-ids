@@ -71,10 +71,9 @@ class SyncToWaf extends Command
             })->start()->wait();
 
             $elapsed = round(microtime(true) - $startTime, 1);
-            $results = $pool->results();
             
             $labels = ['Quick', 'Snort', 'Maintenance'];
-            foreach ($results as $i => $result) {
+            foreach ($pool as $i => $result) {
                 $label = $labels[$i] ?? "Group {$i}";
                 if ($result->successful()) {
                     $this->info("  ✓ {$label} completed");
