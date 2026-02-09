@@ -933,7 +933,7 @@ LUA;
      * Detect if this is Snort 2.x (vs Snort 3.x)
      * Snort 2 and 3 have different CLI flags.
      */
-    private function isSnort2(): bool
+    public function isSnort2(): bool
     {
         $version = $this->getVersion();
         if (!$version) {
