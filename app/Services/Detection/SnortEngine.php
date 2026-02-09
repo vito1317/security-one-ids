@@ -1313,7 +1313,7 @@ LUA;
         return $this->detectRulesDir();
     }
 
-    private function detectRulesDir(): string
+    public function detectRulesDir(): string
     {
         $paths = $this->isWindows()
             ? ['C:\\Snort\\rules', 'C:\\Snort\\etc\\snort\\rules']

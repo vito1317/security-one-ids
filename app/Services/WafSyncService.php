@@ -423,14 +423,20 @@ class WafSyncService
 
             // Start Snort if not running
             if (!$snort->isRunning()) {
-                // Ensure Npcap is installed on Windows before trying to start
-                $this->ensureNpcapInstalled();
-                $startResult = $snort->start($mode);
-                if (!($startResult['success'] ?? false)) {
-                    Log::warning('Snort start result', $startResult);
+                // On Snort 3: skip start if hub_custom.rules doesn't exist yet
+                // syncSnortRules() will create converted rules and then start Snort
+                $hubRulesFile = $snort->detectRulesDir() . '/hub_custom.rules';
+                if (!$snort->isSnort2() && !file_exists($hubRulesFile)) {
+                    Log::info('Deferring Snort 3 start until rules sync creates hub_custom.rules');
                 } else {
-                    Log::info('Snort started successfully');
-                    $this->reportAgentEvent('snort_started', "Snort 已啟動（模式：{$mode}）");
+                    $this->ensureNpcapInstalled();
+                    $startResult = $snort->start($mode);
+                    if (!($startResult['success'] ?? false)) {
+                        Log::warning('Snort start result', $startResult);
+                    } else {
+                        Log::info('Snort started successfully');
+                        $this->reportAgentEvent('snort_started', "Snort 已啟動（模式：{$mode}）");
+                    }
                 }
             }
 
@@ -1160,9 +1166,14 @@ class WafSyncService
             $hashPath = storage_path('app/snort_rules_hash.txt');
             file_put_contents($hashPath, $data['rules_hash'] ?? $hubHash);
 
-            // Reload Snort to pick up new rules
+            // Reload or start Snort to pick up new rules
             if ($snort->isRunning()) {
                 $snort->reload();
+            } else {
+                // Snort may have failed earlier due to old incompatible rules
+                // Now that we have properly converted rules, try starting it
+                Log::info('Snort not running after rule sync, attempting start with new rules');
+                $snort->start();
             }
 
             Log::info("Synced {$ruleCount} Snort rules from Hub");
