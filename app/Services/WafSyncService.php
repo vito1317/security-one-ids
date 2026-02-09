@@ -1196,14 +1196,14 @@ class WafSyncService
             $hashPath = storage_path('app/snort_rules_hash.txt');
             file_put_contents($hashPath, $data['rules_hash'] ?? $hubHash);
 
-            // Reload or start Snort to pick up new rules
+            // Always stop and restart with retry to handle rule errors
+            // reload() on Windows does stop+start() (no retry), which crashes on bad rules
             if ($snort->isRunning()) {
-                $snort->reload();
-            } else {
-                // Use startWithRetry: if a rule causes a startup error,
-                // auto-comment it out and retry (handles config-dependent issues)
-                Log::info('Snort not running after rule sync, attempting start with new rules');
-                $snort->startWithRetry($mode);
+                $snort->stop();
+            }
+            $startResult = $snort->startWithRetry($mode);
+            if (!$startResult['success']) {
+                Log::warning('Snort failed to start after rule sync', ['error' => $startResult['error'] ?? 'unknown']);
             }
 
             Log::info("Synced {$ruleCount} Snort rules from Hub");
