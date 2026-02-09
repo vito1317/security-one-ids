@@ -849,24 +849,24 @@ class WafSyncService
             return;
         }
 
-        // Try starting NPF service (WinPcap may be installed from prior attempt)
+        // Try starting NPF or Npcap service (driver may be installed but service not running)
         try {
+            Process::timeout(10)->run('net start npcap 2>&1');
             Process::timeout(10)->run('net start npf 2>&1');
             sleep(2);
             if ($this->snortCanSeeInterfaces($snortPath)) {
                 file_put_contents($cacheFile, date('c'));
-                Log::info('[Pcap] NPF service started, interfaces now visible');
+                Log::info('[Pcap] Packet capture service started, interfaces now visible');
                 $this->reportAgentEvent('snort_install', 'Packet capture activated');
                 return;
             }
         } catch (\Exception $e) {
-            // Service does not exist
+            // Services do not exist
         }
 
-        // Rate-limit install (once per hour)
+        // Rate-limit install (once per 10 minutes for faster retries on failure)
         $attemptFile = storage_path('app/npcap_attempt_v2.txt');
-        if (file_exists($attemptFile) && (time() - filemtime($attemptFile)) < 3600) {
-            Log::debug('[Pcap] Cooldown active, skipping install attempt');
+        if (file_exists($attemptFile) && (time() - filemtime($attemptFile)) < 600) {
             return;
         }
         file_put_contents($attemptFile, date('c'));
