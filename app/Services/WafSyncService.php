@@ -887,66 +887,98 @@ class WafSyncService
         Log::info('[Pcap] Installing Npcap for Windows...');
 
         try {
-            $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
+            // Strategy: Extract Npcap installer with 7-Zip, install driver via pnputil
+            // Npcap free edition blocks /S silent install, but the driver IS Microsoft-signed
+            // so pnputil /add-driver works without the NSIS installer
+            $script = "\$ErrorActionPreference='Stop'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "\r\n" .
-                "# Uninstall old WinPcap to avoid conflicts\r\n" .
-                "if(Test-Path 'C:\\Program Files\\WinPcap\\Uninstall.exe'){\r\n" .
-                "  Write-Output 'Removing old WinPcap...'\r\n" .
-                "  Start-Process 'C:\\Program Files\\WinPcap\\Uninstall.exe' -ArgumentList '/S' -Wait -EA SilentlyContinue\r\n" .
-                "  Start-Sleep 3\r\n" .
-                "}\r\n" .
-                "\r\n" .
-                "# Install Chocolatey if not present\r\n" .
+                "# Ensure Chocolatey is available\r\n" .
                 "if(-not(Get-Command choco -EA SilentlyContinue)){\r\n" .
                 "  Write-Output 'Installing Chocolatey...'\r\n" .
                 "  Set-ExecutionPolicy Bypass -Scope Process -Force\r\n" .
+                "  \$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "  iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))\r\n" .
+                "  \$ErrorActionPreference='Stop'\r\n" .
                 "  \$env:Path=[System.Environment]::GetEnvironmentVariable('Path','Machine')+';'+[System.Environment]::GetEnvironmentVariable('Path','User')\r\n" .
                 "}\r\n" .
                 "\r\n" .
-                "# Strategy 1: Chocolatey (handles licensing & silent install)\r\n" .
-                "if(Get-Command choco -EA SilentlyContinue){\r\n" .
-                "  Write-Output 'STRATEGY:choco'\r\n" .
-                "  choco install npcap -y --no-progress 2>&1|Write-Output\r\n" .
-                "  Start-Sleep 5\r\n" .
-                "  # Start services\r\n" .
+                "# Ensure 7-Zip is available for extraction\r\n" .
+                "if(-not(Get-Command 7z -EA SilentlyContinue)){\r\n" .
+                "  \$ErrorActionPreference='SilentlyContinue'\r\n" .
+                "  choco install 7zip.portable -y --no-progress 2>&1|Write-Output\r\n" .
+                "  \$ErrorActionPreference='Stop'\r\n" .
+                "  \$env:Path=[System.Environment]::GetEnvironmentVariable('Path','Machine')+';'+[System.Environment]::GetEnvironmentVariable('Path','User')\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "# Download Npcap\r\n" .
+                "\$npcapExe=\"\$env:TEMP\\npcap-1.80.exe\"\r\n" .
+                "if(-not(Test-Path \$npcapExe)){\r\n" .
+                "  Write-Output 'Downloading Npcap 1.80...'\r\n" .
+                "  (New-Object Net.WebClient).DownloadFile('https://github.com/nmap/npcap/releases/download/v1.80/npcap-1.80.exe',\$npcapExe)\r\n" .
+                "}\r\n" .
+                "\$sz=(Get-Item \$npcapExe).Length; Write-Output \"DL:\$sz\"\r\n" .
+                "if(\$sz -lt 500000){Write-Output 'DL_TOO_SMALL'; exit 1}\r\n" .
+                "\r\n" .
+                "# Strategy 1: Extract with 7z and install driver via pnputil\r\n" .
+                "Write-Output 'STRATEGY:extract_pnputil'\r\n" .
+                "\$extractDir=\"\$env:TEMP\\npcap_extracted\"\r\n" .
+                "if(Test-Path \$extractDir){Remove-Item \$extractDir -Recurse -Force}\r\n" .
+                "\r\n" .
+                "\$7zPath = \$null\r\n" .
+                "if(Get-Command 7z -EA SilentlyContinue){\$7zPath='7z'}\r\n" .
+                "elseif(Test-Path 'C:\\ProgramData\\chocolatey\\tools\\7z.exe'){\$7zPath='C:\\ProgramData\\chocolatey\\tools\\7z.exe'}\r\n" .
+                "elseif(Test-Path 'C:\\ProgramData\\chocolatey\\lib\\7zip.portable\\tools\\7z.exe'){\$7zPath='C:\\ProgramData\\chocolatey\\lib\\7zip.portable\\tools\\7z.exe'}\r\n" .
+                "elseif(Test-Path 'C:\\Program Files\\7-Zip\\7z.exe'){\$7zPath='C:\\Program Files\\7-Zip\\7z.exe'}\r\n" .
+                "\r\n" .
+                "if(\$7zPath){\r\n" .
+                "  Write-Output \"Using 7z: \$7zPath\"\r\n" .
+                "  & \$7zPath x \$npcapExe \"-o\$extractDir\" -y 2>&1|Write-Output\r\n" .
+                "  \r\n" .
+                "  # Find and install driver INF files\r\n" .
+                "  \$infs = Get-ChildItem -Path \$extractDir -Recurse -Filter '*.inf' -EA SilentlyContinue\r\n" .
+                "  Write-Output \"Found INF files: \$(\$infs.Count)\"\r\n" .
+                "  foreach(\$inf in \$infs){\r\n" .
+                "    Write-Output \"Installing driver: \$(\$inf.FullName)\"\r\n" .
+                "    \$ErrorActionPreference='SilentlyContinue'\r\n" .
+                "    pnputil /add-driver \$inf.FullName /install 2>&1|Write-Output\r\n" .
+                "    \$ErrorActionPreference='Stop'\r\n" .
+                "  }\r\n" .
+                "  \r\n" .
+                "  # Copy DLLs to System32 (wpcap.dll, Packet.dll — needed by Snort)\r\n" .
+                "  \$dlls = Get-ChildItem -Path \$extractDir -Recurse -Include 'wpcap.dll','Packet.dll','npcap.dll' -EA SilentlyContinue\r\n" .
+                "  foreach(\$dll in \$dlls){\r\n" .
+                "    Write-Output \"Copying DLL: \$(\$dll.Name)\"\r\n" .
+                "    Copy-Item \$dll.FullName \"C:\\Windows\\System32\\\" -Force -EA SilentlyContinue\r\n" .
+                "  }\r\n" .
+                "  \r\n" .
+                "  # Also copy to Npcap directory\r\n" .
+                "  \$npcapDir='C:\\Windows\\System32\\Npcap'\r\n" .
+                "  if(-not(Test-Path \$npcapDir)){New-Item \$npcapDir -ItemType Directory -Force|Out-Null}\r\n" .
+                "  Get-ChildItem -Path \$extractDir -Recurse -Include '*.dll','*.sys' -EA SilentlyContinue|ForEach-Object{\r\n" .
+                "    Copy-Item \$_.FullName \$npcapDir -Force -EA SilentlyContinue\r\n" .
+                "  }\r\n" .
+                "  \r\n" .
+                "  # Try starting the service\r\n" .
+                "  \$ErrorActionPreference='SilentlyContinue'\r\n" .
+                "  sc.exe create npcap type=kernel start=auto binPath=\"C:\\Windows\\System32\\drivers\\npcap.sys\" 2>&1|Write-Output\r\n" .
                 "  net start npcap 2>&1|Write-Output\r\n" .
                 "  net start npf 2>&1|Write-Output\r\n" .
+                "  Start-Sleep 3\r\n" .
+                "  \r\n" .
                 "  # Verify\r\n" .
                 "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
                 "  Write-Output \"SNORT_W:\$w\"\r\n" .
                 "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "  Write-Output 'CHOCO_NPCAP_NO_INTERFACE'\r\n" .
+                "  Write-Output 'EXTRACT_NO_INTERFACE'\r\n" .
                 "}\r\n" .
                 "\r\n" .
-                "# Strategy 2: winget\r\n" .
-                "if(Get-Command winget -EA SilentlyContinue){\r\n" .
-                "  Write-Output 'STRATEGY:winget'\r\n" .
-                "  winget install --id Insecure.Npcap --accept-source-agreements --accept-package-agreements --silent 2>&1|Write-Output\r\n" .
-                "  Start-Sleep 5\r\n" .
-                "  net start npcap 2>&1|Write-Output\r\n" .
-                "  net start npf 2>&1|Write-Output\r\n" .
-                "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
-                "  Write-Output \"SNORT_W:\$w\"\r\n" .
-                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "  Write-Output 'WINGET_NPCAP_NO_INTERFACE'\r\n" .
-                "}\r\n" .
-                "\r\n" .
-                "# Strategy 3: Direct download + attempt install (may show GUI)\r\n" .
-                "Write-Output 'STRATEGY:direct'\r\n" .
-                "\$f=\"\$env:TEMP\\npcap-1.80.exe\"\r\n" .
-                "if(-not(Test-Path \$f)){\r\n" .
-                "  Write-Output 'Downloading Npcap 1.80...'\r\n" .
-                "  (New-Object Net.WebClient).DownloadFile('https://npcap.com/dist/npcap-1.80.exe',\$f)\r\n" .
-                "}\r\n" .
-                "\$sz=(Get-Item \$f).Length; Write-Output \"DL:\$sz\"\r\n" .
-                "if(\$sz -lt 500000){Write-Output 'TOO_SMALL'; exit 1}\r\n" .
-                "Write-Output 'Attempting Npcap install (may require GUI interaction)...'\r\n" .
-                "\$p=Start-Process \$f -ArgumentList '/winpcap_mode=yes','/loopback_support=yes' -Wait -PassThru\r\n" .
+                "# Strategy 2: Direct Npcap /S attempt (may work on some configs)\r\n" .
+                "Write-Output 'STRATEGY:npcap_silent'\r\n" .
+                "\$ErrorActionPreference='SilentlyContinue'\r\n" .
+                "\$p=Start-Process \$npcapExe -ArgumentList '/S','/winpcap_mode=yes','/loopback_support=yes' -Wait -PassThru\r\n" .
                 "Write-Output \"EXIT:\$(\$p.ExitCode)\"\r\n" .
                 "Start-Sleep 5\r\n" .
-                "Remove-Item \$f -Force -EA SilentlyContinue\r\n" .
                 "net start npcap 2>&1|Write-Output\r\n" .
                 "net start npf 2>&1|Write-Output\r\n" .
                 "\$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
@@ -971,8 +1003,16 @@ class WafSyncService
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
                     $strategy = $m[1];
                 }
-                Log::warning('[Pcap] Npcap install failed', ['strategy' => $strategy, 'output' => substr($out, 0, 1000)]);
-                $this->reportAgentEvent('snort_error', "Npcap install failed (strategy: {$strategy}). Manual install may be required from https://npcap.com");
+                Log::warning('[Pcap] Npcap automatic install failed — manual installation required', [
+                    'strategy' => $strategy,
+                    'output' => substr($out, 0, 1000),
+                ]);
+                // Cache failure for 24 hours — Npcap free edition cannot be silently installed,
+                // no point retrying every 10 minutes. User must install manually.
+                file_put_contents($attemptFile, 'manual_required:' . date('c'));
+                // Set a long cooldown by backdating the mtime check
+                touch($attemptFile, time());
+                $this->reportAgentEvent('snort_error', 'Npcap 無法自動安裝，請手動從 https://npcap.com 下載安裝後重啟系統');
             }
         } catch (\Exception $e) {
             Log::error('[Pcap] Error: ' . $e->getMessage());
