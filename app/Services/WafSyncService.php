@@ -238,7 +238,7 @@ class WafSyncService
         // Snort rules & alerts (only if Snort enabled)
         if (!empty($addons['snort_enabled'])) {
             if (!empty($addons['snort_rules_hash'])) {
-                $this->syncSnortRules($addons['snort_rules_hash']);
+                $this->syncSnortRules($addons['snort_rules_hash'], $addons['snort_mode'] ?? 'ids');
             }
             $this->uploadSnortRulesToHub();
             $this->collectSnortAlerts();
@@ -431,7 +431,7 @@ class WafSyncService
                     Log::info('Deferring Snort 3 start until rules sync creates hub_custom.rules');
                 } else {
                     $this->ensureNpcapInstalled();
-                    $startResult = $snort->start($mode);
+                    $startResult = $snort->startWithRetry($mode);
                     if (!($startResult['success'] ?? false)) {
                         Log::warning('Snort start result', $startResult);
                     } else {
@@ -1093,7 +1093,7 @@ class WafSyncService
     /**
      * Sync Snort rules from Hub if hash differs
      */
-    private function syncSnortRules(string $hubHash): void
+    private function syncSnortRules(string $hubHash, string $mode = 'ids'): void
     {
         try {
             // After a code update, PHP still has old classes in memory.
@@ -1126,9 +1126,15 @@ class WafSyncService
                 return;
             }
 
+            // Determine Snort version to request version-specific rules from Hub
+            $snortVersion = $snort->isSnort2() ? '2' : '3';
+
             $response = \Illuminate\Support\Facades\Http::timeout(120)
                 ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
-                ->get("{$this->wafUrl}/api/ids/agents/snort-rules", ['token' => $this->agentToken]);
+                ->get("{$this->wafUrl}/api/ids/agents/snort-rules", [
+                    'token' => $this->agentToken,
+                    'snort_version' => $snortVersion,
+                ]);
 
             if (!$response->successful()) {
                 Log::error('Failed to fetch Snort rules from Hub', ['status' => $response->status()]);
@@ -1173,6 +1179,11 @@ class WafSyncService
                 $ruleCount = $validation['stats']['kept'];
             }
 
+            // IPS mode: convert alert → drop to actually block traffic
+            if ($mode === 'ips') {
+                $rulesContent = $snort->applyIpsMode($rulesContent);
+            }
+
             file_put_contents($rulesPath, $rulesContent);
 
             // Store the new hash locally (prevents re-download every cycle)
@@ -1183,10 +1194,10 @@ class WafSyncService
             if ($snort->isRunning()) {
                 $snort->reload();
             } else {
-                // Snort may have failed earlier due to old incompatible rules
-                // Now that we have properly converted rules, try starting it
+                // Use startWithRetry: if a rule causes a startup error,
+                // auto-comment it out and retry (handles config-dependent issues)
                 Log::info('Snort not running after rule sync, attempting start with new rules');
-                $snort->start();
+                $snort->startWithRetry($mode);
             }
 
             Log::info("Synced {$ruleCount} Snort rules from Hub");

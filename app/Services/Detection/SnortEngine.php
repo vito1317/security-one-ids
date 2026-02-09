@@ -283,6 +283,124 @@ class SnortEngine
     }
 
     /**
+     * Start Snort with automatic retry: if startup fails due to a rule error,
+     * comment out the offending line and retry (up to $maxRetries times).
+     *
+     * This handles config-dependent errors (unknown ClassType, deprecated
+     * keywords, etc.) that can't be predicted by static validation.
+     *
+     * The error line is extracted from the FULL stderr log file (not the
+     * truncated error string from start()), since Snort outputs ~14KB of
+     * initialization text before the actual error at the end.
+     */
+    public function startWithRetry(string $mode = 'ids', ?string $interface = null, int $maxRetries = 5): array
+    {
+        $rulesFile = $this->getDetectedRulesDir() . '/hub_custom.rules';
+
+        for ($attempt = 1; $attempt <= $maxRetries + 1; $attempt++) {
+            $result = $this->start($mode, $interface);
+
+            if ($result['success']) {
+                if ($attempt > 1) {
+                    Log::info("Snort started successfully after {$attempt} attempts (commented out " . ($attempt - 1) . " bad rules)");
+                }
+                return $result;
+            }
+
+            // Don't retry if rules file doesn't exist or max retries reached
+            if ($attempt > $maxRetries || !file_exists($rulesFile)) {
+                return $result;
+            }
+
+            // Read FULL stderr from the log file (not the truncated error string)
+            // start() only returns first 200 chars, but the actual error is at the end
+            $stderrContent = '';
+            if ($this->isWindows()) {
+                $stderrFile = $this->logDir . '\\snort_stderr.log';
+                if (file_exists($stderrFile)) {
+                    $stderrContent = file_get_contents($stderrFile);
+                }
+            } else {
+                // On Unix, check for any recent stderr temp files
+                $tmpDir = sys_get_temp_dir();
+                $stderrFiles = glob($tmpDir . '/snort_start_stderr_*.log');
+                if (!empty($stderrFiles)) {
+                    // Get the most recent one
+                    usort($stderrFiles, fn($a, $b) => filemtime($b) - filemtime($a));
+                    $stderrContent = file_get_contents($stderrFiles[0]);
+                }
+            }
+
+            // Parse error to find failing line number
+            // Snort 2 format: ERROR: ... hub_custom.rules(LINE_NUM) error message
+            // Also match: ERROR: ... hub_custom.rules(LINE_NUM): error message
+            $errorLine = null;
+            $errorMsg = '';
+            if (preg_match('/hub_custom\.rules\((\d+)\)[:\s]+(.+?)(?:\r?\n|$)/i', $stderrContent, $match)) {
+                $errorLine = (int) $match[1];
+                $errorMsg = trim($match[2]);
+            }
+
+            if ($errorLine) {
+                Log::info("Snort startup retry: commenting out line {$errorLine}", [
+                    'attempt' => $attempt,
+                    'error' => $errorMsg,
+                ]);
+
+                // Comment out the offending line
+                $lines = file($rulesFile, FILE_IGNORE_NEW_LINES);
+                if (isset($lines[$errorLine - 1])) {
+                    $lines[$errorLine - 1] = '# [auto-disabled] ' . $lines[$errorLine - 1];
+                    file_put_contents($rulesFile, implode("\n", $lines));
+                    continue; // Retry with fixed rules
+                }
+            }
+
+            // No parseable error line — return the failure
+            Log::warning('Snort startWithRetry: could not parse error line from stderr', [
+                'attempt' => $attempt,
+                'stderr_length' => strlen($stderrContent),
+                'stderr_tail' => substr($stderrContent, -500),
+            ]);
+            return $result;
+        }
+
+        return ['success' => false, 'error' => 'Max retries exceeded'];
+    }
+
+    /**
+     * Convert rule actions for IPS mode: alert → drop.
+     *
+     * In IDS mode, rules only generate alerts. In IPS mode, rules should
+     * actively block traffic by using the 'drop' action.
+     */
+    public function applyIpsMode(string $rulesContent): string
+    {
+        $lines = explode("\n", $rulesContent);
+        $converted = 0;
+
+        foreach ($lines as &$line) {
+            $trimmed = trim($line);
+            // Skip comments and blank lines
+            if (empty($trimmed) || $trimmed[0] === '#') {
+                continue;
+            }
+            // Convert alert → drop (preserve other actions like pass, reject)
+            if (preg_match('/^alert\s/', $trimmed)) {
+                $line = preg_replace('/^alert\s/', 'drop ', $trimmed);
+                $converted++;
+            }
+        }
+        unset($line);
+
+        if ($converted > 0) {
+            Log::info("IPS mode: converted {$converted} alert rules to drop");
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
      * Ensure a valid Snort config file exists.
      * If no config is found, generate a minimal working config.
      */
