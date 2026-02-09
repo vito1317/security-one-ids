@@ -12,6 +12,7 @@ class WafSyncService
     protected string $wafUrl;
     protected string $agentToken;
     protected string $agentName;
+    protected bool $codeUpdated = false;
 
     public function __construct()
     {
@@ -1095,6 +1096,13 @@ class WafSyncService
     private function syncSnortRules(string $hubHash): void
     {
         try {
+            // After a code update, PHP still has old classes in memory.
+            // Skip rule sync this cycle — next execution will use fresh code.
+            if ($this->codeUpdated) {
+                Log::info('Skipping rule sync — code was just updated, will sync with fresh code next cycle');
+                return;
+            }
+
             $snort = app(\App\Services\Detection\SnortEngine::class);
             if (!$snort->isInstalled()) {
                 return;
@@ -2351,6 +2359,10 @@ class WafSyncService
             $newVersion = config('ids.version') ?? '1.0.0';
             
             Log::info('IDS update completed successfully', ['new_version' => $newVersion]);
+            
+            // Mark that code was updated — skip rule sync in this cycle
+            // because PHP still has old classes in memory
+            $this->codeUpdated = true;
             
             // Report "completed" status to WAF Hub with new version
             $this->reportUpdateStatus('completed', $newVersion);
