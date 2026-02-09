@@ -1161,11 +1161,16 @@ class WafSyncService
 
             $rulesPath = $snort->getDetectedRulesDir() . '/hub_custom.rules';
 
-            // Convert rules for Snort 3 compatibility if needed
+            // Convert/validate rules for platform compatibility
             if (!$snort->isSnort2()) {
                 $conversion = $snort->convertRulesForSnort3($rulesContent);
                 $rulesContent = $conversion['content'];
                 $ruleCount = $conversion['stats']['kept_as_is'] + $conversion['stats']['converted'];
+            } else {
+                // Snort 2: validate rules to catch syntax issues that would crash startup
+                $validation = $snort->validateRulesForSnort2($rulesContent);
+                $rulesContent = $validation['content'];
+                $ruleCount = $validation['stats']['kept'];
             }
 
             file_put_contents($rulesPath, $rulesContent);

@@ -1907,4 +1907,84 @@ RULES;
             'stats' => $stats,
         ];
     }
+
+    /**
+     * Validate and clean rules for Snort 2 compatibility.
+     *
+     * Snort 2's parser is strict about certain syntax that might be
+     * present in community or custom rules. This method comments out
+     * rules that would cause Snort 2 to crash on startup.
+     *
+     * @return array{content: string, stats: array}
+     */
+    public function validateRulesForSnort2(string $rulesContent): array
+    {
+        $lines = explode("\n", $rulesContent);
+        $result = [];
+        $removed = 0;
+        $kept = 0;
+
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
+
+            // Pass through comments and blank lines
+            if (empty($trimmed) || $trimmed[0] === '#') {
+                $result[] = $line;
+                continue;
+            }
+
+            // Only validate actual rules
+            if (!preg_match('/^(alert|drop|pass|reject|log|sdrop)\s/', $trimmed)) {
+                $result[] = $line;
+                continue;
+            }
+
+            // Check for malformed hex: unmatched pipe characters in content
+            // Snort uses |XX XX| for hex — odd pipe count = unterminated hex
+            $skip = false;
+            if (preg_match_all('/content\s*:\s*"([^"]*)"/i', $trimmed, $matches)) {
+                foreach ($matches[1] as $val) {
+                    $pipeCount = substr_count($val, '|');
+                    if ($pipeCount % 2 !== 0) {
+                        $skip = true;
+                        break;
+                    }
+                }
+            }
+
+            // Check for content with literal semicolon (confuses parser)
+            if (preg_match('/content\s*:\s*";"\s*;/', $trimmed)) {
+                $skip = true;
+            }
+
+            // Check for Snort 3-only comma-separated content modifiers
+            // e.g. content:"foo",nocase; — Snort 2 needs content:"foo"; nocase;
+            if (preg_match('/content\s*:\s*"[^"]*"\s*,\s*(nocase|depth|offset|distance|within|fast_pattern)/', $trimmed)) {
+                $skip = true;
+            }
+
+            if ($skip) {
+                $removed++;
+                $result[] = '# [Snort2-invalid] ' . $trimmed;
+            } else {
+                $kept++;
+                $result[] = $trimmed;
+            }
+        }
+
+        $stats = [
+            'total' => $kept + $removed,
+            'kept' => $kept,
+            'removed' => $removed,
+        ];
+
+        if ($removed > 0) {
+            Log::info('Validated rules for Snort 2', $stats);
+        }
+
+        return [
+            'content' => implode("\n", $result),
+            'stats' => $stats,
+        ];
+    }
 }
