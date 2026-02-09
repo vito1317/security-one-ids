@@ -1809,9 +1809,10 @@ RULES;
             // 7. Strip Snort 2-only pcre HTTP modifiers (U, P, H, D, I, B, C, K)
             //    pcre:"/regex/Ui" → pcre:"/regex/i"
             //    Uses strrpos to reliably find the closing / delimiter
+            static $pcreDebugCount = 0;
             $rule = preg_replace_callback(
                 '/pcre\s*:\s*"(\/[^"]*)"/',
-                function ($match) {
+                function ($match) use (&$pcreDebugCount) {
                     $pcreVal = $match[1]; // e.g. /path=(https?|ftp)/Ui
                     $lastSlash = strrpos($pcreVal, '/');
                     if ($lastSlash === false || $lastSlash === 0) {
@@ -1824,7 +1825,22 @@ RULES;
                     }
                     // Remove Snort 2-only modifiers, keep standard ones (i, m, s, x, g)
                     $cleanMods = preg_replace('/[UPHDIBRCK]/', '', $mods);
-                    return 'pcre:"' . $pattern . $cleanMods . '"';
+                    $result = 'pcre:"' . $pattern . $cleanMods . '"';
+
+                    if ($pcreDebugCount < 3) {
+                        Log::info('[pcre convert debug]', [
+                            'input' => $match[0],
+                            'pcreVal' => $pcreVal,
+                            'lastSlash' => $lastSlash,
+                            'pattern' => $pattern,
+                            'mods' => $mods,
+                            'cleanMods' => $cleanMods,
+                            'result' => $result,
+                        ]);
+                        $pcreDebugCount++;
+                    }
+
+                    return $result;
                 },
                 $rule, -1, $c
             );
