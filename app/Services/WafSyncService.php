@@ -884,103 +884,71 @@ class WafSyncService
         }
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing Npcap for Windows...');
+        Log::info('[Pcap] Installing/configuring Npcap for Windows...');
 
         try {
-            // Strategy: Extract Npcap installer with 7-Zip, install driver via pnputil
-            // Npcap free edition blocks /S silent install, but the driver IS Microsoft-signed
-            // so pnputil /add-driver works without the NSIS installer
-            $script = "\$ErrorActionPreference='Stop'\r\n" .
+            $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "\r\n" .
-                "# Ensure Chocolatey is available\r\n" .
-                "if(-not(Get-Command choco -EA SilentlyContinue)){\r\n" .
-                "  Write-Output 'Installing Chocolatey...'\r\n" .
-                "  Set-ExecutionPolicy Bypass -Scope Process -Force\r\n" .
-                "  \$ErrorActionPreference='SilentlyContinue'\r\n" .
-                "  iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))\r\n" .
-                "  \$ErrorActionPreference='Stop'\r\n" .
-                "  \$env:Path=[System.Environment]::GetEnvironmentVariable('Path','Machine')+';'+[System.Environment]::GetEnvironmentVariable('Path','User')\r\n" .
+                "# Step 0: Diagnostic — check current state\r\n" .
+                "Write-Output 'DIAG_START'\r\n" .
+                "Write-Output \"Npcap dir exists: \$(Test-Path 'C:\\Windows\\System32\\Npcap')\"\r\n" .
+                "Write-Output \"wpcap System32: \$(Test-Path 'C:\\Windows\\System32\\wpcap.dll')\"\r\n" .
+                "Write-Output \"wpcap Npcap: \$(Test-Path 'C:\\Windows\\System32\\Npcap\\wpcap.dll')\"\r\n" .
+                "Write-Output \"Packet System32: \$(Test-Path 'C:\\Windows\\System32\\Packet.dll')\"\r\n" .
+                "Write-Output \"Packet Npcap: \$(Test-Path 'C:\\Windows\\System32\\Npcap\\Packet.dll')\"\r\n" .
+                "Write-Output \"wpcap Snort: \$(Test-Path 'C:\\Snort\\bin\\wpcap.dll')\"\r\n" .
+                "sc.exe query npcap 2>&1|Select-String 'STATE'|Write-Output\r\n" .
+                "sc.exe query npf 2>&1|Select-String 'STATE'|Write-Output\r\n" .
+                "\r\n" .
+                "# Step 1: Try starting npcap service (driver may already be installed)\r\n" .
+                "net start npcap 2>&1|Write-Output\r\n" .
+                "net start npf 2>&1|Write-Output\r\n" .
+                "Start-Sleep 2\r\n" .
+                "\r\n" .
+                "# Step 2: If Npcap DLLs exist in System32\\Npcap, copy to Snort\\bin and System32\r\n" .
+                "\$npcapDir='C:\\Windows\\System32\\Npcap'\r\n" .
+                "if(Test-Path \"\$npcapDir\\wpcap.dll\"){\r\n" .
+                "  Write-Output 'Found Npcap DLLs, copying to Snort and System32...'\r\n" .
+                "  Copy-Item \"\$npcapDir\\wpcap.dll\" 'C:\\Windows\\System32\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
+                "  Copy-Item \"\$npcapDir\\Packet.dll\" 'C:\\Windows\\System32\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
+                "  Copy-Item \"\$npcapDir\\wpcap.dll\" 'C:\\Snort\\bin\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
+                "  Copy-Item \"\$npcapDir\\Packet.dll\" 'C:\\Snort\\bin\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
+                "  # Add Npcap dir to system PATH if not already there\r\n" .
+                "  \$sysPath=[System.Environment]::GetEnvironmentVariable('Path','Machine')\r\n" .
+                "  if(\$sysPath -notlike \"*Npcap*\"){\r\n" .
+                "    [System.Environment]::SetEnvironmentVariable('Path',\$sysPath+';'+\$npcapDir,'Machine')\r\n" .
+                "    \$env:Path=\$env:Path+';'+\$npcapDir\r\n" .
+                "    Write-Output 'Added Npcap to system PATH'\r\n" .
+                "  }\r\n" .
                 "}\r\n" .
                 "\r\n" .
-                "# Ensure 7-Zip is available for extraction\r\n" .
-                "if(-not(Get-Command 7z -EA SilentlyContinue)){\r\n" .
-                "  \$ErrorActionPreference='SilentlyContinue'\r\n" .
-                "  choco install 7zip.portable -y --no-progress 2>&1|Write-Output\r\n" .
-                "  \$ErrorActionPreference='Stop'\r\n" .
-                "  \$env:Path=[System.Environment]::GetEnvironmentVariable('Path','Machine')+';'+[System.Environment]::GetEnvironmentVariable('Path','User')\r\n" .
-                "}\r\n" .
+                "# Step 3: Verify after DLL copy\r\n" .
+                "\$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "Write-Output \"SNORT_W:\$w\"\r\n" .
+                "if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
                 "\r\n" .
-                "# Download Npcap\r\n" .
+                "# Step 4: If DLLs don't exist, try full install via Npcap /S\r\n" .
+                "Write-Output 'STRATEGY:npcap_silent'\r\n" .
                 "\$npcapExe=\"\$env:TEMP\\npcap-1.87.exe\"\r\n" .
                 "if(-not(Test-Path \$npcapExe)){\r\n" .
                 "  Write-Output 'Downloading Npcap 1.87...'\r\n" .
                 "  (New-Object Net.WebClient).DownloadFile('https://npcap.com/dist/npcap-1.87.exe',\$npcapExe)\r\n" .
                 "}\r\n" .
-                "\$sz=(Get-Item \$npcapExe).Length; Write-Output \"DL:\$sz\"\r\n" .
-                "if(\$sz -lt 500000){Write-Output 'DL_TOO_SMALL'; exit 1}\r\n" .
-                "\r\n" .
-                "# Strategy 1: Extract with 7z and install driver via pnputil\r\n" .
-                "Write-Output 'STRATEGY:extract_pnputil'\r\n" .
-                "\$extractDir=\"\$env:TEMP\\npcap_extracted\"\r\n" .
-                "if(Test-Path \$extractDir){Remove-Item \$extractDir -Recurse -Force}\r\n" .
-                "\r\n" .
-                "\$7zPath = \$null\r\n" .
-                "if(Get-Command 7z -EA SilentlyContinue){\$7zPath='7z'}\r\n" .
-                "elseif(Test-Path 'C:\\ProgramData\\chocolatey\\tools\\7z.exe'){\$7zPath='C:\\ProgramData\\chocolatey\\tools\\7z.exe'}\r\n" .
-                "elseif(Test-Path 'C:\\ProgramData\\chocolatey\\lib\\7zip.portable\\tools\\7z.exe'){\$7zPath='C:\\ProgramData\\chocolatey\\lib\\7zip.portable\\tools\\7z.exe'}\r\n" .
-                "elseif(Test-Path 'C:\\Program Files\\7-Zip\\7z.exe'){\$7zPath='C:\\Program Files\\7-Zip\\7z.exe'}\r\n" .
-                "\r\n" .
-                "if(\$7zPath){\r\n" .
-                "  Write-Output \"Using 7z: \$7zPath\"\r\n" .
-                "  & \$7zPath x \$npcapExe \"-o\$extractDir\" -y 2>&1|Write-Output\r\n" .
-                "  \r\n" .
-                "  # Find and install driver INF files\r\n" .
-                "  \$infs = Get-ChildItem -Path \$extractDir -Recurse -Filter '*.inf' -EA SilentlyContinue\r\n" .
-                "  Write-Output \"Found INF files: \$(\$infs.Count)\"\r\n" .
-                "  foreach(\$inf in \$infs){\r\n" .
-                "    Write-Output \"Installing driver: \$(\$inf.FullName)\"\r\n" .
-                "    \$ErrorActionPreference='SilentlyContinue'\r\n" .
-                "    pnputil /add-driver \$inf.FullName /install 2>&1|Write-Output\r\n" .
-                "    \$ErrorActionPreference='Stop'\r\n" .
-                "  }\r\n" .
-                "  \r\n" .
-                "  # Copy DLLs to System32 (wpcap.dll, Packet.dll — needed by Snort)\r\n" .
-                "  \$dlls = Get-ChildItem -Path \$extractDir -Recurse -Include 'wpcap.dll','Packet.dll','npcap.dll' -EA SilentlyContinue\r\n" .
-                "  foreach(\$dll in \$dlls){\r\n" .
-                "    Write-Output \"Copying DLL: \$(\$dll.Name)\"\r\n" .
-                "    Copy-Item \$dll.FullName \"C:\\Windows\\System32\\\" -Force -EA SilentlyContinue\r\n" .
-                "  }\r\n" .
-                "  \r\n" .
-                "  # Also copy to Npcap directory\r\n" .
-                "  \$npcapDir='C:\\Windows\\System32\\Npcap'\r\n" .
-                "  if(-not(Test-Path \$npcapDir)){New-Item \$npcapDir -ItemType Directory -Force|Out-Null}\r\n" .
-                "  Get-ChildItem -Path \$extractDir -Recurse -Include '*.dll','*.sys' -EA SilentlyContinue|ForEach-Object{\r\n" .
-                "    Copy-Item \$_.FullName \$npcapDir -Force -EA SilentlyContinue\r\n" .
-                "  }\r\n" .
-                "  \r\n" .
-                "  # Try starting the service\r\n" .
-                "  \$ErrorActionPreference='SilentlyContinue'\r\n" .
-                "  sc.exe create npcap type=kernel start=auto binPath=\"C:\\Windows\\System32\\drivers\\npcap.sys\" 2>&1|Write-Output\r\n" .
-                "  net start npcap 2>&1|Write-Output\r\n" .
-                "  net start npf 2>&1|Write-Output\r\n" .
-                "  Start-Sleep 3\r\n" .
-                "  \r\n" .
-                "  # Verify\r\n" .
-                "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
-                "  Write-Output \"SNORT_W:\$w\"\r\n" .
-                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "  Write-Output 'EXTRACT_NO_INTERFACE'\r\n" .
-                "}\r\n" .
-                "\r\n" .
-                "# Strategy 2: Direct Npcap /S attempt (may work on some configs)\r\n" .
-                "Write-Output 'STRATEGY:npcap_silent'\r\n" .
-                "\$ErrorActionPreference='SilentlyContinue'\r\n" .
-                "\$p=Start-Process \$npcapExe -ArgumentList '/S','/winpcap_mode=yes','/loopback_support=yes' -Wait -PassThru\r\n" .
+                "\$p=Start-Process \$npcapExe -ArgumentList '/S','/winpcap_mode=yes','/loopback_support=yes','/npf_startup=yes' -Wait -PassThru\r\n" .
                 "Write-Output \"EXIT:\$(\$p.ExitCode)\"\r\n" .
                 "Start-Sleep 5\r\n" .
                 "net start npcap 2>&1|Write-Output\r\n" .
                 "net start npf 2>&1|Write-Output\r\n" .
+                "\r\n" .
+                "# Copy DLLs again after install attempt\r\n" .
+                "if(Test-Path \"\$npcapDir\\wpcap.dll\"){\r\n" .
+                "  Copy-Item \"\$npcapDir\\wpcap.dll\" 'C:\\Windows\\System32\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
+                "  Copy-Item \"\$npcapDir\\Packet.dll\" 'C:\\Windows\\System32\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
+                "  Copy-Item \"\$npcapDir\\wpcap.dll\" 'C:\\Snort\\bin\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
+                "  Copy-Item \"\$npcapDir\\Packet.dll\" 'C:\\Snort\\bin\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
+                "}\r\n" .
+                "\r\n" .
                 "\$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
                 "Write-Output \"SNORT_W:\$w\"\r\n" .
                 "if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'}else{Write-Output 'PCAP_FAIL'}\r\n";
