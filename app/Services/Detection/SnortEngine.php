@@ -1101,16 +1101,24 @@ LUA;
         // Don't specify fields — Snort 3 default fields include all necessary info
         $cmd .= " --lua 'alert_json = { file = true, limit = 100 }'";
 
-    // Load rules files
-    $rulesDir = $this->detectRulesDir();
-    $hubRules = $rulesDir . '/hub_custom.rules';
-    $localRules = $rulesDir . '/local.rules';
-    if (file_exists($hubRules)) {
-        $cmd .= " -R {$hubRules}";
-    }
-    if (file_exists($localRules)) {
-        $cmd .= " -R {$localRules}";
-    }
+        // Load rules files
+        $rulesDir = $this->detectRulesDir();
+        $localRules = $rulesDir . '/local.rules';
+
+        // Hub rules are Snort 2 format — only load on Snort 2 systems
+        // Snort 3 uses built-in community rules + local.rules only
+        if ($this->isSnort2()) {
+            $hubRules = $rulesDir . '/hub_custom.rules';
+            if (file_exists($hubRules)) {
+                $cmd .= " -R {$hubRules}";
+            }
+        }
+
+        // Always load local.rules (contains Snort 3 compatible test/custom rules)
+        $this->ensureLocalRules($rulesDir);
+        if (file_exists($localRules)) {
+            $cmd .= " -R {$localRules}";
+        }
 
         if ($mode === 'ips') {
             // -Q (inline) requires DAQ support (afpacket/nfq) which only works on Linux
@@ -1518,5 +1526,31 @@ LUA;
         } catch (\Exception $e) {
             return [];
         }
+    }
+    /**
+     * Ensure local.rules exists with at least a test rule (Snort 3 compatible)
+     */
+    private function ensureLocalRules(string $rulesDir): void
+    {
+        $localRules = $rulesDir . '/local.rules';
+        if (file_exists($localRules) && filesize($localRules) > 50) {
+            return; // Already has content
+        }
+
+        if (!is_dir($rulesDir)) {
+            @mkdir($rulesDir, 0755, true);
+        }
+
+        // Write Snort 3 compatible test rules
+        $rules = <<<'RULES'
+# Security One IDS - Local Rules (Snort 3 compatible)
+# Test rule: triggers on any ICMP traffic (ping)
+alert icmp any any -> any any (msg:"Security One IDS Test - ICMP Detected"; sid:1000001; rev:1;)
+# Test rule: triggers on HTTP response containing "uid=0(root)"
+alert tcp any any -> any any (msg:"Security One IDS Test - Root UID Response"; content:"uid=0(root)"; sid:1000002; rev:1;)
+RULES;
+
+        file_put_contents($localRules, $rules);
+        Log::info('Created local.rules with test rules', ['path' => $localRules]);
     }
 }
