@@ -122,7 +122,21 @@ class SnortEngine
         }
 
         if ($this->isRunning()) {
-            return ['success' => true, 'message' => 'Snort is already running'];
+            // One-time fix: if Snort 3 is running but alert_json.txt doesn't exist,
+            // it's using old config without file=true. Restart to pick up --lua flag.
+            $restartMarker = storage_path('app/snort_alert_restart_done.txt');
+            if (!$this->isSnort2()
+                && !file_exists($this->alertLogPath)
+                && !file_exists($restartMarker)
+            ) {
+                Log::info('Snort running without alert file output, restarting with --lua alert_json config');
+                file_put_contents($restartMarker, date('c'));
+                $this->stop();
+                sleep(2);
+                // Fall through to start with new --lua config
+            } else {
+                return ['success' => true, 'message' => 'Snort is already running'];
+            }
         }
 
         $interface = $interface ?? $this->detectDefaultInterface();
@@ -984,8 +998,10 @@ LUA;
         $cmd .= " -l {$this->logDir}";
         $cmd .= " --alert-before-pass";
 
-        // JSON alert output
-        $cmd .= " -A alert_json";
+        // JSON alert output — use --lua to force file=true
+        // Without file=true, alerts go to stdout (lost when daemonized with -D)
+        $alertFields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority';
+        $cmd .= " --lua 'alert_json = { file = true, limit = 100, fields = \"" . $alertFields . "\" }'";
 
         if ($mode === 'ips') {
             // -Q (inline) requires DAQ support (afpacket/nfq) which only works on Linux
