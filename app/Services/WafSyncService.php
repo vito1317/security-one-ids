@@ -1158,11 +1158,9 @@ class WafSyncService
             $hashPath = storage_path('app/snort_rules_hash.txt');
             file_put_contents($hashPath, $data['rules_hash'] ?? $hubHash);
 
-            // Restart Snort to pick up new rules (stop+start needed for -R flag changes)
+            // Reload Snort to pick up new rules (avoid full restart loop)
             if ($snort->isRunning()) {
-                $snort->stop();
-                sleep(2);
-                $snort->start();
+                $snort->reload();
             }
 
             Log::info("Synced {$ruleCount} Snort rules from Hub");
@@ -1309,18 +1307,22 @@ class WafSyncService
                     continue;
                 }
 
-                // Map Snort alert fields to Hub format
+            // Map Snort alert fields to Hub format
                 $sourceIp = $decoded['src_addr'] ?? null;
                 if (!$sourceIp) {
-                    // Try alternate field names
-                    $sourceIp = $decoded['src_ap'] ?? null;
-                    if ($sourceIp && str_contains($sourceIp, ':')) {
-                        $sourceIp = explode(':', $sourceIp)[0];
+                    // Try alternate field names — src_ap is "ip:port" format
+                    $srcAp = $decoded['src_ap'] ?? null;
+                    if ($srcAp) {
+                        // Handle IPv6 (e.g. "fe80::ce4:81e4:e3b9:8916:0") and IPv4 ("1.2.3.4:80")
+                        // Port is always the last ":number" segment
+                        $sourceIp = preg_replace('/:\d+$/', '', $srcAp);
                     }
                 }
 
-                if (!$sourceIp || !filter_var($sourceIp, FILTER_VALIDATE_IP)) {
-                    continue;
+                // Accept both IPv4 and IPv6
+                if (!$sourceIp || (!filter_var($sourceIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && !filter_var($sourceIp, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6))) {
+                    // Still try to process — use raw src_ap if available
+                    $sourceIp = $sourceIp ?: ($decoded['src_ap'] ?? 'unknown');
                 }
 
                 $priority = (int) ($decoded['priority'] ?? 3);
@@ -1338,6 +1340,16 @@ class WafSyncService
                 $proto = $decoded['proto'] ?? $decoded['protocol'] ?? 'unknown';
                 $destIp = $decoded['dst_addr'] ?? null;
                 $destPort = $decoded['dst_port'] ?? null;
+                if (!$destIp) {
+                    $dstAp = $decoded['dst_ap'] ?? null;
+                    if ($dstAp) {
+                        // Extract port (last :number) and IP
+                        if (preg_match('/:(\d+)$/', $dstAp, $portMatch)) {
+                            $destPort = $destPort ?? $portMatch[1];
+                        }
+                        $destIp = preg_replace('/:\d+$/', '', $dstAp);
+                    }
+                }
 
                 $newAlerts[] = [
                     'source_ip' => $sourceIp,
