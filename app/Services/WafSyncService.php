@@ -408,6 +408,19 @@ class WafSyncService
                 $snort = new \App\Services\Detection\SnortEngine();
             }
 
+            // Fix: if Snort 3 is running but not writing alert files, restart with --lua config
+            if ($snort->isRunning() && !$snort->isSnort2()) {
+                $alertFile = $snort->getAlertLogPath();
+                $restartMarker = storage_path('app/snort_alert_restart_done.txt');
+                if (!file_exists($alertFile) && !file_exists($restartMarker)) {
+                    Log::info('Snort 3 running without alert file output, restarting with --lua alert_json config');
+                    file_put_contents($restartMarker, date('c'));
+                    $snort->stop();
+                    sleep(2);
+                    // Fall through to start with new --lua config below
+                }
+            }
+
             // Start Snort if not running
             if (!$snort->isRunning()) {
                 // Ensure Npcap is installed on Windows before trying to start
