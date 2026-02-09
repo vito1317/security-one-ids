@@ -1192,6 +1192,17 @@ class WafSyncService
                 return;
             }
 
+            // Fix permissions if file exists but is not readable (Snort runs as root)
+            if (!is_readable($alertLogPath) && PHP_OS_FAMILY !== 'Windows') {
+                $logDir = dirname($alertLogPath);
+                Process::run("sudo chmod -R o+rX {$logDir} 2>/dev/null");
+                clearstatcache(true, $alertLogPath);
+                if (!is_readable($alertLogPath)) {
+                    Log::warning('Snort alert log exists but is not readable', ['path' => $alertLogPath]);
+                    return;
+                }
+            }
+
             // Track file position to avoid resending alerts
             $positionFile = storage_path('app/snort_alert_position.txt');
             $lastPosition = 0;

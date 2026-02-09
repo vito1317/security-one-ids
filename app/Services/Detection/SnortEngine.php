@@ -221,6 +221,8 @@ class SnortEngine
                     if (str_contains($checkResult->output(), 'running')) {
                         // Update our PID file with the real daemon PID
                         file_put_contents($this->pidFile, $daemonPid);
+                        // Fix log dir permissions so non-root PHP agent can read alerts
+                        $this->fixLogPermissions();
                         Log::info('Snort daemon started successfully', [
                             'platform' => PHP_OS_FAMILY,
                             'daemon_pid' => $daemonPid,
@@ -233,6 +235,7 @@ class SnortEngine
 
             // Fallback: check process list
             if ($this->isRunning()) {
+                $this->fixLogPermissions();
                 Log::info('Snort started successfully', ['platform' => PHP_OS_FAMILY]);
                 @unlink($stderrFile ?? '');
                 return ['success' => true, 'message' => "Snort started in {$mode} mode"];
@@ -240,7 +243,17 @@ class SnortEngine
 
             // Start failed — capture error output for debugging
             $errorOutput = '';
-            if (isset($stderrFile) && file_exists($stderrFile)) {
+            if ($this->isWindows()) {
+                // Windows: read the stderr redirect file
+                $winErrFile = $this->logDir . '\\snort_stderr.log';
+                if (file_exists($winErrFile)) {
+                    $errorOutput = file_get_contents($winErrFile);
+                }
+                $winOutFile = $this->logDir . '\\snort_stdout.log';
+                if (empty($errorOutput) && file_exists($winOutFile)) {
+                    $errorOutput = file_get_contents($winOutFile);
+                }
+            } elseif (isset($stderrFile) && file_exists($stderrFile)) {
                 $errorOutput = file_get_contents($stderrFile);
                 @unlink($stderrFile);
             }
@@ -249,7 +262,7 @@ class SnortEngine
                 'platform' => PHP_OS_FAMILY,
                 'exit_code' => $result->exitCode(),
                 'stdout' => substr($stdOutput, 0, 500),
-                'stderr' => substr($errorOutput, 0, 500),
+                'stderr' => substr($errorOutput, 0, 1000),
             ]);
 
             return ['success' => false, 'error' => 'Snort started but not running: ' . substr($errorOutput ?: $stdOutput, 0, 200)];
@@ -1285,6 +1298,25 @@ LUA;
     private function isWindows(): bool
     {
         return PHP_OS_FAMILY === 'Windows';
+    }
+
+    /**
+     * Fix log directory permissions so non-root PHP agent can read alert files.
+     * Snort runs as root (needed for pcap), creating root-owned files.
+     */
+    private function fixLogPermissions(): void
+    {
+        if ($this->isWindows()) {
+            return; // Windows doesn't have this issue
+        }
+
+        try {
+            // Make log directory and all files world-readable
+            Process::run("sudo chmod -R o+rX {$this->logDir} 2>/dev/null");
+            Log::debug('Fixed Snort log permissions', ['dir' => $this->logDir]);
+        } catch (\Exception $e) {
+            Log::debug('Could not fix log permissions: ' . $e->getMessage());
+        }
     }
 
     private function isProcessRunning(int $pid): bool
