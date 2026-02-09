@@ -1147,6 +1147,11 @@ class WafSyncService
 
             $rulesPath = $snort->getDetectedRulesDir() . '/hub_custom.rules';
 
+            // If Snort 3: filter out incompatible Snort 2-only rules
+            if (!$snort->isSnort2()) {
+                $rulesContent = $snort->filterRulesForSnort3($rulesContent);
+            }
+
             file_put_contents($rulesPath, $rulesContent);
 
             // Store the new hash locally

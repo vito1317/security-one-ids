@@ -1094,13 +1094,10 @@ LUA;
         $rulesDir = $this->detectRulesDir();
         $localRules = $rulesDir . '/local.rules';
 
-        // Hub rules are Snort 2 format — only load on Snort 2 systems
-        // Snort 3 uses built-in community rules + local.rules only
-        if ($this->isSnort2()) {
-            $hubRules = $rulesDir . '/hub_custom.rules';
-            if (file_exists($hubRules)) {
-                $cmd .= " -R {$hubRules}";
-            }
+        // Load rules files — Hub rules are filtered for compatibility during sync
+        $hubRules = $rulesDir . '/hub_custom.rules';
+        if (file_exists($hubRules) && filesize($hubRules) > 0) {
+            $cmd .= " -R {$hubRules}";
         }
 
         // Always load local.rules (contains Snort 3 compatible test/custom rules)
@@ -1541,5 +1538,87 @@ RULES;
 
         file_put_contents($localRules, $rules);
         Log::info('Created local.rules with test rules', ['path' => $localRules]);
+    }
+
+    /**
+     * Filter Hub rules to remove Snort 2-only keywords incompatible with Snort 3.
+     * Returns filtered rules text with only Snort 3-compatible rules.
+     */
+    public function filterRulesForSnort3(string $rulesContent): string
+    {
+        $lines = explode("\n", $rulesContent);
+        $filtered = [];
+        $removed = 0;
+        $kept = 0;
+
+        // Snort 2 keywords that cause FATAL errors in Snort 3
+        $incompatiblePatterns = [
+            '/\buricontent\s*:/',           // Removed in Snort 3 (use content + http_uri)
+            '/\burilen\s*:/',               // Removed in Snort 3
+            '/\bbase_protect\b/',           // Snort 2 preprocessor-specific
+            '/\bftpbounce\b/',              // Removed preprocessor keyword
+            '/\basn1\s*:/',                 // Removed in Snort 3
+            '/\bcvs\s*:/',                  // Removed in Snort 3
+        ];
+
+        // Snort 2 variables that don't exist in Snort 3 default config
+        $incompatibleVars = [
+            '$SHELLCODE_PORTS',
+            '$AIM_SERVERS',
+            '$ORACLE_PORTS',
+        ];
+
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
+
+            // Keep comments and empty lines
+            if (empty($trimmed) || $trimmed[0] === '#') {
+                $filtered[] = $line;
+                continue;
+            }
+
+            // Only process actual rule lines (alert, drop, pass, etc.)
+            if (!preg_match('/^(alert|drop|pass|reject|log|sdrop)\s/', $trimmed)) {
+                $filtered[] = $line;
+                continue;
+            }
+
+            $skip = false;
+
+            // Check for incompatible keywords
+            foreach ($incompatiblePatterns as $pattern) {
+                if (preg_match($pattern, $trimmed)) {
+                    $skip = true;
+                    break;
+                }
+            }
+
+            // Check for incompatible variables
+            if (!$skip) {
+                foreach ($incompatibleVars as $var) {
+                    if (str_contains($trimmed, $var)) {
+                        $skip = true;
+                        break;
+                    }
+                }
+            }
+
+            if ($skip) {
+                $removed++;
+                // Comment out the rule with a reason
+                $filtered[] = '# [Snort3-incompatible] ' . $line;
+            } else {
+                $kept++;
+                $filtered[] = $line;
+            }
+        }
+
+        Log::info('Filtered Hub rules for Snort 3 compatibility', [
+            'total' => $kept + $removed,
+            'kept' => $kept,
+            'removed' => $removed,
+        ]);
+
+        return implode("\n", $filtered);
     }
 }
