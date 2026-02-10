@@ -178,7 +178,10 @@ class SnortEngine
 
                     if (preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $retryOutput)) {
                         Log::info('Npcap services started successfully, interfaces now available');
-                        // Services started OK — continue with the start flow
+                        // Re-detect interface now that Npcap is running
+                        $this->cachedInterface = null;
+                        $interface = $this->detectDefaultInterface();
+                        Log::info('Re-detected interface after Npcap start', ['interface' => $interface]);
                     } else {
                         // Invalidate Npcap cache so ensureNpcapInstalled() retries
                         @unlink(storage_path('app/pcap_ok_v3.txt'));
@@ -1636,6 +1639,7 @@ LUA;
                 // Parse the interface list — look for an adapter with an IP address
                 // Format: "1  \Device\NPF_...   192.168.1.x   Description"
                 if (preg_match_all('/^\s*(\d+)\s+\S+\s+(\d+\.\d+\.\d+\.\d+)/m', $output, $matches)) {
+                    $firstAvailableIndex = $matches[1][0] ?? null;
                     foreach ($matches[2] as $idx => $ip) {
                         // Skip loopback, zero, and link-local (169.254.x.x) IPs
                         if ($ip !== '0.0.0.0' && $ip !== '127.0.0.1' && !str_starts_with($ip, '169.254.')) {
@@ -1646,6 +1650,14 @@ LUA;
                             $this->cachedInterface = $matches[1][$idx];
                             return $this->cachedInterface;
                         }
+                    }
+                    // No interface with a routable IP — use first available interface
+                    if ($firstAvailableIndex !== null) {
+                        Log::info('No routable IP found, using first available interface', [
+                            'index' => $firstAvailableIndex,
+                        ]);
+                        $this->cachedInterface = $firstAvailableIndex;
+                        return $this->cachedInterface;
                     }
                 }
                 // No interfaces found — likely Npcap not installed
