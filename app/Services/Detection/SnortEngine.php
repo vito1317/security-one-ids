@@ -163,14 +163,32 @@ class SnortEngine
                     'output_preview' => substr($output, 0, 500),
                 ]);
                 if (!preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $output)) {
-                    // Invalidate Npcap cache so ensureNpcapInstalled() retries
-                    @unlink(storage_path('app/pcap_ok_v3.txt'));
-                    @unlink(storage_path('app/npcap_attempt_v2.txt'));
-                    return [
-                        'success' => false,
-                        'error' => 'No network interfaces found. Please install Npcap from https://npcap.com and restart the system.',
-                        'snort_w_output' => substr($output, 0, 500),
-                    ];
+                    // Try starting Npcap services before giving up
+                    Log::info('No interfaces found, attempting to start Npcap services...');
+                    Process::timeout(10)->run('net start npcap 2>&1');
+                    Process::timeout(10)->run('net start npf 2>&1');
+                    sleep(2);
+
+                    // Re-check interfaces after service start
+                    $retryResult = Process::timeout(10)->run('"' . $this->snortPath . '" -W 2>&1');
+                    $retryOutput = $retryResult->output();
+                    Log::debug('snort -W retry after service start', [
+                        'output_preview' => substr($retryOutput, 0, 500),
+                    ]);
+
+                    if (preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $retryOutput)) {
+                        Log::info('Npcap services started successfully, interfaces now available');
+                        // Services started OK — continue with the start flow
+                    } else {
+                        // Invalidate Npcap cache so ensureNpcapInstalled() retries
+                        @unlink(storage_path('app/pcap_ok_v3.txt'));
+                        @unlink(storage_path('app/npcap_attempt_v2.txt'));
+                        return [
+                            'success' => false,
+                            'error' => 'No network interfaces found. Please install Npcap from https://npcap.com and restart the system.',
+                            'snort_w_output' => substr($retryOutput, 0, 500),
+                        ];
+                    }
                 }
             } catch (\Exception $e) {
                 // Continue with attempt

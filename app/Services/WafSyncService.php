@@ -44,6 +44,9 @@ class WafSyncService
                 $http = $http->withOptions([
                     'verify' => $cacertPath,
                 ]);
+            } else {
+                // No cacert.pem found — disable SSL verification as fallback
+                $http = $http->withoutVerifying();
             }
         }
         
@@ -1177,7 +1180,7 @@ class WafSyncService
             // Determine Snort version to request version-specific rules from Hub
             $snortVersion = $snort->isSnort2() ? '2' : '3';
 
-            $response = \Illuminate\Support\Facades\Http::timeout(120)
+            $response = $this->getHttpClient(120)
                 ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
                 ->get("{$this->wafUrl}/api/ids/agents/snort-rules", [
                     'token' => $this->agentToken,
@@ -1682,7 +1685,7 @@ class WafSyncService
             $totalImported = 0;
 
             foreach ($batches as $batch) {
-                $response = \Illuminate\Support\Facades\Http::timeout(60)
+                $response = $this->getHttpClient(60)
                     ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
                     ->post("{$this->wafUrl}/api/ids/agents/snort-rules/upload", [
                         'token' => $this->agentToken,
@@ -1723,7 +1726,7 @@ class WafSyncService
                 return;
             }
 
-            \Illuminate\Support\Facades\Http::timeout(10)
+            $this->getHttpClient(10)
                 ->post("{$this->wafUrl}/api/ids/agents/events", [
                     'token' => $this->agentToken,
                     'events' => [

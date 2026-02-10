@@ -35,6 +35,9 @@ class ClamavService
                 $http = $http->withOptions([
                     'verify' => $cacertPath,
                 ]);
+            } else {
+                // No cacert.pem found — disable SSL verification as fallback
+                $http = $http->withoutVerifying();
             }
         }
         
@@ -826,7 +829,7 @@ class ClamavService
                 
                 // Windows path escaping
                 $escapedPath = str_replace('/', '\\', $path);
-                $scanCmd = "powershell -Command \"& '{$clamscanPath}' -r '{$escapedPath}'\"";
+                $scanCmd = "powershell -Command \"& '{$clamscanPath}' -r '{$escapedPath}' 2>&1\"";
                 
                 Log::info('Executing Windows clamscan command', ['command' => $scanCmd]);
                 exec($scanCmd, $outputLines, $returnCode);
@@ -862,6 +865,7 @@ class ClamavService
             $scannedFiles = 0;
             $infectedCount = 0;
             $scanErrors = 0;
+            $okCount = 0;
 
             // Parse output for infected files
             $lines = explode("\n", trim($output));
@@ -869,9 +873,16 @@ class ClamavService
                 if (str_contains($line, ' FOUND')) {
                     $infected[] = trim(str_replace(' FOUND', '', $line));
                 }
-                // Look for scan summary in output
+                // Count OK lines as fallback for scanned files
+                if (str_ends_with(trim($line), ': OK') || str_ends_with(trim($line), 'OK')) {
+                    $okCount++;
+                }
+                // Look for scan summary in output (handles multiple formats)
                 if (preg_match('/Scanned files:\s*(\d+)/i', $line, $matches)) {
                     $scannedFiles = (int) $matches[1];
+                }
+                if (preg_match('/Scanned\s+(?:files|directories):\s*(\d+)/i', $line, $matches)) {
+                    $scannedFiles = max($scannedFiles, (int) $matches[1]);
                 }
                 if (preg_match('/Infected files:\s*(\d+)/i', $line, $matches)) {
                     $infectedCount = (int) $matches[1];
@@ -880,6 +891,15 @@ class ClamavService
                 if (preg_match('/Total errors:\s*(\d+)/i', $line, $matches)) {
                     $scanErrors = (int) $matches[1];
                 }
+            }
+
+            // Fallback: if summary parsing found 0 but we counted files with OK/FOUND
+            if ($scannedFiles === 0 && ($okCount > 0 || count($infected) > 0)) {
+                $scannedFiles = $okCount + count($infected);
+                Log::info('ClamAV: using line-count fallback for scanned_files', [
+                    'ok_count' => $okCount,
+                    'found_count' => count($infected),
+                ]);
             }
 
             Log::info('ClamAV scan completed', [
