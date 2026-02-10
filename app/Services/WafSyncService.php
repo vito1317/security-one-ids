@@ -992,7 +992,8 @@ class WafSyncService
                 "  # Method 3: wmic (creates process in different session)\r\n" .
                 "  if(-not(Test-Path 'C:\\Windows\\System32\\wpcap.dll')){\r\n" .
                 "    Write-Output 'Method:wmic'\r\n" .
-                "    wmic process call create \"\\\"$wpExe\\\" /S\" 2>&1|Write-Output\r\n" .
+                "    \$wmicCmd='\"'+\$wpExe+'\" /S'\r\n" .
+                "    wmic process call create \$wmicCmd 2>&1|Write-Output\r\n" .
                 "    Start-Sleep 10\r\n" .
                 "  }\r\n" .
                 "  # Check result\r\n" .
