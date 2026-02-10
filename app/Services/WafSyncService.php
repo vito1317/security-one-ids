@@ -909,14 +909,14 @@ class WafSyncService
         $attemptFile = storage_path('app/npcap_attempt_v3.txt');
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing pcap driver (v14 - reboot pending fix)...');
+        Log::info('[Pcap] Installing pcap driver (v15 - Win10Pcap MSI)...');
 
         try {
             $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "[System.Net.ServicePointManager]::ServerCertificateValidationCallback={param(\$s,\$c,\$ch,\$e) \$true}\r\n" .
                 "\r\n" .
-                "Write-Output 'PCAP_INSTALL_V14'\r\n" .
+                "Write-Output 'PCAP_INSTALL_V15'\r\n" .
                 "\r\n" .
                 "# Diagnostic\r\n" .
                 "Write-Output \"Npcap_dir:\$(Test-Path 'C:\\Windows\\System32\\Npcap')\"\r\n" .
@@ -968,7 +968,27 @@ class WafSyncService
                 "sc.exe delete npcap 2>&1|Write-Output\r\n" .
                 "sc.exe delete npf 2>&1|Write-Output\r\n" .
                 "\r\n" .
-                "# === STRATEGY: 7-Zip extract + manual driver install ===\r\n" .
+                "# === STRATEGY 1: Win10Pcap MSI silent install (WHQL certified, HVCI compatible) ===\r\n" .
+                "Write-Output 'STRATEGY:win10pcap_msi'\r\n" .
+                "\$msiUrl='http://www.win10pcap.org/download/Win10Pcap-v10.2-5002.msi'\r\n" .
+                "\$msiFile='C:\\Snort\\scripts\\Win10Pcap.msi'\r\n" .
+                "\$msiOk=Download-File \$msiUrl \$msiFile\r\n" .
+                "if(\$msiOk -and (Test-Path \$msiFile) -and (Get-Item \$msiFile).Length -gt 100000){\r\n" .
+                "  Write-Output \"msi_size:\$((Get-Item \$msiFile).Length)\"\r\n" .
+                "  Write-Output 'Installing Win10Pcap via msiexec...'\r\n" .
+                "  \$p=Start-Process msiexec -ArgumentList '/i',\$msiFile,'/quiet','/norestart','ALLUSERS=1' -Wait -PassThru -NoNewWindow\r\n" .
+                "  Write-Output \"msi_exit:\$(\$p.ExitCode)\"\r\n" .
+                "  Start-Sleep 5\r\n" .
+                "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "  Write-Output \"SNORT_MSI:\$w\"\r\n" .
+                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){\r\n" .
+                "    Remove-Item 'C:\\Snort\\scripts\\hvci_reboot_needed.txt' -Force -EA SilentlyContinue\r\n" .
+                "    Write-Output 'PCAP_OK'; exit 0\r\n" .
+                "  }\r\n" .
+                "  Write-Output 'Win10Pcap MSI did not work, trying Npcap...'\r\n" .
+                "}else{Write-Output 'Win10Pcap download failed, trying Npcap...'}\r\n" .
+                "\r\n" .
+                "# === STRATEGY 2: 7-Zip extract + manual driver install (fallback) ===\r\n" .
                 "# NSIS installers cannot run in Session 0 at all\r\n" .
                 "Write-Output 'STRATEGY:7zip_extract'\r\n" .
                 "\r\n" .
@@ -1126,13 +1146,13 @@ class WafSyncService
             $out = $r->output();
             // Don't delete — keep for diagnostics and AV whitelisting
 
-            Log::info('[Pcap] Output (v14): ' . substr($out, 0, 5000));
+            Log::info('[Pcap] Output (v15): ' . substr($out, 0, 5000));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
                 @unlink($attemptFile);
                 Log::info('[Pcap] Pcap driver installed and verified');
-                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v14)');
+                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v15)');
             } elseif (str_contains($out, 'HVCI_DISABLED') || str_contains($out, 'NEED_REBOOT')) {
                 // HVCI was blocking driver, we disabled it — need reboot
                 Log::warning('[Pcap] HVCI (Memory Integrity) was blocking Npcap driver. Rebooting to apply HVCI change...');
@@ -1146,7 +1166,7 @@ class WafSyncService
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
                     $strategy = $m[1];
                 }
-                Log::warning('[Pcap] Pcap install failed (v14)', [
+                Log::warning('[Pcap] Pcap install failed (v15)', [
                     'strategy' => $strategy,
                     'output' => substr($out, 0, 5000),
                 ]);
@@ -1154,7 +1174,7 @@ class WafSyncService
                 file_put_contents($attemptFile, 'manual_required:' . date('c'));
                 touch($attemptFile, time());
                 // Send full output to hub for debugging
-                $debugMsg = "[v14] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 3000);
+                $debugMsg = "[v15] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 3000);
                 $this->reportAgentEvent('snort_error', $debugMsg, [
                     'strategy' => $strategy,
                     'script_output' => substr($out, 0, 5000),
