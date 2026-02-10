@@ -435,9 +435,17 @@ class WafSyncService
                     $startResult = $snort->startWithRetry($mode);
                     if (!($startResult['success'] ?? false)) {
                         Log::warning('Snort start result', $startResult);
+                        $this->reportAgentEvent('error', 'Snort 啟動失敗：' . ($startResult['error'] ?? '未知錯誤'), [
+                            'platform' => PHP_OS_FAMILY,
+                            'mode' => $mode,
+                            'error' => $startResult['error'] ?? null,
+                        ]);
                     } else {
                         Log::info('Snort started successfully');
-                        $this->reportAgentEvent('snort_started', "Snort 已啟動（模式：{$mode}）");
+                        $this->reportAgentEvent('snort_started', "Snort 已啟動（模式：{$mode}）", [
+                            'platform' => PHP_OS_FAMILY,
+                            'mode' => $mode,
+                        ]);
                     }
                 }
             }
