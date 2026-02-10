@@ -912,14 +912,14 @@ class WafSyncService
         }
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing pcap driver (v5 - WinPcap first)...');
+        Log::info('[Pcap] Installing pcap driver (v6 - multi-method)...');
 
         try {
             $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "[System.Net.ServicePointManager]::ServerCertificateValidationCallback={param(\$s,\$c,\$ch,\$e) \$true}\r\n" .
                 "\r\n" .
-                "Write-Output 'PCAP_INSTALL_V5'\r\n" .
+                "Write-Output 'PCAP_INSTALL_V6'\r\n" .
                 "\r\n" .
                 "# Diagnostic\r\n" .
                 "Write-Output \"Npcap_dir:\$(Test-Path 'C:\\Windows\\System32\\Npcap')\"\r\n" .
@@ -971,33 +971,63 @@ class WafSyncService
                 "  Start-Sleep 3\r\n" .
                 "}\r\n" .
                 "\r\n" .
-                "# === STRATEGY 1: WinPcap 4.1.3 (reliable silent install, Snort 2.9 compatible) ===\r\n" .
+                "# === STRATEGY 1: WinPcap 4.1.3 ===\r\n" .
                 "Write-Output 'STRATEGY:winpcap'\r\n" .
-                "\$wpExe=\"\$env:TEMP\\WinPcap_4_1_3.exe\"\r\n" .
+                "Write-Output \"User:\$(whoami) Session:\$([System.Diagnostics.Process]::GetCurrentProcess().SessionId)\"\r\n" .
+                "\$wpExe='C:\\Snort\\scripts\\WinPcap_4_1_3.exe'\r\n" .
                 "\$ok=Download-File 'https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe' \$wpExe\r\n" .
                 "if(-not \$ok){\$ok=Download-File 'https://github.com/wireshark/winpcap/releases/download/v4.1.3/WinPcap_4_1_3.exe' \$wpExe}\r\n" .
                 "if(\$ok -and (Test-Path \$wpExe) -and (Get-Item \$wpExe).Length -gt 500000){\r\n" .
-                "  Write-Output \"WinPcap installer:\$((Get-Item \$wpExe).Length) bytes\"\r\n" .
-                "  \$p=Start-Process \$wpExe -ArgumentList '/S' -Wait -PassThru\r\n" .
-                "  Write-Output \"WinPcap EXIT:\$(\$p.ExitCode)\"\r\n" .
-                "  Start-Sleep 3\r\n" .
+                "  Write-Output \"Size:\$((Get-Item \$wpExe).Length)\"\r\n" .
+                "  # Method 1: cmd /c (avoids Start-Process Session 0 issues)\r\n" .
+                "  Write-Output 'Method:cmd'\r\n" .
+                "  \$r=cmd /c \"\$wpExe /S\" 2>&1|Out-String\r\n" .
+                "  Write-Output \"cmd_exit:\$LASTEXITCODE r:\$r\"\r\n" .
+                "  Start-Sleep 5\r\n" .
+                "  if(Test-Path 'C:\\Windows\\System32\\wpcap.dll'){Write-Output 'cmd:OK_DLL_FOUND'}\r\n" .
+                "  # Method 2: Start-Process -NoNewWindow (if cmd failed)\r\n" .
+                "  if(-not(Test-Path 'C:\\Windows\\System32\\wpcap.dll')){\r\n" .
+                "    Write-Output 'Method:start-process'\r\n" .
+                "    \$p=Start-Process \$wpExe -ArgumentList '/S' -Wait -PassThru -NoNewWindow\r\n" .
+                "    Write-Output \"sp_exit:\$(\$p.ExitCode)\"\r\n" .
+                "    Start-Sleep 5\r\n" .
+                "  }\r\n" .
+                "  # Method 3: wmic (creates process in different session)\r\n" .
+                "  if(-not(Test-Path 'C:\\Windows\\System32\\wpcap.dll')){\r\n" .
+                "    Write-Output 'Method:wmic'\r\n" .
+                "    wmic process call create \"\\\"$wpExe\\\" /S\" 2>&1|Write-Output\r\n" .
+                "    Start-Sleep 10\r\n" .
+                "  }\r\n" .
+                "  # Check result\r\n" .
                 "  net start npf 2>&1|Write-Output\r\n" .
                 "  Start-Sleep 2\r\n" .
-                "  # Copy DLLs to Snort\r\n" .
                 "  if(Test-Path 'C:\\Windows\\System32\\wpcap.dll'){\r\n" .
                 "    Copy-Item 'C:\\Windows\\System32\\wpcap.dll' 'C:\\Snort\\bin\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
                 "    Copy-Item 'C:\\Windows\\System32\\Packet.dll' 'C:\\Snort\\bin\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
-                "    Write-Output 'DLLs copied to Snort'\r\n" .
+                "    Write-Output 'DLLs_copied'\r\n" .
                 "  }\r\n" .
                 "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
-                "  Write-Output \"SNORT_W_WP:\$w\"\r\n" .
+                "  Write-Output \"SNORT_WP:\$w\"\r\n" .
                 "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "  Write-Output 'WinPcap installed but Snort still no interfaces'\r\n" .
                 "}else{\r\n" .
-                "  Write-Output 'WinPcap download failed'\r\n" .
+                "  Write-Output 'WinPcap_dl_fail'\r\n" .
                 "}\r\n" .
                 "\r\n" .
-                "# === STRATEGY 2: Npcap (fallback) ===\r\n" .
+                "# === STRATEGY 2: Chocolatey (bypasses NSIS issues) ===\r\n" .
+                "if(Get-Command choco -EA SilentlyContinue){\r\n" .
+                "  Write-Output 'STRATEGY:choco'\r\n" .
+                "  choco install winpcap -y --force 2>&1|Write-Output\r\n" .
+                "  Start-Sleep 5\r\n" .
+                "  net start npf 2>&1|Write-Output\r\n" .
+                "  if(Test-Path 'C:\\Windows\\System32\\wpcap.dll'){\r\n" .
+                "    Copy-Item 'C:\\Windows\\System32\\wpcap.dll' 'C:\\Snort\\bin\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
+                "    Copy-Item 'C:\\Windows\\System32\\Packet.dll' 'C:\\Snort\\bin\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
+                "  }\r\n" .
+                "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "# === STRATEGY 3: Npcap (last resort) ===\r\n" .
                 "Write-Output 'STRATEGY:npcap'\r\n" .
                 "\$npExe=\"\$env:TEMP\\npcap-1.80.exe\"\r\n" .
                 "\$ok=Download-File 'https://npcap.com/dist/npcap-1.80.exe' \$npExe\r\n" .
@@ -1034,19 +1064,19 @@ class WafSyncService
             $out = $r->output();
             // Don't delete — keep for diagnostics and AV whitelisting
 
-            Log::info('[Pcap] Output (v5): ' . substr($out, 0, 3000));
+            Log::info('[Pcap] Output (v6): ' . substr($out, 0, 3000));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
                 @unlink($attemptFile);
                 Log::info('[Pcap] Pcap driver installed and verified');
-                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v5)');
+                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v6)');
             } else {
                 $strategy = 'unknown';
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
                     $strategy = $m[1];
                 }
-                Log::warning('[Pcap] Pcap install failed (v5)', [
+                Log::warning('[Pcap] Pcap install failed (v6)', [
                     'strategy' => $strategy,
                     'output' => substr($out, 0, 3000),
                 ]);
@@ -1054,7 +1084,7 @@ class WafSyncService
                 file_put_contents($attemptFile, 'manual_required:' . date('c'));
                 touch($attemptFile, time());
                 // Send full output to hub for debugging
-                $debugMsg = "[v5] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 2000);
+                $debugMsg = "[v6] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 2000);
                 $this->reportAgentEvent('snort_error', $debugMsg, [
                     'strategy' => $strategy,
                     'script_output' => substr($out, 0, 3000),
