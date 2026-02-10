@@ -1411,14 +1411,17 @@ LUA;
 
         // Hub rules are converted from Snort 2→3 format during sync
         $hubRules = $rulesDir . '/hub_custom.rules';
-        if (file_exists($hubRules) && filesize($hubRules) > 0) {
+        $hasHubRules = file_exists($hubRules) && filesize($hubRules) > 0;
+        if ($hasHubRules) {
             $cmd .= " -R {$hubRules}";
         }
 
-        // Always load local.rules (contains Snort 3 compatible test/custom rules)
-        $this->ensureLocalRules($rulesDir);
-        if (file_exists($localRules)) {
-            $cmd .= " -R {$localRules}";
+        // Only load local.rules when hub_custom.rules is absent (avoids duplicate SID errors)
+        if (!$hasHubRules) {
+            $this->ensureLocalRules($rulesDir);
+            if (file_exists($localRules)) {
+                $cmd .= " -R {$localRules}";
+            }
         }
 
         if ($mode === 'ips') {
@@ -1883,9 +1886,9 @@ LUA;
         $rules = <<<'RULES'
 # Security One IDS - Local Rules (Snort 3 compatible)
 # Test rule: triggers on any ICMP traffic (ping)
-alert icmp any any -> any any (msg:"Security One IDS Test - ICMP Detected"; sid:1000001; rev:1;)
+alert icmp any any -> any any (msg:"Security One IDS Test - ICMP Detected"; sid:9999001; rev:1;)
 # Test rule: triggers on HTTP response containing "uid=0(root)"
-alert tcp any any -> any any (msg:"Security One IDS Test - Root UID Response"; content:"uid=0(root)"; sid:1000002; rev:1;)
+alert tcp any any -> any any (msg:"Security One IDS Test - Root UID Response"; content:"uid=0(root)"; sid:9999002; rev:1;)
 RULES;
 
         file_put_contents($localRules, $rules);
