@@ -979,8 +979,8 @@ class WafSyncService
                 "    Write-Output 'Getting 7z via NuGet...'\r\n" .
                 "    \$pkg='C:\\Snort\\scripts\\7z-cli.zip'\r\n" .
                 "    Remove-Item \$pkg -Force -EA SilentlyContinue\r\n" .
-                "    \$ok7=Download-File 'https://www.nuget.org/api/v2/package/7-Zip.CommandLine/18.1.0' \$pkg\r\n" .
-                "    if(-not \$ok7){\$ok7=Download-File 'https://github.com/ip7z/7zip/releases/download/24.08/7z2408-x64.msi' 'C:\\Snort\\scripts\\7z.msi'}\r\n" .
+                "    \$ok7=Download-File 'https://globalcdn.nuget.org/packages/7-zip.commandline.18.1.0.nupkg' \$pkg\r\n" .
+                "    if(-not \$ok7){\$ok7=Download-File 'https://www.nuget.org/api/v2/package/7-Zip.CommandLine/18.1.0' \$pkg}\r\n" .
                 "    if(\$ok7 -and (Test-Path \$pkg)){\r\n" .
                 "      Write-Output \"pkg_size:\$((Get-Item \$pkg).Length)\"\r\n" .
                 "      Remove-Item 'C:\\Snort\\scripts\\7z_tool' -Recurse -Force -EA SilentlyContinue\r\n" .
