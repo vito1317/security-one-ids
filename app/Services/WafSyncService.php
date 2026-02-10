@@ -978,14 +978,26 @@ class WafSyncService
                 "  Write-Output 'Installing Win10Pcap via msiexec...'\r\n" .
                 "  \$p=Start-Process msiexec -ArgumentList '/i',\$msiFile,'/quiet','/norestart','ALLUSERS=1' -Wait -PassThru -NoNewWindow\r\n" .
                 "  Write-Output \"msi_exit:\$(\$p.ExitCode)\"\r\n" .
-                "  Start-Sleep 5\r\n" .
+                "  # Check and start npf service (Win10Pcap uses 'npf' service name)\r\n" .
+                "  \$npfSvc=Get-Service -Name 'npf' -EA SilentlyContinue\r\n" .
+                "  Write-Output \"npf_status:\$(\$npfSvc.Status)\"\r\n" .
+                "  if(\$npfSvc -and \$npfSvc.Status -ne 'Running'){\r\n" .
+                "    Start-Service npf -EA SilentlyContinue\r\n" .
+                "    Start-Sleep 3\r\n" .
+                "    \$npfSvc=Get-Service -Name 'npf' -EA SilentlyContinue\r\n" .
+                "    Write-Output \"npf_after_start:\$(\$npfSvc.Status)\"\r\n" .
+                "  }\r\n" .
+                "  Start-Sleep 2\r\n" .
                 "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
                 "  Write-Output \"SNORT_MSI:\$w\"\r\n" .
                 "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){\r\n" .
                 "    Remove-Item 'C:\\Snort\\scripts\\hvci_reboot_needed.txt' -Force -EA SilentlyContinue\r\n" .
                 "    Write-Output 'PCAP_OK'; exit 0\r\n" .
                 "  }\r\n" .
-                "  Write-Output 'Win10Pcap MSI did not work, trying Npcap...'\r\n" .
+                "  # MSI installed but driver not active — NDIS filter needs reboot to bind\r\n" .
+                "  Write-Output 'Win10Pcap installed but needs reboot to activate NDIS binding'\r\n" .
+                "  Write-Output 'NEED_REBOOT'\r\n" .
+                "  exit 0\r\n" .
                 "}else{Write-Output 'Win10Pcap download failed, trying Npcap...'}\r\n" .
                 "\r\n" .
                 "# === STRATEGY 2: 7-Zip extract + manual driver install (fallback) ===\r\n" .
