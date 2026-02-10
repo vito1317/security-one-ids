@@ -909,14 +909,14 @@ class WafSyncService
         $attemptFile = storage_path('app/npcap_attempt_v3.txt');
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing pcap driver (v9 - npcap 7zip extract)...');
+        Log::info('[Pcap] Installing pcap driver (v10 - NPFInstall)...');
 
         try {
             $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "[System.Net.ServicePointManager]::ServerCertificateValidationCallback={param(\$s,\$c,\$ch,\$e) \$true}\r\n" .
                 "\r\n" .
-                "Write-Output 'PCAP_INSTALL_V9'\r\n" .
+                "Write-Output 'PCAP_INSTALL_V10'\r\n" .
                 "\r\n" .
                 "# Diagnostic\r\n" .
                 "Write-Output \"Npcap_dir:\$(Test-Path 'C:\\Windows\\System32\\Npcap')\"\r\n" .
@@ -1042,37 +1042,46 @@ class WafSyncService
                 "      Write-Output 'Packet.dll copied'\r\n" .
                 "    }\r\n" .
                 "    \r\n" .
-                "    # Step 4: Install driver - try pnputil first (proper INF install), sc.exe as fallback\r\n" .
-                "    \$infFile=\$files|Where-Object{\$_ -match '\\.inf\$'}|Select-Object -First 1\r\n" .
-                "    \$catFile=\$files|Where-Object{\$_ -match '\\.cat\$'}|Select-Object -First 1\r\n" .
+                "    # Step 4: Install NDIS filter driver\r\n" .
+                "    \$infFile=\$files|Where-Object{\$_ -match 'npcap\\.inf\$'}|Select-Object -First 1\r\n" .
+                "    \$catFile=\$files|Where-Object{\$_ -match 'npcap\\.cat\$'}|Select-Object -First 1\r\n" .
+                "    \$npfInstall=\$files|Where-Object{\$_ -match 'NPFInstall\\.exe\$'}|Select-Object -First 1\r\n" .
                 "    Write-Output \"Found_inf:\$infFile\"\r\n" .
                 "    Write-Output \"Found_cat:\$catFile\"\r\n" .
+                "    Write-Output \"Found_npfi:\$npfInstall\"\r\n" .
                 "    \r\n" .
-                "    if(\$infFile){\r\n" .
-                "      Write-Output 'Installing via pnputil (INF)...'\r\n" .
-                "      pnputil /add-driver \$infFile /install 2>&1|Write-Output\r\n" .
+                "    # Method A: Use Npcap's own NPFInstall.exe (handles NDIS binding)\r\n" .
+                "    if(\$npfInstall){\r\n" .
+                "      Write-Output 'Method_A: NPFInstall.exe'\r\n" .
+                "      # Copy NPFInstall.exe to System32\\Npcap (where it expects to run)\r\n" .
+                "      Copy-Item \$npfInstall 'C:\\Windows\\System32\\Npcap\\NPFInstall.exe' -Force\r\n" .
+                "      # Copy inf/cat/sys to System32\\Npcap too\r\n" .
+                "      if(\$infFile){Copy-Item \$infFile 'C:\\Windows\\System32\\Npcap\\' -Force}\r\n" .
+                "      if(\$catFile){Copy-Item \$catFile 'C:\\Windows\\System32\\Npcap\\' -Force}\r\n" .
+                "      Copy-Item \$drvSys 'C:\\Windows\\System32\\Npcap\\npcap.sys' -Force\r\n" .
+                "      # Also copy npcap_wfp.inf if exists\r\n" .
+                "      \$wfpInf=\$files|Where-Object{\$_ -match 'npcap_wfp\\.inf\$'}|Select-Object -First 1\r\n" .
+                "      if(\$wfpInf){Copy-Item \$wfpInf 'C:\\Windows\\System32\\Npcap\\' -Force}\r\n" .
+                "      # Run NPFInstall to bind the NDIS filter\r\n" .
+                "      &'C:\\Windows\\System32\\Npcap\\NPFInstall.exe' -n -i 2>&1|Write-Output\r\n" .
                 "      Start-Sleep 5\r\n" .
                 "    }\r\n" .
                 "    \r\n" .
-                "    # Check if driver loaded after pnputil\r\n" .
+                "    # Check service after NPFInstall\r\n" .
                 "    \$svc=Get-Service -Name 'npcap' -EA SilentlyContinue\r\n" .
-                "    if(-not \$svc){\$svc=Get-Service -Name 'npf' -EA SilentlyContinue}\r\n" .
-                "    Write-Output \"svc_after_pnp:\$(\$svc.Status)\"\r\n" .
+                "    Write-Output \"svc_npcap:\$(\$svc.Status)\"\r\n" .
                 "    \r\n" .
-                "    # Fallback: manual sc.exe registration\r\n" .
+                "    # Method B: pnputil + sc.exe if NPFInstall didn't create service\r\n" .
                 "    if(-not \$svc -or \$svc.Status -ne 'Running'){\r\n" .
-                "      if(Test-Path 'C:\\Windows\\System32\\drivers\\npcap.sys'){\r\n" .
-                "        Write-Output 'Trying sc.exe create...'\r\n" .
-                "        sc.exe create npcap type= kernel start= auto binPath= 'System32\\drivers\\npcap.sys' DisplayName= 'Npcap Packet Driver (NPCAP)' 2>&1|Write-Output\r\n" .
-                "        sc.exe start npcap 2>&1|Write-Output\r\n" .
+                "      if(\$infFile){\r\n" .
+                "        Write-Output 'Method_B: pnputil + sc.exe'\r\n" .
+                "        pnputil /add-driver \$infFile /install 2>&1|Write-Output\r\n" .
                 "        Start-Sleep 3\r\n" .
-                "        sc.exe query npcap 2>&1|Write-Output\r\n" .
-                "      }elseif(Test-Path 'C:\\Windows\\System32\\drivers\\npf.sys'){\r\n" .
-                "        Write-Output 'Trying sc.exe create npf...'\r\n" .
-                "        sc.exe create npf type= kernel start= auto binPath= 'System32\\drivers\\npf.sys' DisplayName= 'NetGroup Packet Filter Driver' 2>&1|Write-Output\r\n" .
-                "        sc.exe start npf 2>&1|Write-Output\r\n" .
-                "        Start-Sleep 3\r\n" .
-                "      }else{Write-Output 'No driver .sys found in System32\\drivers'}\r\n" .
+                "      }\r\n" .
+                "      sc.exe create npcap type= kernel start= auto binPath= 'System32\\drivers\\npcap.sys' DisplayName= 'Npcap Packet Driver (NPCAP)' 2>&1|Write-Output\r\n" .
+                "      sc.exe start npcap 2>&1|Write-Output\r\n" .
+                "      Start-Sleep 3\r\n" .
+                "      sc.exe query npcap 2>&1|Write-Output\r\n" .
                 "    }\r\n" .
                 "    \r\n" .
                 "    # Verify\r\n" .
@@ -1099,30 +1108,30 @@ class WafSyncService
             $out = $r->output();
             // Don't delete — keep for diagnostics and AV whitelisting
 
-            Log::info('[Pcap] Output (v9): ' . substr($out, 0, 3000));
+            Log::info('[Pcap] Output (v10): ' . substr($out, 0, 5000));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
                 @unlink($attemptFile);
                 Log::info('[Pcap] Pcap driver installed and verified');
-                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v9)');
+                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v10)');
             } else {
                 $strategy = 'unknown';
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
                     $strategy = $m[1];
                 }
-                Log::warning('[Pcap] Pcap install failed (v9)', [
+                Log::warning('[Pcap] Pcap install failed (v10)', [
                     'strategy' => $strategy,
-                    'output' => substr($out, 0, 3000),
+                    'output' => substr($out, 0, 5000),
                 ]);
                 // Cache failure for 24 hours
                 file_put_contents($attemptFile, 'manual_required:' . date('c'));
                 touch($attemptFile, time());
                 // Send full output to hub for debugging
-                $debugMsg = "[v9] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 2000);
+                $debugMsg = "[v10] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 3000);
                 $this->reportAgentEvent('snort_error', $debugMsg, [
                     'strategy' => $strategy,
-                    'script_output' => substr($out, 0, 3000),
+                    'script_output' => substr($out, 0, 5000),
                 ]);
             }
         } catch (\Exception $e) {
