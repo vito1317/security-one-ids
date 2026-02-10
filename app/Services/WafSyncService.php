@@ -1136,7 +1136,7 @@ class WafSyncService
                 // Don't cache failure — after reboot, try again immediately
                 @unlink($attemptFile);
                 // Trigger reboot
-                $this->handleReboot();
+                $this->handleSystemReboot();
             } else {
                 $strategy = 'unknown';
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
