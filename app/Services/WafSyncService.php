@@ -439,6 +439,7 @@ class WafSyncService
                             'platform' => PHP_OS_FAMILY,
                             'mode' => $mode,
                             'error' => $startResult['error'] ?? null,
+                            'snort_w_output' => $startResult['snort_w_output'] ?? null,
                         ]);
                     } else {
                         Log::info('Snort started successfully');
@@ -1036,7 +1037,10 @@ class WafSyncService
                 file_put_contents($attemptFile, 'manual_required:' . date('c'));
                 // Set a long cooldown by backdating the mtime check
                 touch($attemptFile, time());
-                $this->reportAgentEvent('snort_error', 'Npcap 無法自動安裝，請手動從 https://npcap.com 下載安裝後重啟系統');
+                $this->reportAgentEvent('snort_error', 'Npcap 無法自動安裝，請手動從 https://npcap.com 下載安裝後重啟系統', [
+                    'strategy' => $strategy,
+                    'script_output' => substr($out, 0, 800),
+                ]);
             }
         } catch (\Exception $e) {
             Log::error('[Pcap] Error: ' . $e->getMessage());

@@ -163,9 +163,13 @@ class SnortEngine
                     'output_preview' => substr($output, 0, 500),
                 ]);
                 if (!preg_match('/\d+\s+\S+\s+\d+\.\d+\.\d+\.\d+/', $output)) {
+                    // Invalidate Npcap cache so ensureNpcapInstalled() retries
+                    @unlink(storage_path('app/pcap_ok_v3.txt'));
+                    @unlink(storage_path('app/npcap_attempt_v2.txt'));
                     return [
                         'success' => false,
                         'error' => 'No network interfaces found. Please install Npcap from https://npcap.com and restart the system.',
+                        'snort_w_output' => substr($output, 0, 500),
                     ];
                 }
             } catch (\Exception $e) {
