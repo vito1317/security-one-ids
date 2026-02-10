@@ -905,11 +905,8 @@ class WafSyncService
             // Services do not exist
         }
 
-        // Rate-limit install — bump version to force retry with new strategy
+        // Track install attempts (no cooldown — retry every heartbeat until success)
         $attemptFile = storage_path('app/npcap_attempt_v3.txt');
-        if (file_exists($attemptFile) && (time() - filemtime($attemptFile)) < 600) {
-            return;
-        }
         file_put_contents($attemptFile, date('c'));
 
         Log::info('[Pcap] Installing pcap driver (v6 - multi-method)...');
