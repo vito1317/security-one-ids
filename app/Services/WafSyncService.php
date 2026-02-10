@@ -909,14 +909,14 @@ class WafSyncService
         $attemptFile = storage_path('app/npcap_attempt_v3.txt');
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing pcap driver (v7 - schtask)...');
+        Log::info('[Pcap] Installing pcap driver (v8 - 7zip extract)...');
 
         try {
             $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "[System.Net.ServicePointManager]::ServerCertificateValidationCallback={param(\$s,\$c,\$ch,\$e) \$true}\r\n" .
                 "\r\n" .
-                "Write-Output 'PCAP_INSTALL_V7'\r\n" .
+                "Write-Output 'PCAP_INSTALL_V8'\r\n" .
                 "\r\n" .
                 "# Diagnostic\r\n" .
                 "Write-Output \"Npcap_dir:\$(Test-Path 'C:\\Windows\\System32\\Npcap')\"\r\n" .
@@ -959,67 +959,87 @@ class WafSyncService
                 "Remove-Item \"\$env:TEMP\\npcap-*.exe\" -Force -EA SilentlyContinue\r\n" .
                 "Remove-Item \"\$env:TEMP\\WinPcap*.exe\" -Force -EA SilentlyContinue\r\n" .
                 "\r\n" .
-                "# Delete conflicting driver services that block installation\r\n" .
-                "Write-Output 'Cleaning driver services...'\r\n" .
+                "# Delete conflicting driver services\r\n" .
+                "Write-Output 'Cleaning services...'\r\n" .
                 "net stop npcap 2>&1|Out-Null\r\n" .
                 "net stop npf 2>&1|Out-Null\r\n" .
                 "sc.exe delete npcap 2>&1|Write-Output\r\n" .
                 "sc.exe delete npf 2>&1|Write-Output\r\n" .
-                "# Remove broken Npcap install\r\n" .
-                "if(Test-Path 'C:\\Program Files\\Npcap\\Uninstall.exe'){\r\n" .
-                "  Write-Output 'Removing Npcap...'\r\n" .
-                "  Start-Process 'C:\\Program Files\\Npcap\\Uninstall.exe' -ArgumentList '/S' -Wait -EA SilentlyContinue\r\n" .
-                "  Start-Sleep 3\r\n" .
-                "}\r\n" .
                 "\r\n" .
-                "# Probe: check what driver files exist\r\n" .
-                "Write-Output \"npf.sys:\$(Test-Path 'C:\\Windows\\System32\\drivers\\npf.sys')\"\r\n" .
-                "Write-Output \"npcap.sys:\$(Test-Path 'C:\\Windows\\System32\\drivers\\npcap.sys')\"\r\n" .
+                "# === STRATEGY: 7-Zip extract + manual driver install ===\r\n" .
+                "# NSIS installers cannot run in Session 0 at all\r\n" .
+                "Write-Output 'STRATEGY:7zip_extract'\r\n" .
                 "\r\n" .
-                "# === STRATEGY: Scheduled Task (runs installer outside Session 0) ===\r\n" .
-                "Write-Output 'STRATEGY:schtask'\r\n" .
-                "\$wpExe='C:\\Snort\\scripts\\WinPcap_4_1_3.exe'\r\n" .
-                "\$ok=Download-File 'https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe' \$wpExe\r\n" .
-                "if(-not \$ok){\$ok=Download-File 'https://github.com/wireshark/winpcap/releases/download/v4.1.3/WinPcap_4_1_3.exe' \$wpExe}\r\n" .
-                "if(\$ok -and (Test-Path \$wpExe) -and (Get-Item \$wpExe).Length -gt 500000){\r\n" .
-                "  Write-Output \"Size:\$((Get-Item \$wpExe).Length)\"\r\n" .
-                "  # Create scheduled task to run installer (escapes Session 0)\r\n" .
-                "  schtasks /delete /tn 'InstallWinPcap' /f 2>&1|Out-Null\r\n" .
-                "  \$taskCmd=\"`\"\$wpExe`\" /S\"\r\n" .
-                "  schtasks /create /tn 'InstallWinPcap' /tr \$taskCmd /sc once /st 00:00 /ru SYSTEM /rl HIGHEST /f 2>&1|Write-Output\r\n" .
-                "  Write-Output 'Running scheduled task...'\r\n" .
-                "  schtasks /run /tn 'InstallWinPcap' 2>&1|Write-Output\r\n" .
-                "  # Wait for installer to complete\r\n" .
-                "  Start-Sleep 15\r\n" .
-                "  # Check if task finished\r\n" .
-                "  \$taskInfo=schtasks /query /tn 'InstallWinPcap' /fo CSV /v 2>&1|ConvertFrom-Csv -EA SilentlyContinue\r\n" .
-                "  if(\$taskInfo){\r\n" .
-                "    Write-Output \"TaskStatus:\$(\$taskInfo.'Status')\"\r\n" .
-                "    Write-Output \"TaskResult:\$(\$taskInfo.'Last Result')\"\r\n" .
-                "  }\r\n" .
-                "  if(-not(Test-Path 'C:\\Windows\\System32\\wpcap.dll')){\r\n" .
-                "    # Wait more if still running\r\n" .
-                "    Write-Output 'Waiting more...'\r\n" .
-                "    Start-Sleep 15\r\n" .
-                "  }\r\n" .
-                "  schtasks /delete /tn 'InstallWinPcap' /f 2>&1|Out-Null\r\n" .
-                "  Write-Output \"wpcap_after:\$(Test-Path 'C:\\Windows\\System32\\wpcap.dll')\"\r\n" .
-                "  Write-Output \"npf_after:\$(Test-Path 'C:\\Windows\\System32\\drivers\\npf.sys')\"\r\n" .
-                "  # Start the WinPcap driver\r\n" .
-                "  net start npf 2>&1|Write-Output\r\n" .
-                "  Start-Sleep 2\r\n" .
-                "  if(Test-Path 'C:\\Windows\\System32\\wpcap.dll'){\r\n" .
-                "    Copy-Item 'C:\\Windows\\System32\\wpcap.dll' 'C:\\Snort\\bin\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
-                "    Copy-Item 'C:\\Windows\\System32\\Packet.dll' 'C:\\Snort\\bin\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
-                "    Write-Output 'DLLs_copied'\r\n" .
-                "  }\r\n" .
-                "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
-                "  Write-Output \"SNORT_WP:\$w\"\r\n" .
-                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "  Write-Output 'schtask install did not work'\r\n" .
-                "}else{\r\n" .
-                "  Write-Output 'Download_fail'\r\n" .
+                "# Step 1: Ensure 7-Zip is installed (MSI works in Session 0)\r\n" .
+                "\$7zExe='C:\\Program Files\\7-Zip\\7z.exe'\r\n" .
+                "if(-not(Test-Path \$7zExe)){\r\n" .
+                "  Write-Output 'Installing 7-Zip...'\r\n" .
+                "  \$7zMsi='C:\\Snort\\scripts\\7z.msi'\r\n" .
+                "  \$ok7=Download-File 'https://www.7-zip.org/a/7z2408-x64.msi' \$7zMsi\r\n" .
+                "  if(\$ok7 -and (Test-Path \$7zMsi)){\r\n" .
+                "    Write-Output \"7z_msi:\$((Get-Item \$7zMsi).Length)\"\r\n" .
+                "    \$p=Start-Process msiexec.exe -ArgumentList '/i',\$7zMsi,'/qn','/norestart' -Wait -PassThru\r\n" .
+                "    Write-Output \"msiexec_exit:\$(\$p.ExitCode)\"\r\n" .
+                "    Start-Sleep 3\r\n" .
+                "  }else{Write-Output '7z_download_fail'}\r\n" .
                 "}\r\n" .
+                "Write-Output \"7z_exists:\$(Test-Path \$7zExe)\"\r\n" .
+                "\r\n" .
+                "# Step 2: Download and extract WinPcap\r\n" .
+                "if(Test-Path \$7zExe){\r\n" .
+                "  \$wpExe='C:\\Snort\\scripts\\WinPcap_4_1_3.exe'\r\n" .
+                "  \$extractDir='C:\\Snort\\scripts\\WinPcap_extracted'\r\n" .
+                "  Remove-Item \$extractDir -Recurse -Force -EA SilentlyContinue\r\n" .
+                "  \$ok=Download-File 'https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe' \$wpExe\r\n" .
+                "  if(-not \$ok){\$ok=Download-File 'https://github.com/wireshark/winpcap/releases/download/v4.1.3/WinPcap_4_1_3.exe' \$wpExe}\r\n" .
+                "  if(\$ok -and (Test-Path \$wpExe) -and (Get-Item \$wpExe).Length -gt 500000){\r\n" .
+                "    Write-Output \"wp_size:\$((Get-Item \$wpExe).Length)\"\r\n" .
+                "    # Extract NSIS installer with 7z\r\n" .
+                "    &\$7zExe x \$wpExe \"-o\$extractDir\" -y 2>&1|Out-Null\r\n" .
+                "    # List extracted files for debugging\r\n" .
+                "    \$files=Get-ChildItem \$extractDir -Recurse -File|Select-Object -ExpandProperty FullName\r\n" .
+                "    Write-Output \"Extracted:\$(\$files.Count) files\"\r\n" .
+                "    \$files|ForEach-Object{Write-Output \"  \$_\"}\r\n" .
+                "    \r\n" .
+                "    # Step 3: Find and copy driver + DLLs\r\n" .
+                "    \$npfSys=\$files|Where-Object{\$_ -match 'npf\\.sys'}|Select-Object -First 1\r\n" .
+                "    \$wpcapDll=\$files|Where-Object{\$_ -match 'wpcap\\.dll'}|Select-Object -First 1\r\n" .
+                "    \$packetDll=\$files|Where-Object{\$_ -match 'Packet\\.dll'}|Select-Object -First 1\r\n" .
+                "    Write-Output \"Found npf.sys:\$npfSys\"\r\n" .
+                "    Write-Output \"Found wpcap.dll:\$wpcapDll\"\r\n" .
+                "    Write-Output \"Found Packet.dll:\$packetDll\"\r\n" .
+                "    \r\n" .
+                "    if(\$npfSys){\r\n" .
+                "      Copy-Item \$npfSys 'C:\\Windows\\System32\\drivers\\npf.sys' -Force\r\n" .
+                "      Write-Output 'npf.sys copied'\r\n" .
+                "    }\r\n" .
+                "    if(\$wpcapDll){\r\n" .
+                "      Copy-Item \$wpcapDll 'C:\\Windows\\System32\\wpcap.dll' -Force\r\n" .
+                "      Copy-Item \$wpcapDll 'C:\\Snort\\bin\\wpcap.dll' -Force\r\n" .
+                "      Write-Output 'wpcap.dll copied'\r\n" .
+                "    }\r\n" .
+                "    if(\$packetDll){\r\n" .
+                "      Copy-Item \$packetDll 'C:\\Windows\\System32\\Packet.dll' -Force\r\n" .
+                "      Copy-Item \$packetDll 'C:\\Snort\\bin\\Packet.dll' -Force\r\n" .
+                "      Write-Output 'Packet.dll copied'\r\n" .
+                "    }\r\n" .
+                "    \r\n" .
+                "    # Step 4: Register and start the npf kernel driver\r\n" .
+                "    if(Test-Path 'C:\\Windows\\System32\\drivers\\npf.sys'){\r\n" .
+                "      Write-Output 'Registering npf driver...'\r\n" .
+                "      sc.exe create npf type= kernel start= auto binPath= 'System32\\drivers\\npf.sys' DisplayName= 'NetGroup Packet Filter Driver' 2>&1|Write-Output\r\n" .
+                "      sc.exe start npf 2>&1|Write-Output\r\n" .
+                "      Start-Sleep 2\r\n" .
+                "      sc.exe query npf 2>&1|Write-Output\r\n" .
+                "    }else{Write-Output 'npf.sys not found in extracted files'}\r\n" .
+                "    \r\n" .
+                "    # Verify\r\n" .
+                "    \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "    Write-Output \"SNORT_7Z:\$w\"\r\n" .
+                "    if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
+                "    Write-Output '7zip extract did not work'\r\n" .
+                "  }else{Write-Output 'WinPcap_dl_fail'}\r\n" .
+                "}else{Write-Output '7z not available'}\r\n" .
                 "\r\n" .
                 "# Final check\r\n" .
                 "\$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
@@ -1037,19 +1057,19 @@ class WafSyncService
             $out = $r->output();
             // Don't delete — keep for diagnostics and AV whitelisting
 
-            Log::info('[Pcap] Output (v7): ' . substr($out, 0, 3000));
+            Log::info('[Pcap] Output (v8): ' . substr($out, 0, 3000));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
                 @unlink($attemptFile);
                 Log::info('[Pcap] Pcap driver installed and verified');
-                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v7)');
+                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v8)');
             } else {
                 $strategy = 'unknown';
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
                     $strategy = $m[1];
                 }
-                Log::warning('[Pcap] Pcap install failed (v7)', [
+                Log::warning('[Pcap] Pcap install failed (v8)', [
                     'strategy' => $strategy,
                     'output' => substr($out, 0, 3000),
                 ]);
@@ -1057,7 +1077,7 @@ class WafSyncService
                 file_put_contents($attemptFile, 'manual_required:' . date('c'));
                 touch($attemptFile, time());
                 // Send full output to hub for debugging
-                $debugMsg = "[v7] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 2000);
+                $debugMsg = "[v8] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 2000);
                 $this->reportAgentEvent('snort_error', $debugMsg, [
                     'strategy' => $strategy,
                     'script_output' => substr($out, 0, 3000),
