@@ -1040,17 +1040,37 @@ class ClamavService
                 ->post("{$wafUrl}/api/ids/agents/clamav-status", $payload);
 
             if ($response->successful()) {
-                Log::info('ClamAV status reported successfully');
+                Log::info('ClamAV status reported successfully', [
+                    'scanned_files' => $payload['scanned_files'] ?? 'NOT_IN_PAYLOAD',
+                    'infected_files' => $payload['infected_files'] ?? 'NOT_IN_PAYLOAD',
+                    'last_scan' => $payload['last_scan'] ?? 'NOT_IN_PAYLOAD',
+                ]);
                 return true;
             }
 
+            $errBody = substr($response->body(), 0, 500);
             Log::error('ClamAV reportToHub failed', [
                 'status' => $response->status(),
-                'body' => $response->body(),
+                'body' => $errBody,
+                'scanned_files' => $payload['scanned_files'] ?? 'NOT_IN_PAYLOAD',
             ]);
+            // Report failure as agent event so it shows in hub
+            try {
+                app(\App\Services\WafSyncService::class)->reportAgentEvent(
+                    '系統日誌',
+                    "ClamAV reportToHub failed: HTTP {$response->status()} — {$errBody}"
+                );
+            } catch (\Exception $ignore) {}
             return false;
         } catch (\Exception $e) {
             Log::error('Failed to report ClamAV status: ' . $e->getMessage());
+            // Report exception as agent event
+            try {
+                app(\App\Services\WafSyncService::class)->reportAgentEvent(
+                    '系統日誌',
+                    "ClamAV reportToHub exception: {$e->getMessage()}"
+                );
+            } catch (\Exception $ignore) {}
             return false;
         }
     }
