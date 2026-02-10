@@ -137,6 +137,7 @@ class WafSyncService
                     'version_updated_at' => $this->getLastGitPullTime(),
                     'system_info' => $this->getSystemInfo(),
                     'discovered_logs' => $this->getDiscoveredLogPaths(),
+                    'recent_logs' => $this->collectRecentLogs(),
                 ]);
 
                 if ($response->successful()) {
@@ -2807,6 +2808,119 @@ class WafSyncService
      *
      * Cached for 5 minutes to avoid rescanning every heartbeat
      */
+    /**
+     * Collect recent agent log entries for upload to Hub
+     */
+    protected function collectRecentLogs(): array
+    {
+        $logs = [];
+        $lastSentFile = storage_path('app/last_log_position.json');
+        $maxLines = 100;
+        
+        // Get the current log file
+        $logFile = storage_path('logs/laravel-' . date('Y-m-d') . '.log');
+        if (!file_exists($logFile)) {
+            $logFile = storage_path('logs/laravel.log');
+        }
+        if (!file_exists($logFile)) {
+            return [];
+        }
+        
+        // Read last sent position
+        $lastPosition = 0;
+        if (file_exists($lastSentFile)) {
+            $posData = json_decode(file_get_contents($lastSentFile), true);
+            if (($posData['file'] ?? '') === $logFile) {
+                $lastPosition = $posData['position'] ?? 0;
+            }
+        }
+        
+        $fileSize = filesize($logFile);
+        if ($fileSize <= $lastPosition) {
+            // File was rotated or no new content
+            $lastPosition = max(0, $fileSize - 50000); // Read last ~50KB on rotation
+        }
+        
+        $handle = fopen($logFile, 'r');
+        if (!$handle) {
+            return [];
+        }
+        
+        fseek($handle, $lastPosition);
+        $newContent = fread($handle, min($fileSize - $lastPosition, 100000)); // Max 100KB
+        $newPosition = ftell($handle);
+        fclose($handle);
+        
+        // Save position for next sync
+        file_put_contents($lastSentFile, json_encode([
+            'file' => $logFile,
+            'position' => $newPosition,
+        ]));
+        
+        if (empty($newContent)) {
+            return [];
+        }
+        
+        // Parse log entries
+        $lines = explode("\n", $newContent);
+        $currentEntry = null;
+        
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) {
+                continue;
+            }
+            
+            // Match Laravel log format: [2026-01-01 00:00:00] environment.LEVEL: message
+            if (preg_match('/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+\w+\.(\w+):\s+(.+)$/', $line, $m)) {
+                if ($currentEntry) {
+                    $logs[] = $currentEntry;
+                }
+                $currentEntry = [
+                    'timestamp' => $m[1],
+                    'level' => strtolower($m[2]),
+                    'message' => $m[3],
+                ];
+            } elseif ($currentEntry) {
+                // Append continuation line (stack traces, etc.)
+                $currentEntry['message'] .= "\n" . $line;
+            }
+        }
+        
+        if ($currentEntry) {
+            $logs[] = $currentEntry;
+        }
+        
+        // Keep only the last N entries, prioritize WARNING/ERROR
+        if (count($logs) > $maxLines) {
+            // Split into important and info logs
+            $important = array_filter($logs, fn($l) => in_array($l['level'], ['warning', 'error', 'critical', 'emergency']));
+            $info = array_filter($logs, fn($l) => !in_array($l['level'], ['warning', 'error', 'critical', 'emergency']));
+            
+            // Take all important + recent info up to limit
+            $important = array_slice($important, -$maxLines);
+            $remaining = $maxLines - count($important);
+            if ($remaining > 0) {
+                $info = array_slice($info, -$remaining);
+            } else {
+                $info = [];
+            }
+            
+            $logs = array_merge($important, $info);
+            // Sort by timestamp
+            usort($logs, fn($a, $b) => $a['timestamp'] <=> $b['timestamp']);
+        }
+        
+        // Truncate long messages
+        foreach ($logs as &$log) {
+            if (strlen($log['message']) > 2000) {
+                $log['message'] = substr($log['message'], 0, 2000) . '... (truncated)';
+            }
+        }
+        
+        return array_values($logs);
+    }
+
     protected function getDiscoveredLogPaths(): array
     {
         $cacheFile = storage_path('app/discovered_logs_cache.json');
