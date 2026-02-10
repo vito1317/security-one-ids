@@ -958,6 +958,8 @@ class WafSyncService
                 "# Clean up ALL cached installers (may be corrupted from previous attempts)\r\n" .
                 "Remove-Item \"\$env:TEMP\\npcap-*.exe\" -Force -EA SilentlyContinue\r\n" .
                 "Remove-Item \"\$env:TEMP\\WinPcap*.exe\" -Force -EA SilentlyContinue\r\n" .
+                "Remove-Item 'C:\\Snort\\scripts\\WinPcap_4_1_3.exe' -Force -EA SilentlyContinue\r\n" .
+                "Remove-Item 'C:\\Snort\\scripts\\WinPcap_extracted' -Recurse -Force -EA SilentlyContinue\r\n" .
                 "\r\n" .
                 "# Delete conflicting driver services\r\n" .
                 "Write-Output 'Cleaning services...'\r\n" .
@@ -2563,6 +2565,12 @@ class WafSyncService
             Log::info('Clearing caches...');
             Artisan::call('config:clear');
             Artisan::call('cache:clear');
+            
+            // Force PHP to reload updated source files (critical for code updates)
+            if (function_exists('opcache_reset')) {
+                opcache_reset();
+                Log::info('PHP opcache cleared');
+            }
             
             // Handle environment-specific restart
             if ($isDocker) {
