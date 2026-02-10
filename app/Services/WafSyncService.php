@@ -994,10 +994,20 @@ class WafSyncService
                 "    Remove-Item 'C:\\Snort\\scripts\\hvci_reboot_needed.txt' -Force -EA SilentlyContinue\r\n" .
                 "    Write-Output 'PCAP_OK'; exit 0\r\n" .
                 "  }\r\n" .
-                "  # MSI installed but driver not active — NDIS filter needs reboot to bind\r\n" .
-                "  Write-Output 'Win10Pcap installed but needs reboot to activate NDIS binding'\r\n" .
-                "  Write-Output 'NEED_REBOOT'\r\n" .
-                "  exit 0\r\n" .
+                "  # MSI installed but driver not active — check if we already tried rebooting\r\n" .
+                "  \$rbFile='C:\\Snort\\scripts\\pcap_reboot_count.txt'\r\n" .
+                "  \$rbCount=0\r\n" .
+                "  if(Test-Path \$rbFile){\$rbCount=[int](Get-Content \$rbFile -EA SilentlyContinue)}\r\n" .
+                "  Write-Output \"reboot_count:\$rbCount\"\r\n" .
+                "  if(\$rbCount -lt 1){\r\n" .
+                "    (\$rbCount+1)|Out-File \$rbFile -Force\r\n" .
+                "    Write-Output 'Win10Pcap installed, first reboot to activate NDIS binding'\r\n" .
+                "    Write-Output 'NEED_REBOOT'\r\n" .
+                "    exit 0\r\n" .
+                "  }else{\r\n" .
+                "    Write-Output 'Already rebooted once for Win10Pcap, not rebooting again'\r\n" .
+                "    Write-Output 'Win10Pcap installed but still not working after reboot'\r\n" .
+                "  }\r\n" .
                 "}else{Write-Output 'Win10Pcap download failed, trying Npcap...'}\r\n" .
                 "\r\n" .
                 "# === STRATEGY 2: 7-Zip extract + manual driver install (fallback) ===\r\n" .
@@ -1133,11 +1143,7 @@ class WafSyncService
                 "      Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -Name 'Enabled' -Value 0 -Type DWord -Force\r\n" .
                 "      \$check=Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -Name 'Enabled' -EA SilentlyContinue\r\n" .
                 "      Write-Output \"HVCI_after:\$(\$check.Enabled)\"\r\n" .
-                "      'pending'>('C:\\Snort\\scripts\\hvci_reboot_needed.txt')\r\n" .
                 "      if(\$check.Enabled -eq 0){Write-Output 'HVCI_DISABLED'}\r\n" .
-                "    }elseif(\$hvci.Enabled -eq 0 -and (Test-Path 'C:\\Snort\\scripts\\hvci_reboot_needed.txt')){\r\n" .
-                "      Write-Output 'HVCI disabled but reboot still pending'\r\n" .
-                "      Write-Output 'NEED_REBOOT'\r\n" .
                 "    }else{Write-Output 'npcap extract did not work'}\r\n" .
                 "  }else{Write-Output 'Npcap_dl_fail'}\r\n" .
                 "}else{Write-Output '7z not available'}\r\n" .
