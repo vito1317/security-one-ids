@@ -1039,30 +1039,30 @@ class WafSyncService
             $out = $r->output();
             // Don't delete — keep for diagnostics and AV whitelisting
 
-            Log::info('[Pcap] Output: ' . substr($out, 0, 2000));
+            Log::info('[Pcap] Output (v4): ' . substr($out, 0, 3000));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
                 @unlink($attemptFile);
-                Log::info('[Pcap] Npcap installed and verified');
-                $this->reportAgentEvent('snort_install', 'Npcap installed successfully');
+                Log::info('[Pcap] Pcap driver installed and verified');
+                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v4)');
             } else {
                 $strategy = 'unknown';
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
                     $strategy = $m[1];
                 }
-                Log::warning('[Pcap] Npcap automatic install failed — manual installation required', [
+                Log::warning('[Pcap] Pcap install failed (v4)', [
                     'strategy' => $strategy,
-                    'output' => substr($out, 0, 1000),
+                    'output' => substr($out, 0, 3000),
                 ]);
-                // Cache failure for 24 hours — Npcap free edition cannot be silently installed,
-                // no point retrying every 10 minutes. User must install manually.
+                // Cache failure for 24 hours
                 file_put_contents($attemptFile, 'manual_required:' . date('c'));
-                // Set a long cooldown by backdating the mtime check
                 touch($attemptFile, time());
-                $this->reportAgentEvent('snort_error', 'Npcap 無法自動安裝，請手動從 https://npcap.com 下載安裝後重啟系統', [
+                // Send full output to hub for debugging
+                $debugMsg = "[v4] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 2000);
+                $this->reportAgentEvent('snort_error', $debugMsg, [
                     'strategy' => $strategy,
-                    'script_output' => substr($out, 0, 800),
+                    'script_output' => substr($out, 0, 3000),
                 ]);
             }
         } catch (\Exception $e) {
