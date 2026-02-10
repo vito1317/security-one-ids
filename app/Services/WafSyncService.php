@@ -966,26 +966,39 @@ class WafSyncService
                 "  return \$false\r\n" .
                 "}\r\n" .
                 "\r\n" .
-                "# Step 5: Install Npcap driver\r\n" .
+                "# Step 5: Clean up corrupted cache and broken Npcap install\r\n" .
+                "Write-Output 'STRATEGY:npcap_clean'\r\n" .
+                "# Delete ALL old cached npcap installers (may be corrupted)\r\n" .
+                "Get-ChildItem \"\$env:TEMP\\npcap-*.exe\" -EA SilentlyContinue|Remove-Item -Force\r\n" .
+                "Get-ChildItem \"\$env:TEMP\\WinPcap*.exe\" -EA SilentlyContinue|Remove-Item -Force\r\n" .
+                "Write-Output 'Cleaned old cached installers'\r\n" .
+                "\r\n" .
+                "# Uninstall broken Npcap if exists\r\n" .
+                "net stop npcap 2>&1|Out-Null\r\n" .
+                "net stop npf 2>&1|Out-Null\r\n" .
+                "\$uninstaller='C:\\Program Files\\Npcap\\Uninstall.exe'\r\n" .
+                "if(Test-Path \$uninstaller){\r\n" .
+                "  Write-Output 'Uninstalling broken Npcap...'\r\n" .
+                "  \$p=Start-Process \$uninstaller -ArgumentList '/S' -Wait -PassThru\r\n" .
+                "  Write-Output \"Uninstall EXIT:\$(\$p.ExitCode)\"\r\n" .
+                "  Start-Sleep 3\r\n" .
+                "}else{\r\n" .
+                "  Write-Output 'No Npcap uninstaller found'\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "# Step 6: Download fresh Npcap and install\r\n" .
                 "Write-Output 'STRATEGY:npcap'\r\n" .
                 "\$npcapExe=\"\$env:TEMP\\npcap-1.80.exe\"\r\n" .
-                "\$downloaded=\$false\r\n" .
-                "if((Test-Path \$npcapExe) -and (Get-Item \$npcapExe).Length -gt 1000000){\r\n" .
-                "  Write-Output 'Npcap installer already cached'\r\n" .
-                "  \$downloaded=\$true\r\n" .
-                "}else{\r\n" .
-                "  # Try npcap.com first\r\n" .
-                "  \$downloaded=Download-File 'https://npcap.com/dist/npcap-1.80.exe' \$npcapExe\r\n" .
-                "  # Try GitHub releases as backup\r\n" .
-                "  if(-not \$downloaded -or (Get-Item \$npcapExe -EA SilentlyContinue).Length -lt 1000000){\r\n" .
-                "    \$downloaded=Download-File 'https://github.com/nmap/npcap/releases/download/v1.80/npcap-1.80.exe' \$npcapExe\r\n" .
-                "  }\r\n" .
+                "\$downloaded=Download-File 'https://npcap.com/dist/npcap-1.80.exe' \$npcapExe\r\n" .
+                "if(-not \$downloaded -or (Get-Item \$npcapExe -EA SilentlyContinue).Length -lt 1000000){\r\n" .
+                "  \$downloaded=Download-File 'https://github.com/nmap/npcap/releases/download/v1.80/npcap-1.80.exe' \$npcapExe\r\n" .
                 "}\r\n" .
                 "if(\$downloaded -and (Test-Path \$npcapExe) -and (Get-Item \$npcapExe).Length -gt 1000000){\r\n" .
+                "  Write-Output \"Installer size: \$((Get-Item \$npcapExe).Length) bytes\"\r\n" .
                 "  Write-Output 'Installing Npcap silently...'\r\n" .
                 "  \$p=Start-Process \$npcapExe -ArgumentList '/S','/winpcap_mode=yes','/loopback_support=yes','/npf_startup=yes' -Wait -PassThru\r\n" .
                 "  Write-Output \"Npcap EXIT:\$(\$p.ExitCode)\"\r\n" .
-                "  Start-Sleep 3\r\n" .
+                "  Start-Sleep 5\r\n" .
                 "  net start npcap 2>&1|Write-Output\r\n" .
                 "  net start npf 2>&1|Write-Output\r\n" .
                 "  Start-Sleep 2\r\n" .
@@ -998,6 +1011,7 @@ class WafSyncService
                 "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
                 "  Write-Output \"SNORT_W_NPCAP:\$w\"\r\n" .
                 "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
+                "  Write-Output 'Npcap installed but no interfaces detected'\r\n" .
                 "}else{\r\n" .
                 "  Write-Output 'Npcap download failed'\r\n" .
                 "}\r\n" .
