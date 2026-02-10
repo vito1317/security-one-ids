@@ -786,7 +786,14 @@ LUA;
     {
         $chocoPath = $this->findChocoPath();
         if ($chocoPath) {
-            return Process::timeout(600)->run("\"{$chocoPath}\" upgrade snort -y 2>&1");
+            $result = Process::timeout(600)->run("\"{$chocoPath}\" upgrade snort -y 2>&1");
+            // Clean up AutoHotkey that Chocolatey's Npcap dependency installs
+            try {
+                Process::timeout(120)->run("\"{$chocoPath}\" uninstall autohotkey.install autohotkey -y --force 2>&1");
+            } catch (\Exception $e) {
+                // Non-critical cleanup
+            }
+            return $result;
         }
 
         $wingetPath = $this->findWingetPath();

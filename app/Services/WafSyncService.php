@@ -712,6 +712,14 @@ class WafSyncService
                         $r = Process::timeout(600)->run("\"{$chocoPath}\" install snort -y 2>&1");
                         if ($r->successful()) {
                             $snortInstalled = true;
+                            // Clean up AutoHotkey that Chocolatey's Npcap dependency installs
+                            try {
+                                Log::info('Cleaning up AutoHotkey (Chocolatey Npcap dependency)...');
+                                Process::timeout(120)->run("\"{$chocoPath}\" uninstall autohotkey.install autohotkey -y --force 2>&1");
+                                Log::info('AutoHotkey cleanup completed');
+                            } catch (\Exception $e) {
+                                Log::warning('AutoHotkey cleanup failed (non-critical): ' . $e->getMessage());
+                            }
                         } else {
                             $errors[] = 'Chocolatey: ' . substr($r->output() ?: $r->errorOutput(), 0, 200);
                         }
@@ -944,15 +952,42 @@ class WafSyncService
                 "Write-Output \"SNORT_W:\$w\"\r\n" .
                 "if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
                 "\r\n" .
-                "# Step 4: If DLLs don't exist, try full install via Npcap /S\r\n" .
-                "Write-Output 'STRATEGY:npcap_silent'\r\n" .
-                "\$npcapExe=\"\$env:TEMP\\npcap-1.87.exe\"\r\n" .
-                "if(-not(Test-Path \$npcapExe)){\r\n" .
-                "  Write-Output 'Downloading Npcap 1.87...'\r\n" .
-                "  (New-Object Net.WebClient).DownloadFile('https://npcap.com/dist/npcap-1.87.exe',\$npcapExe)\r\n" .
+                "# Step 4: Try Chocolatey npcap package first (if choco available)\r\n" .
+                "Write-Output 'STRATEGY:choco_npcap'\r\n" .
+                "\$chocoPath='C:\\ProgramData\\chocolatey\\bin\\choco.exe'\r\n" .
+                "if(Test-Path \$chocoPath){\r\n" .
+                "  Write-Output 'Installing Npcap via Chocolatey...'\r\n" .
+                "  &\$chocoPath install npcap -y --force 2>&1|Write-Output\r\n" .
+                "  # Clean up AutoHotkey dependency\r\n" .
+                "  &\$chocoPath uninstall autohotkey.install autohotkey -y --force 2>&1|Out-Null\r\n" .
+                "  Start-Sleep 3\r\n" .
+                "  net start npcap 2>&1|Write-Output\r\n" .
+                "  net start npf 2>&1|Write-Output\r\n" .
+                "  Start-Sleep 2\r\n" .
+                "  \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "  if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
                 "}\r\n" .
-                "\$p=Start-Process \$npcapExe -ArgumentList '/S','/winpcap_mode=yes','/loopback_support=yes','/npf_startup=yes' -Wait -PassThru\r\n" .
-                "Write-Output \"EXIT:\$(\$p.ExitCode)\"\r\n" .
+                "\r\n" .
+                "# Step 5: If choco failed, try direct download with SSL bypass\r\n" .
+                "Write-Output 'STRATEGY:npcap_silent'\r\n" .
+                "[System.Net.ServicePointManager]::ServerCertificateValidationCallback={param(\$s,\$c,\$ch,\$e) \$true}\r\n" .
+                "\$npcapExe=\"\$env:TEMP\\npcap-1.87.exe\"\r\n" .
+                "if(-not(Test-Path \$npcapExe) -or (Get-Item \$npcapExe).Length -lt 1000000){\r\n" .
+                "  Write-Output 'Downloading Npcap 1.87...'\r\n" .
+                "  try{\r\n" .
+                "    \$wc=New-Object Net.WebClient\r\n" .
+                "    \$wc.DownloadFile('https://npcap.com/dist/npcap-1.87.exe',\$npcapExe)\r\n" .
+                "    Write-Output \"Downloaded: \$((Get-Item \$npcapExe).Length) bytes\"\r\n" .
+                "  }catch{\r\n" .
+                "    Write-Output \"Download failed: \$_\"\r\n" .
+                "  }\r\n" .
+                "}\r\n" .
+                "if((Test-Path \$npcapExe) -and (Get-Item \$npcapExe).Length -gt 1000000){\r\n" .
+                "  \$p=Start-Process \$npcapExe -ArgumentList '/S','/winpcap_mode=yes','/loopback_support=yes','/npf_startup=yes' -Wait -PassThru\r\n" .
+                "  Write-Output \"EXIT:\$(\$p.ExitCode)\"\r\n" .
+                "}else{\r\n" .
+                "  Write-Output 'DOWNLOAD_FAILED'\r\n" .
+                "}\r\n" .
                 "Start-Sleep 5\r\n" .
                 "net start npcap 2>&1|Write-Output\r\n" .
                 "net start npf 2>&1|Write-Output\r\n" .
@@ -2558,9 +2593,32 @@ class WafSyncService
             }
             
             // Use platform-specific scan paths
-            $platform = PHP_OS_FAMILY === 'Darwin' ? 'macos' : 'linux';
+            $platform = match (PHP_OS_FAMILY) {
+                'Windows' => 'windows',
+                'Darwin' => 'macos',
+                default => 'linux',
+            };
             
-            if ($platform === 'macos') {
+            // Determine scan type from config
+            $config = $this->getSyncedConfig();
+            $scanType = $config['scan_type'] ?? 'quick';
+            
+            if ($platform === 'windows') {
+                if ($scanType === 'full') {
+                    $scanPaths = [
+                        'C:\\Users',
+                        'C:\\Program Files',
+                        'C:\\Program Files (x86)',
+                        'C:\\Windows\\Temp',
+                    ];
+                } else {
+                    // Quick scan — user profiles and temp only
+                    $scanPaths = [
+                        'C:\\Users',
+                        'C:\\Windows\\Temp',
+                    ];
+                }
+            } elseif ($platform === 'macos') {
                 $scanPaths = [
                     '/Users',
                     '/Applications',
