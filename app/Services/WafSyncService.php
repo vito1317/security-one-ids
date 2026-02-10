@@ -970,20 +970,30 @@ class WafSyncService
                 "# NSIS installers cannot run in Session 0 at all\r\n" .
                 "Write-Output 'STRATEGY:7zip_extract'\r\n" .
                 "\r\n" .
-                "# Step 1: Ensure 7-Zip is installed (MSI works in Session 0)\r\n" .
-                "\$7zExe='C:\\Program Files\\7-Zip\\7z.exe'\r\n" .
+                "# Step 1: Get 7-Zip CLI (NuGet package = ZIP, no install needed)\r\n" .
+                "\$7zExe='C:\\Snort\\scripts\\7z_tool\\tools\\7za.exe'\r\n" .
                 "if(-not(Test-Path \$7zExe)){\r\n" .
-                "  Write-Output 'Installing 7-Zip...'\r\n" .
-                "  \$7zMsi='C:\\Snort\\scripts\\7z.msi'\r\n" .
-                "  \$ok7=Download-File 'https://www.7-zip.org/a/7z2408-x64.msi' \$7zMsi\r\n" .
-                "  if(\$ok7 -and (Test-Path \$7zMsi)){\r\n" .
-                "    Write-Output \"7z_msi:\$((Get-Item \$7zMsi).Length)\"\r\n" .
-                "    \$p=Start-Process msiexec.exe -ArgumentList '/i',\$7zMsi,'/qn','/norestart' -Wait -PassThru\r\n" .
-                "    Write-Output \"msiexec_exit:\$(\$p.ExitCode)\"\r\n" .
-                "    Start-Sleep 3\r\n" .
-                "  }else{Write-Output '7z_download_fail'}\r\n" .
+                "  # Also check installed 7-Zip\r\n" .
+                "  if(Test-Path 'C:\\Program Files\\7-Zip\\7z.exe'){\$7zExe='C:\\Program Files\\7-Zip\\7z.exe'}\r\n" .
+                "  else{\r\n" .
+                "    Write-Output 'Getting 7z via NuGet...'\r\n" .
+                "    \$pkg='C:\\Snort\\scripts\\7z-cli.zip'\r\n" .
+                "    Remove-Item \$pkg -Force -EA SilentlyContinue\r\n" .
+                "    \$ok7=Download-File 'https://www.nuget.org/api/v2/package/7-Zip.CommandLine/18.1.0' \$pkg\r\n" .
+                "    if(-not \$ok7){\$ok7=Download-File 'https://github.com/ip7z/7zip/releases/download/24.08/7z2408-x64.msi' 'C:\\Snort\\scripts\\7z.msi'}\r\n" .
+                "    if(\$ok7 -and (Test-Path \$pkg)){\r\n" .
+                "      Write-Output \"pkg_size:\$((Get-Item \$pkg).Length)\"\r\n" .
+                "      Remove-Item 'C:\\Snort\\scripts\\7z_tool' -Recurse -Force -EA SilentlyContinue\r\n" .
+                "      Expand-Archive \$pkg 'C:\\Snort\\scripts\\7z_tool' -Force\r\n" .
+                "      Write-Output \"7za_exists:\$(Test-Path \$7zExe)\"\r\n" .
+                "      if(-not(Test-Path \$7zExe)){\r\n" .
+                "        # List what we extracted\r\n" .
+                "        Get-ChildItem 'C:\\Snort\\scripts\\7z_tool' -Recurse -File|ForEach-Object{Write-Output \"  \$(\$_.FullName)\"}\r\n" .
+                "      }\r\n" .
+                "    }else{Write-Output '7z_pkg_download_fail'}\r\n" .
+                "  }\r\n" .
                 "}\r\n" .
-                "Write-Output \"7z_exists:\$(Test-Path \$7zExe)\"\r\n" .
+                "Write-Output \"7z_ready:\$(Test-Path \$7zExe)\"\r\n" .
                 "\r\n" .
                 "# Step 2: Download and extract WinPcap\r\n" .
                 "if(Test-Path \$7zExe){\r\n" .
