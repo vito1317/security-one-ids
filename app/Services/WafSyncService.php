@@ -1040,14 +1040,38 @@ class WafSyncService
                 "      Write-Output 'Packet.dll copied'\r\n" .
                 "    }\r\n" .
                 "    \r\n" .
-                "    # Step 4: Register and start the npcap kernel driver\r\n" .
-                "    if(Test-Path 'C:\\Windows\\System32\\drivers\\npcap.sys'){\r\n" .
-                "      Write-Output 'Registering npcap driver...'\r\n" .
-                "      sc.exe create npcap type= kernel start= auto binPath= 'System32\\drivers\\npcap.sys' DisplayName= 'Npcap Packet Driver (NPCAP)' 2>&1|Write-Output\r\n" .
-                "      sc.exe start npcap 2>&1|Write-Output\r\n" .
-                "      Start-Sleep 3\r\n" .
-                "      sc.exe query npcap 2>&1|Write-Output\r\n" .
-                "    }else{Write-Output 'driver .sys not found in extracted files'}\r\n" .
+                "    # Step 4: Install driver - try pnputil first (proper INF install), sc.exe as fallback\r\n" .
+                "    \$infFile=\$files|Where-Object{\$_ -match '\\.inf\$'}|Select-Object -First 1\r\n" .
+                "    \$catFile=\$files|Where-Object{\$_ -match '\\.cat\$'}|Select-Object -First 1\r\n" .
+                "    Write-Output \"Found_inf:\$infFile\"\r\n" .
+                "    Write-Output \"Found_cat:\$catFile\"\r\n" .
+                "    \r\n" .
+                "    if(\$infFile){\r\n" .
+                "      Write-Output 'Installing via pnputil (INF)...'\r\n" .
+                "      pnputil /add-driver \$infFile /install 2>&1|Write-Output\r\n" .
+                "      Start-Sleep 5\r\n" .
+                "    }\r\n" .
+                "    \r\n" .
+                "    # Check if driver loaded after pnputil\r\n" .
+                "    \$svc=Get-Service -Name 'npcap' -EA SilentlyContinue\r\n" .
+                "    if(-not \$svc){\$svc=Get-Service -Name 'npf' -EA SilentlyContinue}\r\n" .
+                "    Write-Output \"svc_after_pnp:\$(\$svc.Status)\"\r\n" .
+                "    \r\n" .
+                "    # Fallback: manual sc.exe registration\r\n" .
+                "    if(-not \$svc -or \$svc.Status -ne 'Running'){\r\n" .
+                "      if(Test-Path 'C:\\Windows\\System32\\drivers\\npcap.sys'){\r\n" .
+                "        Write-Output 'Trying sc.exe create...'\r\n" .
+                "        sc.exe create npcap type= kernel start= auto binPath= 'System32\\drivers\\npcap.sys' DisplayName= 'Npcap Packet Driver (NPCAP)' 2>&1|Write-Output\r\n" .
+                "        sc.exe start npcap 2>&1|Write-Output\r\n" .
+                "        Start-Sleep 3\r\n" .
+                "        sc.exe query npcap 2>&1|Write-Output\r\n" .
+                "      }elseif(Test-Path 'C:\\Windows\\System32\\drivers\\npf.sys'){\r\n" .
+                "        Write-Output 'Trying sc.exe create npf...'\r\n" .
+                "        sc.exe create npf type= kernel start= auto binPath= 'System32\\drivers\\npf.sys' DisplayName= 'NetGroup Packet Filter Driver' 2>&1|Write-Output\r\n" .
+                "        sc.exe start npf 2>&1|Write-Output\r\n" .
+                "        Start-Sleep 3\r\n" .
+                "      }else{Write-Output 'No driver .sys found in System32\\drivers'}\r\n" .
+                "    }\r\n" .
                 "    \r\n" .
                 "    # Verify\r\n" .
                 "    \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
