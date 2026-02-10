@@ -995,60 +995,66 @@ class WafSyncService
                 "}\r\n" .
                 "Write-Output \"7z_ready:\$(Test-Path \$7zExe)\"\r\n" .
                 "\r\n" .
-                "# Step 2: Download and extract WinPcap\r\n" .
+                "# Step 2: Download and extract Npcap (has valid signed driver, unlike WinPcap)\r\n" .
                 "if(Test-Path \$7zExe){\r\n" .
-                "  \$wpExe='C:\\Snort\\scripts\\WinPcap_4_1_3.exe'\r\n" .
-                "  \$extractDir='C:\\Snort\\scripts\\WinPcap_extracted'\r\n" .
+                "  \$npExe='C:\\Snort\\scripts\\npcap-1.80.exe'\r\n" .
+                "  \$extractDir='C:\\Snort\\scripts\\Npcap_extracted'\r\n" .
                 "  Remove-Item \$extractDir -Recurse -Force -EA SilentlyContinue\r\n" .
-                "  \$ok=Download-File 'https://www.winpcap.org/install/bin/WinPcap_4_1_3.exe' \$wpExe\r\n" .
-                "  if(-not \$ok){\$ok=Download-File 'https://github.com/wireshark/winpcap/releases/download/v4.1.3/WinPcap_4_1_3.exe' \$wpExe}\r\n" .
-                "  if(\$ok -and (Test-Path \$wpExe) -and (Get-Item \$wpExe).Length -gt 500000){\r\n" .
-                "    Write-Output \"wp_size:\$((Get-Item \$wpExe).Length)\"\r\n" .
+                "  \$ok=Download-File 'https://npcap.com/dist/npcap-1.80.exe' \$npExe\r\n" .
+                "  if(-not \$ok){\$ok=Download-File 'https://github.com/nmap/npcap/releases/download/v1.80/npcap-1.80.exe' \$npExe}\r\n" .
+                "  if(\$ok -and (Test-Path \$npExe) -and (Get-Item \$npExe).Length -gt 500000){\r\n" .
+                "    Write-Output \"npcap_size:\$((Get-Item \$npExe).Length)\"\r\n" .
                 "    # Extract NSIS installer with 7z\r\n" .
-                "    &\$7zExe x \$wpExe \"-o\$extractDir\" -y 2>&1|Out-Null\r\n" .
-                "    # List extracted files for debugging\r\n" .
+                "    &\$7zExe x \$npExe \"-o\$extractDir\" -y 2>&1|Out-Null\r\n" .
+                "    # List extracted files\r\n" .
                 "    \$files=Get-ChildItem \$extractDir -Recurse -File|Select-Object -ExpandProperty FullName\r\n" .
                 "    Write-Output \"Extracted:\$(\$files.Count) files\"\r\n" .
                 "    \$files|ForEach-Object{Write-Output \"  \$_\"}\r\n" .
                 "    \r\n" .
-                "    # Step 3: Find and copy driver + DLLs\r\n" .
-                "    \$npfSys=\$files|Where-Object{\$_ -match 'npf\\.sys'}|Select-Object -First 1\r\n" .
+                "    # Step 3: Find driver and DLLs (Npcap uses npcap.sys, not npf.sys)\r\n" .
+                "    \$drvSys=\$files|Where-Object{\$_ -match 'npcap\\.sys'}|Select-Object -First 1\r\n" .
+                "    if(-not \$drvSys){\$drvSys=\$files|Where-Object{\$_ -match 'npf\\.sys'}|Select-Object -First 1}\r\n" .
                 "    \$wpcapDll=\$files|Where-Object{\$_ -match 'wpcap\\.dll'}|Select-Object -First 1\r\n" .
                 "    \$packetDll=\$files|Where-Object{\$_ -match 'Packet\\.dll'}|Select-Object -First 1\r\n" .
-                "    Write-Output \"Found npf.sys:\$npfSys\"\r\n" .
-                "    Write-Output \"Found wpcap.dll:\$wpcapDll\"\r\n" .
-                "    Write-Output \"Found Packet.dll:\$packetDll\"\r\n" .
+                "    Write-Output \"Found_drv:\$drvSys\"\r\n" .
+                "    Write-Output \"Found_wpcap:\$wpcapDll\"\r\n" .
+                "    Write-Output \"Found_packet:\$packetDll\"\r\n" .
                 "    \r\n" .
-                "    if(\$npfSys){\r\n" .
-                "      Copy-Item \$npfSys 'C:\\Windows\\System32\\drivers\\npf.sys' -Force\r\n" .
-                "      Write-Output 'npf.sys copied'\r\n" .
+                "    # Create Npcap directory structure\r\n" .
+                "    New-Item 'C:\\Windows\\System32\\Npcap' -ItemType Directory -Force|Out-Null\r\n" .
+                "    \r\n" .
+                "    if(\$drvSys){\r\n" .
+                "      Copy-Item \$drvSys 'C:\\Windows\\System32\\drivers\\npcap.sys' -Force\r\n" .
+                "      Write-Output 'npcap.sys copied'\r\n" .
                 "    }\r\n" .
                 "    if(\$wpcapDll){\r\n" .
+                "      Copy-Item \$wpcapDll 'C:\\Windows\\System32\\Npcap\\wpcap.dll' -Force\r\n" .
                 "      Copy-Item \$wpcapDll 'C:\\Windows\\System32\\wpcap.dll' -Force\r\n" .
                 "      Copy-Item \$wpcapDll 'C:\\Snort\\bin\\wpcap.dll' -Force\r\n" .
                 "      Write-Output 'wpcap.dll copied'\r\n" .
                 "    }\r\n" .
                 "    if(\$packetDll){\r\n" .
+                "      Copy-Item \$packetDll 'C:\\Windows\\System32\\Npcap\\Packet.dll' -Force\r\n" .
                 "      Copy-Item \$packetDll 'C:\\Windows\\System32\\Packet.dll' -Force\r\n" .
                 "      Copy-Item \$packetDll 'C:\\Snort\\bin\\Packet.dll' -Force\r\n" .
                 "      Write-Output 'Packet.dll copied'\r\n" .
                 "    }\r\n" .
                 "    \r\n" .
-                "    # Step 4: Register and start the npf kernel driver\r\n" .
-                "    if(Test-Path 'C:\\Windows\\System32\\drivers\\npf.sys'){\r\n" .
-                "      Write-Output 'Registering npf driver...'\r\n" .
-                "      sc.exe create npf type= kernel start= auto binPath= 'System32\\drivers\\npf.sys' DisplayName= 'NetGroup Packet Filter Driver' 2>&1|Write-Output\r\n" .
-                "      sc.exe start npf 2>&1|Write-Output\r\n" .
-                "      Start-Sleep 2\r\n" .
-                "      sc.exe query npf 2>&1|Write-Output\r\n" .
-                "    }else{Write-Output 'npf.sys not found in extracted files'}\r\n" .
+                "    # Step 4: Register and start the npcap kernel driver\r\n" .
+                "    if(Test-Path 'C:\\Windows\\System32\\drivers\\npcap.sys'){\r\n" .
+                "      Write-Output 'Registering npcap driver...'\r\n" .
+                "      sc.exe create npcap type= kernel start= auto binPath= 'System32\\drivers\\npcap.sys' DisplayName= 'Npcap Packet Driver (NPCAP)' 2>&1|Write-Output\r\n" .
+                "      sc.exe start npcap 2>&1|Write-Output\r\n" .
+                "      Start-Sleep 3\r\n" .
+                "      sc.exe query npcap 2>&1|Write-Output\r\n" .
+                "    }else{Write-Output 'driver .sys not found in extracted files'}\r\n" .
                 "    \r\n" .
                 "    # Verify\r\n" .
                 "    \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
                 "    Write-Output \"SNORT_7Z:\$w\"\r\n" .
                 "    if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "    Write-Output '7zip extract did not work'\r\n" .
-                "  }else{Write-Output 'WinPcap_dl_fail'}\r\n" .
+                "    Write-Output 'npcap extract did not work'\r\n" .
+                "  }else{Write-Output 'Npcap_dl_fail'}\r\n" .
                 "}else{Write-Output '7z not available'}\r\n" .
                 "\r\n" .
                 "# Final check\r\n" .
