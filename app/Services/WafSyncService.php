@@ -909,14 +909,14 @@ class WafSyncService
         $attemptFile = storage_path('app/npcap_attempt_v3.txt');
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing pcap driver (v12 - netcfg)...');
+        Log::info('[Pcap] Installing pcap driver (v13 - hvci fix)...');
 
         try {
             $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "[System.Net.ServicePointManager]::ServerCertificateValidationCallback={param(\$s,\$c,\$ch,\$e) \$true}\r\n" .
                 "\r\n" .
-                "Write-Output 'PCAP_INSTALL_V12'\r\n" .
+                "Write-Output 'PCAP_INSTALL_V13'\r\n" .
                 "\r\n" .
                 "# Diagnostic\r\n" .
                 "Write-Output \"Npcap_dir:\$(Test-Path 'C:\\Windows\\System32\\Npcap')\"\r\n" .
@@ -1094,7 +1094,15 @@ class WafSyncService
                 "    \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
                 "    Write-Output \"SNORT_7Z:\$w\"\r\n" .
                 "    if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "    Write-Output 'npcap extract did not work'\r\n" .
+                "    \r\n" .
+                "    # If driver failed and HVCI is enabled, disable HVCI and request reboot\r\n" .
+                "    if(\$hvci.Enabled -eq 1){\r\n" .
+                "      Write-Output 'HVCI is blocking driver, disabling Memory Integrity...'\r\n" .
+                "      Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -Name 'Enabled' -Value 0 -Type DWord -Force\r\n" .
+                "      \$check=Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -Name 'Enabled' -EA SilentlyContinue\r\n" .
+                "      Write-Output \"HVCI_after:\$(\$check.Enabled)\"\r\n" .
+                "      if(\$check.Enabled -eq 0){Write-Output 'HVCI_DISABLED'}\r\n" .
+                "    }else{Write-Output 'npcap extract did not work'}\r\n" .
                 "  }else{Write-Output 'Npcap_dl_fail'}\r\n" .
                 "}else{Write-Output '7z not available'}\r\n" .
                 "\r\n" .
@@ -1114,19 +1122,27 @@ class WafSyncService
             $out = $r->output();
             // Don't delete — keep for diagnostics and AV whitelisting
 
-            Log::info('[Pcap] Output (v12): ' . substr($out, 0, 5000));
+            Log::info('[Pcap] Output (v13): ' . substr($out, 0, 5000));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
                 @unlink($attemptFile);
                 Log::info('[Pcap] Pcap driver installed and verified');
-                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v12)');
+                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v13)');
+            } elseif (str_contains($out, 'HVCI_DISABLED')) {
+                // HVCI was blocking driver, we disabled it — need reboot
+                Log::warning('[Pcap] HVCI (Memory Integrity) was blocking Npcap driver. Disabled HVCI, rebooting...');
+                $this->reportAgentEvent('snort_install', 'HVCI disabled for Npcap driver, rebooting system...');
+                // Don't cache failure — after reboot, try again immediately
+                @unlink($attemptFile);
+                // Trigger reboot
+                $this->handleReboot();
             } else {
                 $strategy = 'unknown';
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
                     $strategy = $m[1];
                 }
-                Log::warning('[Pcap] Pcap install failed (v12)', [
+                Log::warning('[Pcap] Pcap install failed (v13)', [
                     'strategy' => $strategy,
                     'output' => substr($out, 0, 5000),
                 ]);
@@ -1134,7 +1150,7 @@ class WafSyncService
                 file_put_contents($attemptFile, 'manual_required:' . date('c'));
                 touch($attemptFile, time());
                 // Send full output to hub for debugging
-                $debugMsg = "[v12] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 3000);
+                $debugMsg = "[v13] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 3000);
                 $this->reportAgentEvent('snort_error', $debugMsg, [
                     'strategy' => $strategy,
                     'script_output' => substr($out, 0, 5000),
