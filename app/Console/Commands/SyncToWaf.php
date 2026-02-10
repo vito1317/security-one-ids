@@ -41,30 +41,30 @@ class SyncToWaf extends Command
             $this->showDebugInfo();
         }
 
-        // === Phase 1: Heartbeat (must run first to get config) ===
-        $this->info('Sending heartbeat...');
-        if ($wafSync->heartbeat()) {
-            $this->info('✓ Heartbeat sent');
-        } else {
-            $this->warn('✗ Heartbeat failed');
-        }
-
-        // === Phase 2: Run 3 task groups concurrently ===
-        $this->info('Dispatching concurrent task groups...');
+        // === Run ALL tasks concurrently (4 parallel processes) ===
+        $this->info('Dispatching 4 concurrent task groups...');
         $phpBinary = PHP_BINARY ?: 'php';
         $basePath = base_path();
         $startTime = microtime(true);
 
         try {
             $pool = Process::pool(function ($pool) use ($phpBinary, $basePath) {
+                // Group 1: Heartbeat (independent, fast)
                 $pool->path($basePath)
-                    ->timeout(120)
+                    ->timeout(60)
+                    ->command([$phpBinary, 'artisan', 'waf:heartbeat']);
+                
+                // Group 2: Quick sync (rules, alerts, blocked IPs)
+                $pool->path($basePath)
+                    ->timeout(300)
                     ->command([$phpBinary, 'artisan', 'ids:sync-quick']);
                 
+                // Group 3: Snort management (install, start, update)
                 $pool->path($basePath)
                     ->timeout(600)
                     ->command([$phpBinary, 'artisan', 'ids:sync-snort']);
                 
+                // Group 4: Maintenance (ClamAV, updates, system signals)
                 $pool->path($basePath)
                     ->timeout(600)
                     ->command([$phpBinary, 'artisan', 'ids:sync-maintenance']);
@@ -72,7 +72,7 @@ class SyncToWaf extends Command
 
             $elapsed = round(microtime(true) - $startTime, 1);
             
-            $labels = ['Quick', 'Snort', 'Maintenance'];
+            $labels = ['Heartbeat', 'Quick', 'Snort', 'Maintenance'];
             foreach ($pool as $i => $result) {
                 $label = $labels[$i] ?? "Group {$i}";
                 if ($result->successful()) {
@@ -93,6 +93,7 @@ class SyncToWaf extends Command
             
             // Fallback: run sequentially if pool fails
             $this->info('Running tasks sequentially...');
+            $wafSync->heartbeat();
             $wafSync->runQuickSync();
             $wafSync->runSnortSync();
             $wafSync->runMaintenanceSync();

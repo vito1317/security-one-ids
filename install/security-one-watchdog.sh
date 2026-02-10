@@ -1,7 +1,7 @@
 #!/bin/bash
-# Security One IDS - Auto-Recovery Watchdog Wrapper
-# This script manages the IDS scan process with automatic crash recovery
-# Version 2.0 - Enhanced with crash recovery, health monitoring, and logging
+# Security One IDS - Multi-Threaded Watchdog Wrapper
+# Runs 3 independent background loops: heartbeat, sync, scan
+# Version 3.0 - True multi-threaded with independent process loops
 
 INSTALL_DIR="/opt/security-one-ids"
 LOG_DIR="/var/log/security-one-ids"
@@ -12,7 +12,6 @@ MAX_CRASHES_BEFORE_RESET=5
 SCAN_INTERVAL=300  # Security scan interval (5 min)
 DEFAULT_HEARTBEAT_INTERVAL=60
 CONFIG_FILE="$INSTALL_DIR/storage/app/waf_config.json"
-HEALTH_CHECK_INTERVAL=30
 
 # Ensure log directory exists
 mkdir -p "$LOG_DIR"
@@ -47,43 +46,6 @@ log_message() {
     fi
 }
 
-# Get crash count
-get_crash_count() {
-    if [ -f "$CRASH_COUNT_FILE" ]; then
-        cat "$CRASH_COUNT_FILE"
-    else
-        echo "0"
-    fi
-}
-
-# Increment crash count
-increment_crash_count() {
-    local count=$(get_crash_count)
-    echo $((count + 1)) > "$CRASH_COUNT_FILE"
-}
-
-# Reset crash count
-reset_crash_count() {
-    echo "0" > "$CRASH_COUNT_FILE"
-}
-
-# Check if crash limit reached
-check_crash_limit() {
-    local count=$(get_crash_count)
-    if [ "$count" -ge "$MAX_CRASHES_BEFORE_RESET" ]; then
-        log_message "CRITICAL" "Max crashes ($MAX_CRASHES_BEFORE_RESET) reached. Resetting and waiting 5 minutes..."
-        reset_crash_count
-        
-        # Clear any stale locks/caches that might cause issues
-        rm -f "$INSTALL_DIR/storage/framework/cache/data/*" 2>/dev/null
-        rm -f "$INSTALL_DIR/storage/framework/sessions/*" 2>/dev/null
-        
-        sleep 300
-        return 1
-    fi
-    return 0
-}
-
 # Run artisan command with timeout and error handling
 run_artisan() {
     local command="$1"
@@ -97,11 +59,9 @@ run_artisan() {
         timeout "$timeout_seconds" "$PHP_BIN" "$INSTALL_DIR/artisan" $command >> "$LOG_DIR/output.log" 2>&1
         exit_code=$?
     elif command -v gtimeout &> /dev/null; then
-        # macOS with coreutils installed
         gtimeout "$timeout_seconds" "$PHP_BIN" "$INSTALL_DIR/artisan" $command >> "$LOG_DIR/output.log" 2>&1
         exit_code=$?
     else
-        # No timeout available, run directly
         "$PHP_BIN" "$INSTALL_DIR/artisan" $command >> "$LOG_DIR/output.log" 2>&1
         exit_code=$?
     fi
@@ -109,36 +69,17 @@ run_artisan() {
     return $exit_code
 }
 
-# Health check - verify PHP and database are working
-health_check() {
-    cd "$INSTALL_DIR" || return 1
-    
-    # Quick health check using a simple artisan command
-    if "$PHP_BIN" "$INSTALL_DIR/artisan" --version > /dev/null 2>&1; then
-        return 0
-    else
-        log_message "WARNING" "Health check failed - artisan not responding"
-        return 1
+# Read heartbeat interval from Hub config
+get_heartbeat_interval() {
+    local interval=$DEFAULT_HEARTBEAT_INTERVAL
+    if [ -f "$CONFIG_FILE" ]; then
+        local hi=$(grep -o '"heartbeat_interval"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_FILE" 2>/dev/null | grep -o '[0-9]*$')
+        if [ -n "$hi" ] && [ "$hi" -ge 5 ] && [ "$hi" -le 300 ]; then
+            interval=$hi
+        fi
     fi
+    echo "$interval"
 }
-
-# Cleanup on exit
-cleanup() {
-    log_message "INFO" "Watchdog shutting down..."
-    rm -f "$PID_FILE"
-    exit 0
-}
-
-trap cleanup SIGTERM SIGINT
-
-# Write PID file
-echo $$ > "$PID_FILE"
-
-log_message "INFO" "=== Security One IDS Watchdog Started ==="
-log_message "INFO" "PHP: $PHP_BIN"
-log_message "INFO" "Install Dir: $INSTALL_DIR"
-log_message "INFO" "Scan Interval: ${SCAN_INTERVAL}s"
-log_message "INFO" "Default Heartbeat Interval: ${DEFAULT_HEARTBEAT_INTERVAL}s (overridden by Hub config)"
 
 # Auto-install Snort 3 on Linux if not found
 ensure_snort_installed() {
@@ -278,113 +219,161 @@ SNORTLUA
     fi
 }
 
+# Cleanup all child processes on exit
+CHILD_PIDS=()
+cleanup() {
+    log_message "INFO" "Watchdog shutting down, stopping all child processes..."
+    for pid in "${CHILD_PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+        fi
+    done
+    rm -f "$PID_FILE"
+    log_message "INFO" "Watchdog stopped"
+    exit 0
+}
+
+trap cleanup SIGTERM SIGINT SIGHUP
+
+# Write PID file
+echo $$ > "$PID_FILE"
+
+log_message "INFO" "=== Security One IDS Multi-Threaded Watchdog v3.0 ==="
+log_message "INFO" "PHP: $PHP_BIN"
+log_message "INFO" "Install Dir: $INSTALL_DIR"
+
 # Auto-install Snort if not present
 ensure_snort_installed
 
-# Reset crash count on fresh start
-reset_crash_count
-
-# Main watchdog loop
-consecutive_failures=0
-last_health_check=0
-
-while true; do
-    current_time=$(date +%s)
+# ============================================================
+# Thread 1: HEARTBEAT (independent, high-frequency)
+# Never blocked by sync or scan operations
+# ============================================================
+heartbeat_loop() {
+    log_message "INFO" "[Thread:Heartbeat] Started"
+    local failures=0
     
-    # Periodic health check
-    if [ $((current_time - last_health_check)) -ge $HEALTH_CHECK_INTERVAL ]; then
-        if ! health_check; then
-            log_message "WARNING" "Health check failed, waiting before retry..."
-            sleep 10
-            last_health_check=$current_time
-            continue
-        fi
-        last_health_check=$current_time
-    fi
-    
-    # Check crash limit before continuing
-    if ! check_crash_limit; then
-        continue
-    fi
-    
-    # === WAF Sync (Heartbeat) ===
-    log_message "INFO" "Running WAF sync (heartbeat)..."
-    if run_artisan "waf:sync" 300; then
-        log_message "INFO" "WAF sync completed successfully"
-        consecutive_failures=0
-    else
-        exit_code=$?
-        log_message "WARNING" "WAF sync failed with exit code $exit_code"
-        consecutive_failures=$((consecutive_failures + 1))
-        
-        if [ $consecutive_failures -ge 3 ]; then
-            log_message "ERROR" "Multiple consecutive failures, incrementing crash count"
-            increment_crash_count
-            consecutive_failures=0
-            sleep 30
-            continue
-        fi
-    fi
-    
-    # === Security Scan ===
-    log_message "INFO" "Running security scan..."
-    if run_artisan "desktop:scan --full" 300; then
-        log_message "INFO" "Security scan completed successfully"
-        consecutive_failures=0
-        reset_crash_count  # Reset on successful run
-    else
-        exit_code=$?
-        log_message "ERROR" "Security scan failed with exit code $exit_code"
-        increment_crash_count
-        consecutive_failures=$((consecutive_failures + 1))
-        
-        # Check for specific error conditions
-        if [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
-            log_message "CRITICAL" "Process killed (OOM or SEGFAULT). Waiting 60s before retry..."
-            sleep 60
-        elif [ $exit_code -eq 255 ]; then
-            log_message "ERROR" "PHP fatal error. Waiting 30s before retry..."
-            sleep 30
+    while true; do
+        if run_artisan "waf:heartbeat" 60; then
+            log_message "INFO" "[Thread:Heartbeat] OK"
+            failures=0
         else
-            log_message "WARNING" "Unknown error. Waiting 10s before retry..."
-            sleep 10
-        fi
-        
-        continue
-    fi
-    
-    # Read dynamic heartbeat interval from Hub config
-    heartbeat_interval=$DEFAULT_HEARTBEAT_INTERVAL
-    if [ -f "$CONFIG_FILE" ]; then
-        # Parse heartbeat_interval from JSON (using grep+sed for portability)
-        hi=$(grep -o '"heartbeat_interval"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_FILE" 2>/dev/null | grep -o '[0-9]*$')
-        if [ -n "$hi" ] && [ "$hi" -ge 5 ] && [ "$hi" -le 300 ]; then
-            heartbeat_interval=$hi
-        fi
-    fi
-
-    # Wait for heartbeat interval before next sync cycle
-    log_message "INFO" "Waiting ${heartbeat_interval}s before next heartbeat (scan every ${SCAN_INTERVAL}s)..."
-    
-    # Use heartbeat interval for sync, but run desktop:scan less frequently
-    elapsed_since_scan=0
-    while [ $elapsed_since_scan -lt $SCAN_INTERVAL ]; do
-        sleep $heartbeat_interval
-        elapsed_since_scan=$((elapsed_since_scan + heartbeat_interval))
-        
-        # Run heartbeat sync
-        if run_artisan "waf:sync" 300; then
-            log_message "INFO" "Heartbeat sync OK"
-        else
-            log_message "WARNING" "Heartbeat sync failed"
-        fi
-        
-        # Re-read interval in case Hub updated it
-        if [ -f "$CONFIG_FILE" ]; then
-            hi=$(grep -o '"heartbeat_interval"[[:space:]]*:[[:space:]]*[0-9]*' "$CONFIG_FILE" 2>/dev/null | grep -o '[0-9]*$')
-            if [ -n "$hi" ] && [ "$hi" -ge 5 ] && [ "$hi" -le 300 ]; then
-                heartbeat_interval=$hi
+            failures=$((failures + 1))
+            log_message "WARNING" "[Thread:Heartbeat] Failed (consecutive: $failures)"
+            
+            if [ $failures -ge 5 ]; then
+                log_message "ERROR" "[Thread:Heartbeat] Too many failures, waiting 60s"
+                sleep 60
+                failures=0
+                continue
             fi
         fi
+        
+        local interval=$(get_heartbeat_interval)
+        sleep "$interval"
     done
+}
+
+# ============================================================
+# Thread 2: SYNC (rule sync, Snort management, maintenance)
+# Uses Process::pool internally for sub-parallelism
+# ============================================================
+sync_loop() {
+    log_message "INFO" "[Thread:Sync] Started"
+    local crash_count=0
+    
+    while true; do
+        if run_artisan "waf:sync" 600; then
+            log_message "INFO" "[Thread:Sync] Completed"
+            crash_count=0
+        else
+            exit_code=$?
+            crash_count=$((crash_count + 1))
+            log_message "ERROR" "[Thread:Sync] Failed (exit: $exit_code, crashes: $crash_count)"
+            
+            if [ $crash_count -ge $MAX_CRASHES_BEFORE_RESET ]; then
+                log_message "CRITICAL" "[Thread:Sync] Max crashes reached, cooling down 5min"
+                crash_count=0
+                rm -f "$INSTALL_DIR/storage/framework/cache/data/*" 2>/dev/null
+                sleep 300
+                continue
+            fi
+            
+            # Backoff on specific errors
+            if [ $exit_code -eq 137 ] || [ $exit_code -eq 139 ]; then
+                sleep 60
+            else
+                sleep 10
+            fi
+        fi
+        
+        # Sync runs less frequently than heartbeat
+        local interval=$(get_heartbeat_interval)
+        local sync_wait=$((interval * 3))
+        [ $sync_wait -lt 60 ] && sync_wait=60
+        [ $sync_wait -gt 600 ] && sync_wait=600
+        sleep "$sync_wait"
+    done
+}
+
+# ============================================================
+# Thread 3: SCAN (desktop security scan + AI analysis)
+# Runs every SCAN_INTERVAL, completely independent
+# ============================================================
+scan_loop() {
+    log_message "INFO" "[Thread:Scan] Started (interval: ${SCAN_INTERVAL}s)"
+    
+    while true; do
+        log_message "INFO" "[Thread:Scan] Starting security scan..."
+        if run_artisan "desktop:scan --full" 600; then
+            log_message "INFO" "[Thread:Scan] Completed"
+        else
+            log_message "WARNING" "[Thread:Scan] Failed"
+        fi
+        
+        sleep $SCAN_INTERVAL
+    done
+}
+
+# ============================================================
+# Launch all 3 threads as background processes
+# ============================================================
+log_message "INFO" "Launching 3 independent threads..."
+
+heartbeat_loop &
+CHILD_PIDS+=($!)
+log_message "INFO" "  → Heartbeat thread: PID $!"
+
+sync_loop &
+CHILD_PIDS+=($!)
+log_message "INFO" "  → Sync thread: PID $!"
+
+scan_loop &
+CHILD_PIDS+=($!)
+log_message "INFO" "  → Scan thread: PID $!"
+
+log_message "INFO" "All threads launched. Monitoring..."
+
+# Main watchdog: monitor child processes, restart if they die
+while true; do
+    for i in "${!CHILD_PIDS[@]}"; do
+        pid=${CHILD_PIDS[$i]}
+        labels=("Heartbeat" "Sync" "Scan")
+        label=${labels[$i]:-"Unknown"}
+        
+        if ! kill -0 "$pid" 2>/dev/null; then
+            log_message "CRITICAL" "[Thread:$label] Process $pid died! Restarting..."
+            
+            case $i in
+                0) heartbeat_loop & ;;
+                1) sync_loop & ;;
+                2) scan_loop & ;;
+            esac
+            CHILD_PIDS[$i]=$!
+            log_message "INFO" "[Thread:$label] Restarted as PID ${CHILD_PIDS[$i]}"
+        fi
+    done
+    
+    sleep 30
 done
