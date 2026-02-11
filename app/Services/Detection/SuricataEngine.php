@@ -143,16 +143,22 @@ class SuricataEngine
             ]);
 
             if ($this->isWindows()) {
-                // Windows: launch as background process
+                // Windows: launch as background process via .bat wrapper to set CYGWIN env var
                 $logFile = $this->logDir . '\\suricata_stdout.log';
                 $errFile = $this->logDir . '\\suricata_stderr.log';
                 // Extract arguments: remove the quoted executable path from the full command
                 $args = trim(str_replace("\"{$this->suricataPath}\"", '', $cmd));
-                // Set CYGWIN env var to increase thread-local storage buffers (prevents crash with many rules)
-                $psCommand = "[Environment]::SetEnvironmentVariable('CYGWIN','tls_num_c_bufs:8192','Machine'); " .
-                    "\$env:CYGWIN='tls_num_c_bufs:8192'; " .
-                    "\$proc = Start-Process -FilePath '{$this->suricataPath}' " .
-                    "-ArgumentList '{$args}' " .
+
+                // Create a .bat launcher that sets CYGWIN env var to prevent TP_NUM_C_BUFS crash
+                $batFile = $this->logDir . '\\suricata_launcher.bat';
+                $batContent = "@echo off\r\n" .
+                    "set CYGWIN=tls_num_c_bufs:8192\r\n" .
+                    "\"{$this->suricataPath}\" {$args}\r\n";
+                file_put_contents($batFile, $batContent);
+
+                // Launch the .bat wrapper as a hidden background process
+                $psCommand = "\$proc = Start-Process -FilePath 'cmd.exe' " .
+                    "-ArgumentList '/c','\"{$batFile}\"' " .
                     "-WindowStyle Hidden -PassThru " .
                     "-RedirectStandardOutput '{$logFile}' " .
                     "-RedirectStandardError '{$errFile}'; " .
