@@ -583,10 +583,14 @@ class WafSyncService
 
                 case 'debian':
                 case 'ubuntu':
-                    $this->preseedSnortDebconf();
                     Process::run('apt-get update -qq 2>&1');
-                    $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
-                    // If Snort not in repos, try snap
+                    // Try Snort 3 first (preferred)
+                    $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort3 2>&1');
+                    if (!$result->successful()) {
+                        // Fallback to Snort 2 (legacy package name)
+                        $this->preseedSnortDebconf();
+                        $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
+                    }
                     if (!$result->successful()) {
                         $result = Process::timeout(600)->run('snap install snort 2>&1');
                     }
@@ -595,7 +599,11 @@ class WafSyncService
                 case 'redhat':
                 case 'centos':
                     Process::run('yum install -y epel-release 2>&1');
-                    $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                    // Try Snort 3 first
+                    $result = Process::timeout(600)->run('yum install -y snort3 2>&1');
+                    if (!$result->successful()) {
+                        $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                    }
                     break;
 
                 case 'server':  // Docker containers (Linux-based)
@@ -612,55 +620,67 @@ class WafSyncService
                     Log::info("Linux distro detected: {$distro}");
 
                     if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
-                        // Pre-seed debconf to avoid interactive prompts (Snort asks for HOME_NET)
-                        $this->preseedSnortDebconf();
                         Process::run('apt-get update -qq 2>&1');
                         
-                        // Try installing snort (available in Ubuntu universe repo)
-                        $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
+                        // Try Snort 3 first (preferred — newer, better performance)
+                        $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort3 2>&1');
                         
                         if (!$result->successful()) {
-                            // Try snort3 (newer package name on some distros)
-                            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort3 2>&1');
+                            // Fallback to Snort 2 legacy package
+                            $this->preseedSnortDebconf();
+                            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
                         }
                         
                         if (!$result->successful()) {
-                            // Try adding Snort PPA (Ubuntu only)
+                            // Try adding PPA (Ubuntu only)
                             if (in_array($distro, ['ubuntu', 'linuxmint', 'pop'])) {
-                                Log::info('Trying Snort via PPA...');
+                                Log::info('Trying Snort 3 via PPA...');
                                 Process::timeout(60)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common 2>&1');
                                 Process::timeout(60)->run('add-apt-repository -y ppa:oisf/suricata-stable 2>&1');
                                 Process::run('apt-get update -qq 2>&1');
-                                $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
+                                $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort3 2>&1');
                                 if (!$result->successful()) {
-                                    $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort3 2>&1');
+                                    $this->preseedSnortDebconf();
+                                    $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
                                 }
                             }
                         }
                         
                         if (!$result->successful()) {
-                            // Compile from source as last resort
+                            // Compile Snort 3 from source as last resort
                             Log::info('Trying Snort 3 compile from source...');
                             $result = $this->compileSnort3FromSource();
                         }
                     } elseif (in_array($distro, ['rhel', 'centos', 'rocky', 'almalinux', 'ol'])) {
                         Process::run('yum install -y epel-release 2>&1');
-                        $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                        $result = Process::timeout(600)->run('yum install -y snort3 2>&1');
+                        if (!$result->successful()) {
+                            $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                        }
                     } elseif ($distro === 'fedora') {
-                        $result = Process::timeout(600)->run('dnf install -y snort 2>&1');
+                        $result = Process::timeout(600)->run('dnf install -y snort3 2>&1');
+                        if (!$result->successful()) {
+                            $result = Process::timeout(600)->run('dnf install -y snort 2>&1');
+                        }
                     } elseif ($distro === 'arch' || $distro === 'manjaro') {
                         $result = Process::timeout(600)->run('pacman -S --noconfirm snort 2>&1');
                     } else {
                         // Try apt first (most common), then yum
                         $aptCheck = Process::run('which apt-get 2>&1');
                         if ($aptCheck->successful()) {
-                            $this->preseedSnortDebconf();
                             Process::run('apt-get update -qq 2>&1');
-                            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
+                            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort3 2>&1');
+                            if (!$result->successful()) {
+                                $this->preseedSnortDebconf();
+                                $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y snort 2>&1');
+                            }
                         } else {
                             $yumCheck = Process::run('which yum 2>&1');
                             if ($yumCheck->successful()) {
-                                $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                                $result = Process::timeout(600)->run('yum install -y snort3 2>&1');
+                                if (!$result->successful()) {
+                                    $result = Process::timeout(600)->run('yum install -y snort 2>&1');
+                                }
                             }
                         }
                     }

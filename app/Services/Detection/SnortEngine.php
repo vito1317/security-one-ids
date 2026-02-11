@@ -786,7 +786,7 @@ LUA;
     }
 
     /**
-     * Update Snort on Linux via package manager
+     * Update Snort on Linux via package manager (prefers Snort 3)
      */
     private function updateSnortLinux(): \Illuminate\Process\ProcessResult
     {
@@ -794,14 +794,27 @@ LUA;
 
         if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
             Process::timeout(120)->run('apt-get update -qq 2>&1');
-            return Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade snort 2>&1');
+            // Try upgrading snort3 first, fallback to snort (Snort 2)
+            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade snort3 2>&1');
+            if (!$result->successful()) {
+                $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade snort 2>&1');
+            }
+            return $result;
         }
 
         if (in_array($distro, ['rhel', 'centos', 'rocky', 'almalinux', 'ol', 'fedora'])) {
-            return Process::timeout(600)->run('yum update -y snort 2>&1');
+            $result = Process::timeout(600)->run('yum update -y snort3 2>&1');
+            if (!$result->successful()) {
+                $result = Process::timeout(600)->run('yum update -y snort 2>&1');
+            }
+            return $result;
         }
 
-        return Process::timeout(600)->run('apt-get update -qq && apt-get install -y --only-upgrade snort 2>&1');
+        $result = Process::timeout(600)->run('apt-get update -qq && apt-get install -y --only-upgrade snort3 2>&1');
+        if (!$result->successful()) {
+            $result = Process::timeout(600)->run('apt-get update -qq && apt-get install -y --only-upgrade snort 2>&1');
+        }
+        return $result;
     }
 
     /**
