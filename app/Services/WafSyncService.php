@@ -979,7 +979,6 @@ class WafSyncService
      */
     private function installSuricataLinux(): array
     {
-        $distro = (new \App\Services\Detection\SuricataEngine())->getVersion();
         // Detect distro from os-release
         $distro = 'unknown';
         if (file_exists('/etc/os-release')) {
@@ -989,18 +988,28 @@ class WafSyncService
             }
         }
 
+        Log::info("[Suricata] Linux distro detected: {$distro}");
+
         // Determine sudo prefix
         $sudo = (posix_getuid() !== 0) ? 'sudo ' : '';
+        Log::info("[Suricata] Running as " . (posix_getuid() === 0 ? 'root' : 'user (uid=' . posix_getuid() . ')'));
 
         if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
-            // Add OISF PPA for latest Suricata
-            Process::timeout(60)->run("{$sudo}DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common 2>&1");
-            Process::timeout(60)->run("{$sudo}add-apt-repository -y ppa:oisf/suricata-stable 2>&1");
+            // Add OISF PPA only on Ubuntu variants (PPA not supported on Debian)
+            if (in_array($distro, ['ubuntu', 'linuxmint', 'pop'])) {
+                Log::info('[Suricata] Adding OISF PPA for latest Suricata...');
+                Process::timeout(60)->run("{$sudo}DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common 2>&1");
+                Process::timeout(60)->run("{$sudo}add-apt-repository -y ppa:oisf/suricata-stable 2>&1");
+            }
+
+            Log::info('[Suricata] Running apt-get update...');
             Process::timeout(120)->run("{$sudo}apt-get update -qq 2>&1");
 
+            Log::info('[Suricata] Installing suricata via apt-get...');
             $result = Process::timeout(600)->run("{$sudo}DEBIAN_FRONTEND=noninteractive apt-get install -y suricata 2>&1");
             if ($result->successful()) {
                 // Run suricata-update to fetch ET Open rules
+                Log::info('[Suricata] Running suricata-update...');
                 Process::timeout(120)->run("{$sudo}suricata-update 2>&1");
                 $version = null;
                 try {
@@ -1011,9 +1020,12 @@ class WafSyncService
                 } catch (\Exception $e) {
                     // Ignore
                 }
+                Log::info("[Suricata] Installation successful, version: {$version}");
                 return ['success' => true, 'version' => $version];
             }
-            return ['success' => false, 'error' => 'apt-get install suricata failed: ' . substr($result->output(), -500)];
+            $error = 'apt-get install suricata failed: ' . substr($result->output(), -500);
+            Log::error("[Suricata] {$error}");
+            return ['success' => false, 'error' => $error];
         }
 
         if (in_array($distro, ['centos', 'rhel', 'rocky', 'alma', 'fedora'])) {
