@@ -741,6 +741,17 @@ class WafSyncService
                 return;
             }
 
+            // Windows (Cygwin build): limit rules to prevent TP_NUM_C_BUFS crash
+            // The Cygwin runtime can't handle thousands of rules due to TLS buffer limits
+            if (PHP_OS_FAMILY === 'Windows' && $ruleCount > 500) {
+                $lines = explode("\n", trim($rulesContent));
+                $lines = array_slice($lines, 0, 500);
+                $rulesContent = implode("\n", $lines) . "\n";
+                $originalCount = $ruleCount;
+                $ruleCount = count($lines);
+                Log::info("Windows: Limited Suricata rules from {$originalCount} to {$ruleCount} (Cygwin TLS limit)");
+            }
+
             // IPS mode: convert alert → drop for inline blocking
             if ($mode === 'ips') {
                 $rulesContent = $suricata->applyIpsMode($rulesContent);
