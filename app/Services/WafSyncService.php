@@ -648,6 +648,14 @@ class WafSyncService
 
             // Start Suricata if not running
             if (!$suricata->isRunning()) {
+                // Windows: Suricata OISF build uses Cygwin with TP_NUM_C_BUFS=10 (hardcoded),
+                // which is far too small (needs ~3.4M). This is a known Cygwin DLL limitation
+                // that cannot be fixed via env vars or rule limits. Use Snort on Windows instead.
+                if (PHP_OS_FAMILY === 'Windows') {
+                    Log::info('[Suricata] Skipping start on Windows — Cygwin TP_NUM_C_BUFS limitation prevents startup. Use Snort instead.');
+                    return;
+                }
+
                 $startResult = $suricata->start($mode);
                 if (!($startResult['success'] ?? false)) {
                     Log::warning('Suricata start result', $startResult);
