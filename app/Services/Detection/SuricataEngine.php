@@ -1152,7 +1152,7 @@ YAML;
         }
 
         // Find the Suricata installation directory
-        $suricataDir = dirname($this->binaryPath);
+        $suricataDir = dirname($this->suricataPath);
         if (!is_dir($suricataDir)) {
             Log::error('[Suricata] Cannot find Suricata directory: ' . $suricataDir);
             return false;
