@@ -959,6 +959,7 @@ class WafSyncService
         try {
             switch ($platform) {
                 case 'linux':
+                case 'server':
                     return $this->installSuricataLinux();
                 case 'macos':
                     return $this->installSuricataMac();
