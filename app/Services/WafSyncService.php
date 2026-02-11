@@ -1224,7 +1224,7 @@ class WafSyncService
             "cd {$buildDir} && " .
             "tar xzf snort3.tar.gz --strip-components=1 && " .
             "mkdir -p build && cd build && " .
-            "cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local 2>&1 && " .
+            "cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local 2>&1 && sleep 2 && " .
             "make -j\$(nproc) 2>&1 && " .
             "make install 2>&1 && " .
             "ldconfig 2>&1"
