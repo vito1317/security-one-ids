@@ -1,7 +1,11 @@
 #!/bin/bash
 # Security One IDS Agent - macOS/Linux Installation Script
 # One-line install:
-# curl -fsSL https://raw.githubusercontent.com/vito1317/security-one-ids/main/install/install.sh | sudo bash
+# curl -fsSL https://raw.githubusercontent.com/vito1317/security-one-ids/main/install/install.sh | \
+#   sudo WAF_HUB_URL="https://your-waf.example.com" \
+#   AGENT_TOKEN="your-token" \
+#   AGENT_NAME="your-agent-name" \
+#   bash
 
 set -e
 
@@ -48,6 +52,17 @@ SERVICE_NAME="security-one-ids"
 WAF_HUB_URL="${WAF_HUB_URL:-}"
 AGENT_TOKEN="${AGENT_TOKEN:-}"
 AGENT_NAME="${AGENT_NAME:-$(hostname)}"
+
+# Fallback: if env vars are empty, try reading from parent process environment
+# This handles sudo-rs (Rust sudo) which ignores -E flag
+if [ -z "$WAF_HUB_URL" ] && [ -f "/proc/$PPID/environ" ] 2>/dev/null; then
+    WAF_HUB_URL=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^WAF_HUB_URL=' | cut -d'=' -f2- || true)
+    AGENT_TOKEN=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^AGENT_TOKEN=' | cut -d'=' -f2- || true)
+    _PARENT_AGENT_NAME=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^AGENT_NAME=' | cut -d'=' -f2- || true)
+    if [ -n "$_PARENT_AGENT_NAME" ]; then
+        AGENT_NAME="$_PARENT_AGENT_NAME"
+    fi
+fi
 
 echo -e "${YELLOW}📁 Installation Directory: $INSTALL_DIR${NC}"
 echo -e "${YELLOW}📁 Data Directory: $DATA_DIR${NC}"
