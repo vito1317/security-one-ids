@@ -30,6 +30,20 @@ class SuricataEngine
         $this->rulesDir = $this->detectRulesDir();
         $this->alertLogPath = $this->logDir . DIRECTORY_SEPARATOR . 'eve.json';
         $this->pidFile = $this->logDir . DIRECTORY_SEPARATOR . 'suricata.pid';
+
+        // On Windows, ensure CYGWIN env var is set system-wide (prevents TP_NUM_C_BUFS crash)
+        if ($this->isWindows()) {
+            $currentCygwin = getenv('CYGWIN');
+            if (empty($currentCygwin) || !str_contains($currentCygwin, 'tls_num_c_bufs')) {
+                try {
+                    Process::run('setx /M CYGWIN "tls_num_c_bufs:8192" 2>nul');
+                    putenv('CYGWIN=tls_num_c_bufs:8192');
+                    Log::info('[SuricataEngine] Set CYGWIN=tls_num_c_bufs:8192 system-wide');
+                } catch (\Exception $e) {
+                    Log::debug('[SuricataEngine] Could not set CYGWIN env: ' . $e->getMessage());
+                }
+            }
+        }
     }
 
     /**
@@ -148,13 +162,6 @@ class SuricataEngine
                 $errFile = $this->logDir . '\\suricata_stderr.log';
                 // Extract arguments: remove the quoted executable path from the full command
                 $args = trim(str_replace("\"{$this->suricataPath}\"", '', $cmd));
-
-                // Ensure CYGWIN env var is set system-wide (persists across reboots)
-                try {
-                    Process::timeout(10)->run('setx CYGWIN "tls_num_c_bufs:8192" /M 2>&1');
-                } catch (\Exception $e) {
-                    // Non-fatal, the .bat wrapper will set it for this session
-                }
 
                 // Create a .bat launcher that sets CYGWIN env var to prevent TP_NUM_C_BUFS crash
                 $batFile = $this->logDir . '\\suricata_launcher.bat';
