@@ -1137,4 +1137,121 @@ YAML;
             }
         }
     }
+
+    /**
+     * Fix the Cygwin DLL in the Suricata Windows installation.
+     *
+     * The OISF Suricata Windows MSI bundles an old cygwin1.dll with TP_NUM_C_BUFS=10.
+     * This method downloads a newer cygwin1.dll from official Cygwin mirrors and replaces
+     * the bundled one, fixing the fatal startup crash.
+     */
+    public function fixCygwinDll(): bool
+    {
+        if (!$this->isWindows()) {
+            return false;
+        }
+
+        // Find the Suricata installation directory
+        $suricataDir = dirname($this->binaryPath);
+        if (!is_dir($suricataDir)) {
+            Log::error('[Suricata] Cannot find Suricata directory: ' . $suricataDir);
+            return false;
+        }
+
+        $cygwinDll = $suricataDir . '\\cygwin1.dll';
+        $fixedMarker = storage_path('app/suricata_cygwin_fixed.txt');
+
+        // Skip if already fixed
+        if (file_exists($fixedMarker)) {
+            Log::info('[Suricata] Cygwin DLL was already fixed previously');
+            return true;
+        }
+
+        Log::info("[Suricata] Attempting to fix cygwin1.dll in: {$suricataDir}");
+
+        try {
+            $tempDir = sys_get_temp_dir() . '\\suricata_cygwin_fix';
+            if (!is_dir($tempDir)) {
+                mkdir($tempDir, 0755, true);
+            }
+
+            // Use PowerShell to download the Cygwin setup and install just the runtime DLL
+            // Strategy: Download setup-x86_64.exe and use it in quiet mode to install cygwin to a temp dir,
+            // then copy the cygwin1.dll from there.
+            $psScript = <<<'POWERSHELL'
+$ErrorActionPreference = 'Stop'
+$tempDir = 'TEMP_DIR_PLACEHOLDER'
+$setupExe = "$tempDir\setup-x86_64.exe"
+$cygwinInstallDir = "$tempDir\cygwin64"
+
+# Download Cygwin setup if not present
+if (-not (Test-Path $setupExe)) {
+    Write-Host "Downloading Cygwin setup..."
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri 'https://www.cygwin.com/setup-x86_64.exe' -OutFile $setupExe -UseBasicParsing
+}
+
+# Install just the base package (includes cygwin1.dll) to temp directory
+Write-Host "Installing Cygwin base package to temp directory..."
+$setupArgs = @(
+    '--quiet-mode',
+    '--no-admin',
+    '--root', $cygwinInstallDir,
+    '--local-package-dir', "$tempDir\packages",
+    '--site', 'https://mirrors.kernel.org/sourceware/cygwin/',
+    '--packages', 'cygwin',
+    '--no-shortcuts',
+    '--no-desktop',
+    '--no-startmenu'
+)
+$proc = Start-Process -FilePath $setupExe -ArgumentList $setupArgs -Wait -PassThru -NoNewWindow
+
+if (Test-Path "$cygwinInstallDir\bin\cygwin1.dll") {
+    Write-Host "SUCCESS: cygwin1.dll found at $cygwinInstallDir\bin\cygwin1.dll"
+    exit 0
+} else {
+    Write-Host "ERROR: cygwin1.dll not found after install"
+    exit 1
+}
+POWERSHELL;
+
+            $psScript = str_replace('TEMP_DIR_PLACEHOLDER', $tempDir, $psScript);
+            $scriptPath = $tempDir . '\\fix_cygwin.ps1';
+            file_put_contents($scriptPath, $psScript);
+
+            Log::info('[Suricata] Running Cygwin download and install script...');
+            $result = Process::timeout(300)->run("powershell -ExecutionPolicy Bypass -File \"{$scriptPath}\" 2>&1");
+            Log::info('[Suricata] Cygwin setup output: ' . substr($result->output(), -1000));
+
+            $newDll = $tempDir . '\\cygwin64\\bin\\cygwin1.dll';
+            if (!file_exists($newDll)) {
+                Log::error('[Suricata] New cygwin1.dll not found after download');
+                return false;
+            }
+
+            // Backup old DLL
+            if (file_exists($cygwinDll)) {
+                $backupPath = $cygwinDll . '.bak.' . date('Ymd_His');
+                @copy($cygwinDll, $backupPath);
+                Log::info("[Suricata] Backed up old cygwin1.dll to: {$backupPath}");
+            }
+
+            // Copy new DLL (need to kill any suricata process first)
+            Process::run('taskkill /F /IM suricata.exe 2>nul');
+            sleep(1);
+
+            if (@copy($newDll, $cygwinDll)) {
+                Log::info('[Suricata] Successfully replaced cygwin1.dll');
+                file_put_contents($fixedMarker, date('Y-m-d H:i:s') . "\n");
+                return true;
+            }
+
+            Log::error('[Suricata] Failed to copy new cygwin1.dll');
+            return false;
+
+        } catch (\Exception $e) {
+            Log::error('[Suricata] fixCygwinDll failed: ' . $e->getMessage());
+            return false;
+        }
+    }
 }

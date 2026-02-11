@@ -648,18 +648,31 @@ class WafSyncService
 
             // Start Suricata if not running
             if (!$suricata->isRunning()) {
-                // Windows: Suricata OISF build uses Cygwin with TP_NUM_C_BUFS=10 (hardcoded),
-                // which is far too small (needs ~3.4M). This is a known Cygwin DLL limitation
-                // that cannot be fixed via env vars or rule limits. Use Snort on Windows instead.
-                if (PHP_OS_FAMILY === 'Windows') {
-                    Log::info('[Suricata] Skipping start on Windows — Cygwin TP_NUM_C_BUFS limitation prevents startup. Use Snort instead.');
-                    return;
-                }
-
                 $startResult = $suricata->start($mode);
                 if (!($startResult['success'] ?? false)) {
+                    $error = $startResult['error'] ?? '未知錯誤';
+
+                    // Windows: if TP_NUM_C_BUFS crash, auto-fix cygwin1.dll and retry
+                    if (PHP_OS_FAMILY === 'Windows' && str_contains($error, 'TP_NUM_C_BUFS')) {
+                        Log::info('[Suricata] Detected Cygwin TP_NUM_C_BUFS crash, attempting to fix cygwin1.dll...');
+                        $this->reportAgentEvent('info', 'Suricata Cygwin DLL 修復中...', ['error' => $error]);
+
+                        if ($suricata->fixCygwinDll()) {
+                            Log::info('[Suricata] cygwin1.dll replaced, retrying startup...');
+                            sleep(2);
+                            $startResult = $suricata->start($mode);
+                            if ($startResult['success'] ?? false) {
+                                Log::info('Suricata started successfully after cygwin1.dll fix');
+                                $this->reportAgentEvent('suricata_started', "Suricata 已啟動（修復 Cygwin DLL 後，模式：{$mode}）");
+                                goto suricata_started;
+                            }
+                        }
+                        // Still failed after fix attempt
+                        Log::warning('Suricata still failed after cygwin1.dll fix', $startResult);
+                    }
+
                     Log::warning('Suricata start result', $startResult);
-                    $this->reportAgentEvent('error', 'Suricata 啟動失敗：' . ($startResult['error'] ?? '未知錯誤'), [
+                    $this->reportAgentEvent('error', 'Suricata 啟動失敗：' . $error, [
                         'platform' => PHP_OS_FAMILY,
                         'mode' => $mode,
                     ]);
@@ -671,6 +684,8 @@ class WafSyncService
                     ]);
                 }
             }
+
+            suricata_started:
 
             // Store the current mode
             file_put_contents($modeFile, $mode);
