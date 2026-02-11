@@ -28,8 +28,8 @@ class SuricataEngine
         $this->configPath = $this->detectConfigPath();
         $this->logDir = $this->detectLogDir();
         $this->rulesDir = $this->detectRulesDir();
-        $this->alertLogPath = $this->logDir . '/eve.json';
-        $this->pidFile = $this->logDir . '/suricata.pid';
+        $this->alertLogPath = $this->logDir . DIRECTORY_SEPARATOR . 'eve.json';
+        $this->pidFile = $this->logDir . DIRECTORY_SEPARATOR . 'suricata.pid';
     }
 
     /**
@@ -77,7 +77,8 @@ class SuricataEngine
             // Fallback: try -V
             $result = Process::timeout(10)->run("\"{$this->suricataPath}\" -V 2>&1");
             $output = $result->output() . $result->errorOutput();
-            if (preg_match('/([\d.]+)/i', $output, $matches)) {
+            // Require at least X.Y format to avoid matching single digits
+            if (preg_match('/(\d+\.\d[\d.]*)/i', $output, $matches)) {
                 return $matches[1];
             }
         } catch (\Exception $e) {
@@ -145,8 +146,10 @@ class SuricataEngine
                 // Windows: launch as background process
                 $logFile = $this->logDir . '\\suricata_stdout.log';
                 $errFile = $this->logDir . '\\suricata_stderr.log';
+                // Extract arguments: remove the quoted executable path from the full command
+                $args = trim(str_replace("\"{$this->suricataPath}\"", '', $cmd));
                 $psCommand = "\$proc = Start-Process -FilePath '{$this->suricataPath}' " .
-                    "-ArgumentList '" . str_replace($this->suricataPath . ' ', '', $cmd) . "' " .
+                    "-ArgumentList '{$args}' " .
                     "-WindowStyle Hidden -PassThru " .
                     "-RedirectStandardOutput '{$logFile}' " .
                     "-RedirectStandardError '{$errFile}'; " .
@@ -187,8 +190,13 @@ class SuricataEngine
             $errorOutput = '';
             if ($this->isWindows()) {
                 $winErrFile = $this->logDir . '\\suricata_stderr.log';
+                $winOutFile = $this->logDir . '\\suricata_stdout.log';
                 if (file_exists($winErrFile)) {
-                    $errorOutput = file_get_contents($winErrFile);
+                    $errorOutput = trim(file_get_contents($winErrFile));
+                }
+                // Suricata may write errors to stdout on Windows
+                if (empty($errorOutput) && file_exists($winOutFile)) {
+                    $errorOutput = trim(file_get_contents($winOutFile));
                 }
             } elseif (isset($stderrFile) && file_exists($stderrFile)) {
                 $errorOutput = file_get_contents($stderrFile);

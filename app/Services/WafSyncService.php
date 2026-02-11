@@ -3801,6 +3801,8 @@ class WafSyncService
     {
         // Include Snort status in system info for Hub
         $snortInfo = $this->getSnortInfo();
+        // Include Suricata status in system info for Hub
+        $suricataInfo = $this->getSuricataInfo();
 
         return [
             'os' => PHP_OS,
@@ -3815,6 +3817,8 @@ class WafSyncService
             'network' => $this->getNetworkUsage(),
             // Snort IPS status
             'snort' => $snortInfo,
+            // Suricata IDS/IPS status
+            'suricata' => $suricataInfo,
         ];
     }
 
@@ -3826,6 +3830,23 @@ class WafSyncService
         try {
             $snort = app(\App\Services\Detection\SnortEngine::class);
             return $snort->getStatus();
+        } catch (\Exception $e) {
+            return [
+                'installed' => false,
+                'version' => null,
+                'running' => false,
+            ];
+        }
+    }
+
+    /**
+     * Get Suricata IDS/IPS status information for heartbeat
+     */
+    private function getSuricataInfo(): array
+    {
+        try {
+            $suricata = app(\App\Services\Detection\SuricataEngine::class);
+            return $suricata->getStatus();
         } catch (\Exception $e) {
             return [
                 'installed' => false,
