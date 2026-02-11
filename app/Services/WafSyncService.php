@@ -581,12 +581,12 @@ class WafSyncService
                     @unlink($lockFile);
                 }
 
-                // Check failure cooldown (24h)
+                // Check failure cooldown (1h)
                 $failFile = storage_path('app/suricata_install_failed.txt');
                 if (file_exists($failFile)) {
                     $failedAt = filemtime($failFile);
-                    if (time() - $failedAt < 86400) {
-                        Log::debug('Suricata install previously failed, skipping retry until ' . date('Y-m-d H:i:s', $failedAt + 86400));
+                    if (time() - $failedAt < 3600) {
+                        Log::debug('Suricata install previously failed, skipping retry until ' . date('Y-m-d H:i:s', $failedAt + 3600));
                         return;
                     }
                     @unlink($failFile);
@@ -963,16 +963,19 @@ class WafSyncService
             }
         }
 
+        // Determine sudo prefix
+        $sudo = (posix_getuid() !== 0) ? 'sudo ' : '';
+
         if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
             // Add OISF PPA for latest Suricata
-            Process::timeout(60)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common 2>&1');
-            Process::timeout(60)->run('add-apt-repository -y ppa:oisf/suricata-stable 2>&1');
-            Process::timeout(120)->run('apt-get update -qq 2>&1');
+            Process::timeout(60)->run("{$sudo}DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common 2>&1");
+            Process::timeout(60)->run("{$sudo}add-apt-repository -y ppa:oisf/suricata-stable 2>&1");
+            Process::timeout(120)->run("{$sudo}apt-get update -qq 2>&1");
 
-            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y suricata 2>&1');
+            $result = Process::timeout(600)->run("{$sudo}DEBIAN_FRONTEND=noninteractive apt-get install -y suricata 2>&1");
             if ($result->successful()) {
                 // Run suricata-update to fetch ET Open rules
-                Process::timeout(120)->run('suricata-update 2>&1');
+                Process::timeout(120)->run("{$sudo}suricata-update 2>&1");
                 $version = null;
                 try {
                     $vResult = Process::run('suricata -V 2>&1');
@@ -989,15 +992,15 @@ class WafSyncService
 
         if (in_array($distro, ['centos', 'rhel', 'rocky', 'alma', 'fedora'])) {
             if ($distro === 'fedora') {
-                $result = Process::timeout(600)->run('dnf install -y suricata 2>&1');
+                $result = Process::timeout(600)->run("{$sudo}dnf install -y suricata 2>&1");
             } else {
                 // Enable EPEL first
-                Process::timeout(120)->run('yum install -y epel-release 2>&1');
-                $result = Process::timeout(600)->run('yum install -y suricata 2>&1');
+                Process::timeout(120)->run("{$sudo}yum install -y epel-release 2>&1");
+                $result = Process::timeout(600)->run("{$sudo}yum install -y suricata 2>&1");
             }
 
             if ($result->successful()) {
-                Process::timeout(120)->run('suricata-update 2>&1');
+                Process::timeout(120)->run("{$sudo}suricata-update 2>&1");
                 return ['success' => true];
             }
             return ['success' => false, 'error' => 'Package install failed: ' . substr($result->output(), -500)];
@@ -1024,7 +1027,19 @@ class WafSyncService
             return ['success' => false, 'error' => 'Homebrew not found, please install it first'];
         }
 
-        $result = Process::timeout(600)->run("{$brew} install suricata 2>&1");
+        // Homebrew must NOT run as root. If we're root (e.g. LaunchDaemon), run as the real user.
+        $brewCmd = "{$brew} install suricata";
+        if (posix_getuid() === 0) {
+            // Find the actual user who owns the Homebrew prefix
+            $brewOwner = trim(Process::run("stat -f '%Su' {$brew} 2>/dev/null || stat -c '%U' {$brew} 2>/dev/null")->output());
+            if (!empty($brewOwner) && $brewOwner !== 'root') {
+                $brewCmd = "sudo -u {$brewOwner} {$brew} install suricata";
+            } else {
+                return ['success' => false, 'error' => 'Cannot run Homebrew as root. Please install Suricata manually: brew install suricata'];
+            }
+        }
+
+        $result = Process::timeout(600)->run("{$brewCmd} 2>&1");
         if ($result->successful()) {
             return ['success' => true];
         }
@@ -2499,7 +2514,7 @@ class WafSyncService
     /**
      * Report an event to the Hub
      */
-    private function reportAgentEvent(string $eventType, string $message, array $details = []): void
+    public function reportAgentEvent(string $eventType, string $message, array $details = []): void
     {
         try {
             if (empty($this->wafUrl) || empty($this->agentToken)) {
