@@ -534,6 +534,362 @@ class WafSyncService
     }
 
     /**
+     * Run Suricata sync — called from heartbeat loop when suricata_enabled=true
+     */
+    public function runSuricataSync(): void
+    {
+        $config = $this->getWafConfig();
+        $addons = $config['addons'] ?? [];
+
+        if (empty($addons['suricata_enabled'])) {
+            return;
+        }
+
+        $this->handleSuricataAddon($addons['suricata_mode'] ?? 'ids');
+    }
+
+    /**
+     * Handle Suricata IDS/IPS add-on installation and management
+     */
+    private function handleSuricataAddon(string $mode = 'ids'): void
+    {
+        try {
+            $suricata = app(\App\Services\Detection\SuricataEngine::class);
+
+            if (!$suricata->isInstalled()) {
+                // Check installation lock
+                $lockFile = storage_path('app/suricata_installing.lock');
+                if (file_exists($lockFile)) {
+                    $lockInfo = json_decode(file_get_contents($lockFile), true);
+                    $pid = $lockInfo['pid'] ?? 0;
+                    $startTime = $lockInfo['started_at'] ?? 0;
+
+                    if (time() - $startTime < 3600) {
+                        if ($pid > 0 && (PHP_OS_FAMILY === 'Windows' ? true : posix_kill($pid, 0))) {
+                            Log::debug("Suricata installation already in progress (PID: $pid), skipping...");
+                            return;
+                        }
+                    }
+                    @unlink($lockFile);
+                }
+
+                // Check failure cooldown (24h)
+                $failFile = storage_path('app/suricata_install_failed.txt');
+                if (file_exists($failFile)) {
+                    $failedAt = filemtime($failFile);
+                    if (time() - $failedAt < 86400) {
+                        Log::debug('Suricata install previously failed, skipping retry until ' . date('Y-m-d H:i:s', $failedAt + 86400));
+                        return;
+                    }
+                    @unlink($failFile);
+                }
+
+                Log::info('Suricata enabled but not installed, starting installation...');
+                file_put_contents($lockFile, json_encode([
+                    'pid' => getmypid(),
+                    'started_at' => time(),
+                ]));
+                $result = $this->installSuricata();
+                @unlink($lockFile);
+
+                if ($result['success']) {
+                    Log::info('Suricata installed successfully');
+                    @unlink($failFile);
+                    $this->reportAgentEvent('suricata_install', 'Suricata 安裝成功', [
+                        'version' => $result['version'] ?? null,
+                    ]);
+                } else {
+                    $error = $result['error'] ?? 'Unknown error';
+                    Log::error('Suricata installation failed: ' . $error);
+                    file_put_contents($failFile, $error);
+                    $this->reportAgentEvent('error', 'Suricata 安裝失敗：' . $error);
+                    return;
+                }
+
+                $suricata = new \App\Services\Detection\SuricataEngine();
+            }
+
+            // Start Suricata if not running
+            if (!$suricata->isRunning()) {
+                $startResult = $suricata->start($mode);
+                if (!($startResult['success'] ?? false)) {
+                    Log::warning('Suricata start result', $startResult);
+                    $this->reportAgentEvent('error', 'Suricata 啟動失敗：' . ($startResult['error'] ?? '未知錯誤'), [
+                        'platform' => PHP_OS_FAMILY,
+                        'mode' => $mode,
+                    ]);
+                } else {
+                    Log::info('Suricata started successfully');
+                    $this->reportAgentEvent('suricata_started', "Suricata 已啟動（模式：{$mode}）", [
+                        'platform' => PHP_OS_FAMILY,
+                        'mode' => $mode,
+                    ]);
+                }
+            }
+
+            // Auto-update: check once per day
+            $this->autoUpdateSuricata($suricata);
+
+            // Report status back to Hub
+            $status = $suricata->getStatus();
+            Log::info('Suricata status reported', $status);
+
+        } catch (\Exception $e) {
+            Log::error('Suricata addon handling failed: ' . $e->getMessage());
+            $this->reportAgentEvent('error', 'Suricata 處理失敗：' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Auto-update Suricata (checks once per day)
+     */
+    private function autoUpdateSuricata(\App\Services\Detection\SuricataEngine $suricata): void
+    {
+        $updateFile = storage_path('app/suricata_last_update_check.txt');
+
+        if (file_exists($updateFile)) {
+            $lastCheck = (int) file_get_contents($updateFile);
+            if (time() - $lastCheck < 86400) {
+                return;
+            }
+        }
+
+        file_put_contents($updateFile, (string) time());
+
+        try {
+            Log::info('Running daily Suricata auto-update check...');
+            $result = $suricata->updateSuricata();
+
+            if ($result['success'] ?? false) {
+                $version = $result['version'] ?? 'unknown';
+                $previous = $result['previous'] ?? null;
+
+                if ($previous && $previous !== $version) {
+                    Log::info("Suricata updated: {$previous} → {$version}");
+                    $this->reportAgentEvent('suricata_updated', "Suricata 已更新：{$previous} → {$version}", [
+                        'old_version' => $previous,
+                        'new_version' => $version,
+                    ]);
+                } else {
+                    Log::info("Suricata is up to date: {$version}");
+                }
+            }
+        } catch (\Exception $e) {
+            Log::warning('Suricata auto-update check failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Install Suricata on the current platform
+     */
+    private function installSuricata(): array
+    {
+        $platform = $this->detectPlatform();
+        Log::info("Installing Suricata on {$platform}...");
+
+        try {
+            switch ($platform) {
+                case 'linux':
+                    return $this->installSuricataLinux();
+                case 'macos':
+                    return $this->installSuricataMac();
+                case 'windows':
+                    return $this->installSuricataWindows();
+                default:
+                    return ['success' => false, 'error' => "Unsupported platform: {$platform}"];
+            }
+        } catch (\Exception $e) {
+            Log::error("Suricata installation failed: " . $e->getMessage());
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Install Suricata on Linux
+     */
+    private function installSuricataLinux(): array
+    {
+        $distro = (new \App\Services\Detection\SuricataEngine())->getVersion();
+        // Detect distro from os-release
+        $distro = 'unknown';
+        if (file_exists('/etc/os-release')) {
+            $content = file_get_contents('/etc/os-release');
+            if (preg_match('/^ID=(.+)$/m', $content, $m)) {
+                $distro = trim($m[1], '"\'');
+            }
+        }
+
+        if (in_array($distro, ['debian', 'ubuntu', 'linuxmint', 'pop', 'kali'])) {
+            // Add OISF PPA for latest Suricata
+            Process::timeout(60)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common 2>&1');
+            Process::timeout(60)->run('add-apt-repository -y ppa:oisf/suricata-stable 2>&1');
+            Process::timeout(120)->run('apt-get update -qq 2>&1');
+
+            $result = Process::timeout(600)->run('DEBIAN_FRONTEND=noninteractive apt-get install -y suricata 2>&1');
+            if ($result->successful()) {
+                // Run suricata-update to fetch ET Open rules
+                Process::timeout(120)->run('suricata-update 2>&1');
+                $version = null;
+                try {
+                    $vResult = Process::run('suricata -V 2>&1');
+                    if (preg_match('/([\d.]+)/', $vResult->output(), $m)) {
+                        $version = $m[1];
+                    }
+                } catch (\Exception $e) {
+                    // Ignore
+                }
+                return ['success' => true, 'version' => $version];
+            }
+            return ['success' => false, 'error' => 'apt-get install suricata failed: ' . substr($result->output(), -500)];
+        }
+
+        if (in_array($distro, ['centos', 'rhel', 'rocky', 'alma', 'fedora'])) {
+            if ($distro === 'fedora') {
+                $result = Process::timeout(600)->run('dnf install -y suricata 2>&1');
+            } else {
+                // Enable EPEL first
+                Process::timeout(120)->run('yum install -y epel-release 2>&1');
+                $result = Process::timeout(600)->run('yum install -y suricata 2>&1');
+            }
+
+            if ($result->successful()) {
+                Process::timeout(120)->run('suricata-update 2>&1');
+                return ['success' => true];
+            }
+            return ['success' => false, 'error' => 'Package install failed: ' . substr($result->output(), -500)];
+        }
+
+        return ['success' => false, 'error' => "Unsupported Linux distribution: {$distro}"];
+    }
+
+    /**
+     * Install Suricata on macOS via Homebrew
+     */
+    private function installSuricataMac(): array
+    {
+        $brewPaths = ['/opt/homebrew/bin/brew', '/usr/local/bin/brew'];
+        $brew = '';
+        foreach ($brewPaths as $p) {
+            if (file_exists($p)) {
+                $brew = $p;
+                break;
+            }
+        }
+
+        if (empty($brew)) {
+            return ['success' => false, 'error' => 'Homebrew not found, please install it first'];
+        }
+
+        $result = Process::timeout(600)->run("{$brew} install suricata 2>&1");
+        if ($result->successful()) {
+            return ['success' => true];
+        }
+
+        return ['success' => false, 'error' => 'brew install suricata failed: ' . substr($result->output(), -500)];
+    }
+
+    /**
+     * Install Suricata on Windows (MSI + WinDivert)
+     *
+     * WinDivert driver is EV code-signed — no KMCI/Secure Boot issues.
+     */
+    private function installSuricataWindows(): array
+    {
+        Log::info('[Suricata] Installing on Windows with WinDivert...');
+
+        try {
+            // Strategy 1: Try WinGet
+            $result = Process::timeout(600)->run('winget install OISF.Suricata --silent --accept-source-agreements 2>&1');
+            if ($result->successful()) {
+                Log::info('[Suricata] Installed via WinGet');
+                return ['success' => true, 'method' => 'winget'];
+            }
+            Log::debug('[Suricata] WinGet install failed, trying Chocolatey...');
+
+            // Strategy 2: Try Chocolatey
+            $chocoPath = '';
+            foreach (['C:\\ProgramData\\chocolatey\\choco.exe', 'C:\\ProgramData\\chocolatey\\bin\\choco.exe'] as $p) {
+                if (file_exists($p)) {
+                    $chocoPath = $p;
+                    break;
+                }
+            }
+            if (!empty($chocoPath)) {
+                $result = Process::timeout(600)->run("\"{$chocoPath}\" install suricata -y 2>&1");
+                if ($result->successful()) {
+                    Log::info('[Suricata] Installed via Chocolatey');
+                    return ['success' => true, 'method' => 'chocolatey'];
+                }
+            }
+
+            // Strategy 3: Download official MSI
+            Log::info('[Suricata] Trying direct MSI download...');
+            $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
+                "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
+                "\$msiUrl='https://www.openinfosecfoundation.org/download/windows/Suricata-7.0.8-1-64bit.msi'\r\n" .
+                "\$msiPath=\"\$env:TEMP\\suricata.msi\"\r\n" .
+                "\r\n" .
+                "# Download MSI\r\n" .
+                "Write-Output 'Downloading Suricata MSI...'\r\n" .
+                "try {\r\n" .
+                "    (New-Object Net.WebClient).DownloadFile(\$msiUrl, \$msiPath)\r\n" .
+                "} catch {\r\n" .
+                "    Write-Output \"Download failed: \$_\"\r\n" .
+                "    exit 1\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "if (!(Test-Path \$msiPath)) {\r\n" .
+                "    Write-Output 'MSI download failed'\r\n" .
+                "    exit 1\r\n" .
+                "}\r\n" .
+                "\r\n" .
+                "# Install MSI silently\r\n" .
+                "Write-Output 'Installing Suricata MSI...'\r\n" .
+                "\$p = Start-Process msiexec -ArgumentList '/i',\$msiPath,'/quiet','/norestart' -Wait -PassThru\r\n" .
+                "Write-Output \"MSI exit code: \$(\$p.ExitCode)\"\r\n" .
+                "\r\n" .
+                "if (\$p.ExitCode -eq 0) {\r\n" .
+                "    Write-Output 'SURICATA_INSTALL_OK'\r\n" .
+                "\r\n" .
+                "    # Deploy WinDivert (EV signed driver — no KMCI issues)\r\n" .
+                "    # WinDivert is typically bundled with the Suricata Windows installer\r\n" .
+                "    # Verify it's available\r\n" .
+                "    \$windivert = Get-ChildItem -Path 'C:\\Program Files\\Suricata' -Recurse -Filter 'WinDivert.dll' -ErrorAction SilentlyContinue\r\n" .
+                "    if (\$windivert) {\r\n" .
+                "        Write-Output \"WinDivert found: \$(\$windivert.FullName)\"\r\n" .
+                "    } else {\r\n" .
+                "        Write-Output 'WinDivert not bundled, downloading...'\r\n" .
+                "        \$wdUrl='https://github.com/basil00/WinDivert/releases/download/v2.2.2/WinDivert-2.2.2-A.zip'\r\n" .
+                "        \$wdZip=\"\$env:TEMP\\WinDivert.zip\"\r\n" .
+                "        \$wdDir='C:\\Program Files\\Suricata'\r\n" .
+                "        try {\r\n" .
+                "            (New-Object Net.WebClient).DownloadFile(\$wdUrl, \$wdZip)\r\n" .
+                "            Expand-Archive -Path \$wdZip -DestinationPath \$wdDir -Force\r\n" .
+                "            Write-Output 'WinDivert deployed successfully'\r\n" .
+                "        } catch {\r\n" .
+                "            Write-Output \"WinDivert download failed: \$_\"\r\n" .
+                "        }\r\n" .
+                "    }\r\n" .
+                "} else {\r\n" .
+                "    Write-Output 'SURICATA_INSTALL_FAIL'\r\n" .
+                "}\r\n";
+
+            $r = Process::timeout(600)->run("powershell -NonInteractive -ExecutionPolicy Bypass -Command \"{$script}\"");
+            $out = $r->output();
+            Log::info('[Suricata] MSI install output: ' . substr($out, 0, 2000));
+
+            if (str_contains($out, 'SURICATA_INSTALL_OK')) {
+                return ['success' => true, 'method' => 'msi'];
+            }
+
+            return ['success' => false, 'error' => 'All Windows install methods failed. Output: ' . substr($out, -500)];
+
+        } catch (\Exception $e) {
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
      * Install Snort 3 on the current platform
      */
     private function installSnort(): array
