@@ -378,6 +378,23 @@ class WafSyncService
             $snort = app(\App\Services\Detection\SnortEngine::class);
 
             if (!$snort->isInstalled()) {
+                // Check if installation is already in progress
+                $lockFile = storage_path("app/snort_installing.lock");
+                if (file_exists($lockFile)) {
+                    $lockInfo = json_decode(file_get_contents($lockFile), true);
+                    $pid = $lockInfo["pid"] ?? 0;
+                    $startTime = $lockInfo["started_at"] ?? 0;
+
+                    // If lock is less than 1 hour old and process exists, skip
+                    if (time() - $startTime < 3600) {
+                        if ($pid > 0 && (PHP_OS_FAMILY === "Windows" ? true : posix_kill($pid, 0))) {
+                            Log::debug("Snort installation already in progress (PID: $pid), skipping...");
+                            return;
+                        }
+                    }
+                    // Lock is stale or process died - allow retry
+                    @unlink($lockFile);
+                }
                 // Check if install already failed — don't retry every heartbeat
                 $failFile = storage_path('app/snort_install_failed.txt');
                 if (file_exists($failFile)) {
@@ -392,7 +409,15 @@ class WafSyncService
                 }
 
                 Log::info('Snort enabled but not installed, starting installation...');
+                // Create lock file
+                file_put_contents($lockFile, json_encode([
+                    "pid" => getmypid(),
+                    "started_at" => time(),
+                ]));
                 $result = $this->installSnort();
+
+                // Remove lock file after install attempt
+                @unlink($lockFile);
 
                 if ($result['success']) {
                     Log::info('Snort installed successfully');
@@ -1258,6 +1283,23 @@ class WafSyncService
 
             $snort = app(\App\Services\Detection\SnortEngine::class);
             if (!$snort->isInstalled()) {
+                // Check if installation is already in progress
+                $lockFile = storage_path("app/snort_installing.lock");
+                if (file_exists($lockFile)) {
+                    $lockInfo = json_decode(file_get_contents($lockFile), true);
+                    $pid = $lockInfo["pid"] ?? 0;
+                    $startTime = $lockInfo["started_at"] ?? 0;
+
+                    // If lock is less than 1 hour old and process exists, skip
+                    if (time() - $startTime < 3600) {
+                        if ($pid > 0 && (PHP_OS_FAMILY === "Windows" ? true : posix_kill($pid, 0))) {
+                            Log::debug("Snort installation already in progress (PID: $pid), skipping...");
+                            return;
+                        }
+                    }
+                    // Lock is stale or process died - allow retry
+                    @unlink($lockFile);
+                }
                 return;
             }
 
@@ -1462,6 +1504,23 @@ class WafSyncService
         try {
             $snort = app(\App\Services\Detection\SnortEngine::class);
             if (!$snort->isInstalled()) {
+                // Check if installation is already in progress
+                $lockFile = storage_path("app/snort_installing.lock");
+                if (file_exists($lockFile)) {
+                    $lockInfo = json_decode(file_get_contents($lockFile), true);
+                    $pid = $lockInfo["pid"] ?? 0;
+                    $startTime = $lockInfo["started_at"] ?? 0;
+
+                    // If lock is less than 1 hour old and process exists, skip
+                    if (time() - $startTime < 3600) {
+                        if ($pid > 0 && (PHP_OS_FAMILY === "Windows" ? true : posix_kill($pid, 0))) {
+                            Log::debug("Snort installation already in progress (PID: $pid), skipping...");
+                            return;
+                        }
+                    }
+                    // Lock is stale or process died - allow retry
+                    @unlink($lockFile);
+                }
                 return;
             }
 
@@ -1695,6 +1754,23 @@ class WafSyncService
 
             $snort = app(\App\Services\Detection\SnortEngine::class);
             if (!$snort->isInstalled()) {
+                // Check if installation is already in progress
+                $lockFile = storage_path("app/snort_installing.lock");
+                if (file_exists($lockFile)) {
+                    $lockInfo = json_decode(file_get_contents($lockFile), true);
+                    $pid = $lockInfo["pid"] ?? 0;
+                    $startTime = $lockInfo["started_at"] ?? 0;
+
+                    // If lock is less than 1 hour old and process exists, skip
+                    if (time() - $startTime < 3600) {
+                        if ($pid > 0 && (PHP_OS_FAMILY === "Windows" ? true : posix_kill($pid, 0))) {
+                            Log::debug("Snort installation already in progress (PID: $pid), skipping...");
+                            return;
+                        }
+                    }
+                    // Lock is stale or process died - allow retry
+                    @unlink($lockFile);
+                }
                 return;
             }
 
