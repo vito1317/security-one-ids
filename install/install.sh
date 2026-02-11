@@ -66,11 +66,11 @@ install_php() {
             ;;
         debian)
             apt-get update
-            apt-get install -y php php-cli php-curl php-json php-mbstring php-xml composer git
+            apt-get install -y php php-cli php-curl php-json php-mbstring php-xml php-sqlite3 php-zip composer git
             ;;
         redhat)
             yum install -y epel-release
-            yum install -y php php-cli php-curl php-json php-mbstring php-xml composer git
+            yum install -y php php-cli php-curl php-json php-mbstring php-xml php-pdo php-sqlite3 composer git
             ;;
         *)
             echo -e "${RED}Unsupported OS. Please install PHP 8.0+ manually.${NC}"
