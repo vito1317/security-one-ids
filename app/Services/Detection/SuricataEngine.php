@@ -148,7 +148,10 @@ class SuricataEngine
                 $errFile = $this->logDir . '\\suricata_stderr.log';
                 // Extract arguments: remove the quoted executable path from the full command
                 $args = trim(str_replace("\"{$this->suricataPath}\"", '', $cmd));
-                $psCommand = "\$proc = Start-Process -FilePath '{$this->suricataPath}' " .
+                // Set CYGWIN env var to increase thread-local storage buffers (prevents crash with many rules)
+                $psCommand = "[Environment]::SetEnvironmentVariable('CYGWIN','tls_num_c_bufs:8192','Machine'); " .
+                    "\$env:CYGWIN='tls_num_c_bufs:8192'; " .
+                    "\$proc = Start-Process -FilePath '{$this->suricataPath}' " .
                     "-ArgumentList '{$args}' " .
                     "-WindowStyle Hidden -PassThru " .
                     "-RedirectStandardOutput '{$logFile}' " .
