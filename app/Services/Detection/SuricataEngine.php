@@ -145,6 +145,11 @@ class SuricataEngine
         // Ensure a valid config file exists
         $this->ensureConfig();
 
+        // Windows (Cygwin): limit rules before startup to prevent TP_NUM_C_BUFS crash
+        if ($this->isWindows()) {
+            $this->limitRulesForWindows();
+        }
+
         // Build the Suricata command
         $cmd = $this->buildStartCommand($mode, $interface);
 
@@ -1090,6 +1095,46 @@ YAML;
             return !empty(trim($result->output()));
         } catch (\Exception $e) {
             return false;
+        }
+    }
+
+    /**
+     * Limit rules files on Windows to prevent Cygwin TP_NUM_C_BUFS crash.
+     * The Cygwin runtime used by Suricata on Windows cannot handle thousands of rules.
+     */
+    private function limitRulesForWindows(int $maxRules = 500): void
+    {
+        if (!is_dir($this->rulesDir)) {
+            return;
+        }
+
+        $rulesFiles = glob($this->rulesDir . DIRECTORY_SEPARATOR . '*.rules');
+        foreach ($rulesFiles as $file) {
+            $content = file_get_contents($file);
+            $lines = explode("\n", trim($content));
+            $ruleCount = count(array_filter($lines, fn($l) => !empty(trim($l)) && !str_starts_with(trim($l), '#')));
+
+            if ($ruleCount > $maxRules) {
+                // Keep only active rules up to the limit
+                $kept = [];
+                foreach ($lines as $line) {
+                    if (empty(trim($line)) || str_starts_with(trim($line), '#')) {
+                        $kept[] = $line; // Keep comments/blanks
+                        continue;
+                    }
+                    if (count(array_filter($kept, fn($l) => !empty(trim($l)) && !str_starts_with(trim($l), '#'))) < $maxRules) {
+                        $kept[] = $line;
+                    }
+                }
+                file_put_contents($file, implode("\n", $kept) . "\n");
+                Log::info("Windows: Trimmed {$file} from {$ruleCount} to {$maxRules} rules (Cygwin TLS limit)");
+
+                // Clear hash to force re-sync with the limited set
+                $hashFile = storage_path('app/suricata_rules_hash.txt');
+                if (file_exists($hashFile)) {
+                    @unlink($hashFile);
+                }
+            }
         }
     }
 }
