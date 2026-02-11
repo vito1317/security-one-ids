@@ -82,6 +82,9 @@ install_php() {
         debian)
             apt-get update
             apt-get install -y php php-cli php-curl php-json php-mbstring php-xml php-sqlite3 php-zip composer git
+            # Stop and disable Apache2 (installed as PHP dependency) to avoid port 80 conflict with Docker/WAF
+            systemctl stop apache2 2>/dev/null || true
+            systemctl disable apache2 2>/dev/null || true
             ;;
         redhat)
             yum install -y epel-release
@@ -247,10 +250,10 @@ install_snort() {
         rm -rf libdaq
         git clone --depth 1 https://github.com/snort3/libdaq.git
         cd libdaq
-        ./bootstrap 2>/dev/null
-        ./configure --prefix=/usr/local 2>/dev/null
-        make -j$(nproc) 2>/dev/null
-        make install 2>/dev/null
+        ./bootstrap > /dev/null 2>&1
+        ./configure --prefix=/usr/local > /dev/null 2>&1
+        make -j$(nproc) > /dev/null 2>&1
+        make install > /dev/null 2>&1
         ldconfig
         cd /tmp && rm -rf libdaq
         echo -e "${GREEN}✅ libdaq built and installed${NC}"
@@ -268,20 +271,43 @@ install_snort() {
         # Download and build Snort 3
         echo -e "${CYAN}Building Snort 3 v${SNORT_VER} (this may take 5-10 minutes)...${NC}"
         cd /tmp
+        rm -rf snort3-${SNORT_VER}* snort3-build
         curl -fsSL -o snort3-${SNORT_VER}.tar.gz \
             "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz" 2>/dev/null || \
         wget -q -O snort3-${SNORT_VER}.tar.gz \
             "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz"
         
-        if [ -f "snort3-${SNORT_VER}.tar.gz" ]; then
+        if [ -f "snort3-${SNORT_VER}.tar.gz" ] && [ -s "snort3-${SNORT_VER}.tar.gz" ]; then
             tar xzf snort3-${SNORT_VER}.tar.gz
-            cd snort3-${SNORT_VER}
+            # Find the extracted directory (may be snort3-VERSION or snort-VERSION)
+            SNORT_SRC_DIR=$(find /tmp -maxdepth 1 -type d -name "snort*${SNORT_VER}" | head -1)
+            if [ -z "$SNORT_SRC_DIR" ]; then
+                echo -e "${RED}Failed to find extracted Snort source directory${NC}"
+                return 1
+            fi
+            cd "$SNORT_SRC_DIR"
             mkdir -p build && cd build
-            cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local -DENABLE_TCMALLOC=ON 2>/dev/null
-            make -j$(nproc) 2>/dev/null
-            make install 2>/dev/null
+            echo -e "${CYAN}Running cmake...${NC}"
+            if ! cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local -DENABLE_TCMALLOC=ON > /tmp/snort3-cmake.log 2>&1; then
+                echo -e "${RED}cmake failed. Log: /tmp/snort3-cmake.log${NC}"
+                # Retry without TCMALLOC
+                echo -e "${YELLOW}Retrying cmake without TCMALLOC...${NC}"
+                if ! cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local > /tmp/snort3-cmake.log 2>&1; then
+                    echo -e "${RED}cmake failed again. Check /tmp/snort3-cmake.log${NC}"
+                    return 1
+                fi
+            fi
+            echo -e "${CYAN}Compiling (this takes a while)...${NC}"
+            if ! make -j$(nproc) > /tmp/snort3-build.log 2>&1; then
+                echo -e "${RED}make failed. Log: /tmp/snort3-build.log${NC}"
+                return 1
+            fi
+            if ! make install > /tmp/snort3-install.log 2>&1; then
+                echo -e "${RED}make install failed. Log: /tmp/snort3-install.log${NC}"
+                return 1
+            fi
             ldconfig
-            cd /tmp && rm -rf snort3-${SNORT_VER}*
+            cd /tmp && rm -rf "$SNORT_SRC_DIR" snort3-${SNORT_VER}.tar.gz
             
             # Ensure snort is in PATH
             if [ -f /usr/local/bin/snort ] && ! command -v snort &>/dev/null; then
