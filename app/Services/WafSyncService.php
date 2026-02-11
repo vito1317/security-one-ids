@@ -248,6 +248,14 @@ class WafSyncService
             $this->collectSnortAlerts();
         }
 
+        // Suricata rules & alerts (only if Suricata enabled)
+        if (!empty($addons['suricata_enabled'])) {
+            if (!empty($addons['suricata_rules_hash'])) {
+                $this->syncSuricataRules($addons['suricata_rules_hash'], $addons['suricata_mode'] ?? 'ids');
+            }
+            $this->collectSuricataAlerts();
+        }
+
         // Blocked IPs
         if (!empty($config['blocked_ips'])) {
             $this->handleBlockedIps($config['blocked_ips']);
@@ -637,6 +645,224 @@ class WafSyncService
         } catch (\Exception $e) {
             Log::error('Suricata addon handling failed: ' . $e->getMessage());
             $this->reportAgentEvent('error', 'Suricata 處理失敗：' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Sync Suricata rules from Hub (hash-based change detection)
+     */
+    private function syncSuricataRules(string $hubHash, string $mode = 'ids'): void
+    {
+        try {
+            if ($this->codeUpdated) {
+                Log::info('Skipping Suricata rule sync — code was just updated');
+                return;
+            }
+
+            $suricata = app(\App\Services\Detection\SuricataEngine::class);
+            if (!$suricata->isInstalled()) {
+                return;
+            }
+
+            // Compare local hash with Hub hash
+            $hashPath = storage_path('app/suricata_rules_hash.txt');
+            $localHash = file_exists($hashPath) ? trim(file_get_contents($hashPath)) : '';
+            if ($localHash === $hubHash) {
+                Log::debug('Suricata rules hash matches Hub, no sync needed');
+                return;
+            }
+
+            Log::info('Suricata rules hash mismatch, syncing from Hub...', [
+                'local_hash' => $localHash,
+                'hub_hash' => $hubHash,
+            ]);
+
+            if (empty($this->wafUrl) || empty($this->agentToken)) {
+                Log::warning('Cannot sync Suricata rules: Hub URL or token not configured');
+                return;
+            }
+
+            // Fetch rules from Hub
+            $response = $this->getHttpClient(120)
+                ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
+                ->get("{$this->wafUrl}/api/ids/agents/suricata-rules", [
+                    'token' => $this->agentToken,
+                ]);
+
+            if (!$response->successful()) {
+                Log::error('Failed to fetch Suricata rules from Hub', ['status' => $response->status()]);
+                $this->reportAgentEvent('error', 'Suricata 規則同步失敗：無法從 Hub 下載', [
+                    'http_status' => $response->status(),
+                ]);
+                return;
+            }
+
+            $data = $response->json();
+            $rulesContent = '';
+            $ruleCount = 0;
+
+            if (!empty($data['rules_text'])) {
+                $rulesContent = $data['rules_text'] . "\n";
+                $ruleCount = $data['rules_count'] ?? substr_count($rulesContent, "\n");
+            } else {
+                Log::info('No Suricata rules received from Hub');
+                return;
+            }
+
+            // IPS mode: convert alert → drop for inline blocking
+            if ($mode === 'ips') {
+                $rulesContent = $suricata->applyIpsMode($rulesContent);
+            }
+
+            // Write rules and reload
+            $suricata->applyCustomRules($rulesContent);
+
+            // Store the new hash locally
+            file_put_contents($hashPath, $data['rules_hash'] ?? $hubHash);
+
+            // Reload rules (SIGUSR2 for live reload, or restart)
+            if ($suricata->isRunning()) {
+                $reloadResult = $suricata->reload();
+                if (!($reloadResult['success'] ?? false)) {
+                    Log::warning('Suricata reload failed, restarting...', $reloadResult);
+                    $suricata->stop();
+                    $suricata->start($mode);
+                }
+            }
+
+            Log::info("Synced {$ruleCount} Suricata rules from Hub");
+            $this->reportAgentEvent('suricata_rule_sync', "已從 Hub 同步 {$ruleCount} 條 Suricata 規則", [
+                'rule_count' => $ruleCount,
+                'rules_hash' => $data['rules_hash'] ?? $hubHash,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Suricata rules sync failed: ' . $e->getMessage());
+            $this->reportAgentEvent('error', 'Suricata 規則同步例外：' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Collect alerts from Suricata EVE JSON log and upload to Hub
+     */
+    private function collectSuricataAlerts(): void
+    {
+        try {
+            $suricata = app(\App\Services\Detection\SuricataEngine::class);
+            if (!$suricata->isInstalled() || !$suricata->isRunning()) {
+                return;
+            }
+
+            $alertLogPath = $suricata->getAlertLogPath();
+            if (!$alertLogPath || !file_exists($alertLogPath)) {
+                Log::debug('Suricata EVE log not found', ['path' => $alertLogPath]);
+                return;
+            }
+
+            // Fix permissions if needed
+            if (!is_readable($alertLogPath) && PHP_OS_FAMILY !== 'Windows') {
+                $logDir = dirname($alertLogPath);
+                Process::run("sudo chmod -R o+rX {$logDir} 2>/dev/null");
+                clearstatcache(true, $alertLogPath);
+                if (!is_readable($alertLogPath)) {
+                    Log::warning('Suricata EVE log not readable', ['path' => $alertLogPath]);
+                    return;
+                }
+            }
+
+            // Track file position
+            $positionFile = storage_path('app/suricata_alert_position.txt');
+            $lastPosition = 0;
+            if (file_exists($positionFile)) {
+                $lastPosition = (int) file_get_contents($positionFile);
+            }
+
+            $fileSize = filesize($alertLogPath);
+            if ($fileSize < $lastPosition) {
+                $lastPosition = 0; // Log rotated
+            }
+            if ($fileSize <= $lastPosition) {
+                return; // No new data
+            }
+
+            $handle = fopen($alertLogPath, 'r');
+            if (!$handle) {
+                return;
+            }
+
+            fseek($handle, $lastPosition);
+            $newAlerts = [];
+            $maxAlerts = 50;
+
+            while (!feof($handle) && count($newAlerts) < $maxAlerts) {
+                $line = fgets($handle);
+                if ($line === false) {
+                    break;
+                }
+
+                $line = trim($line);
+                if (empty($line)) {
+                    continue;
+                }
+
+                // Parse EVE JSON format
+                $event = json_decode($line, true);
+                if (!$event || ($event['event_type'] ?? '') !== 'alert') {
+                    continue;
+                }
+
+                $alert = $event['alert'] ?? [];
+                $sourceIp = $event['src_ip'] ?? null;
+                if (!$sourceIp || !filter_var($sourceIp, FILTER_VALIDATE_IP)) {
+                    continue;
+                }
+
+                $severity = match ((int) ($alert['severity'] ?? 3)) {
+                    1 => 'critical',
+                    2 => 'high',
+                    3 => 'medium',
+                    default => 'low',
+                };
+
+                $sid = $alert['signature_id'] ?? 0;
+                $msg = $alert['signature'] ?? 'Unknown';
+                $category = $alert['category'] ?? 'suricata-detection';
+                $proto = strtoupper($event['proto'] ?? 'unknown');
+
+                $newAlerts[] = [
+                    'source_ip' => $sourceIp,
+                    'severity' => $severity,
+                    'category' => $category,
+                    'source' => 'suricata',
+                    'detections' => "[SURICATA] SID:{$sid} {$msg} (Severity: " . ($alert['severity'] ?? '?') . ')',
+                    'raw_log' => $line,
+                    'uri' => ($event['dest_ip'] ?? '') . ':' . ($event['dest_port'] ?? ''),
+                    'method' => $proto,
+                ];
+            }
+
+            // Save position
+            file_put_contents($positionFile, (string) ftell($handle));
+            fclose($handle);
+
+            // Upload to Hub
+            if (!empty($newAlerts) && !empty($this->wafUrl) && !empty($this->agentToken)) {
+                $response = $this->getHttpClient(30)
+                    ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
+                    ->post("{$this->wafUrl}/api/ids/agents/alerts", [
+                        'token' => $this->agentToken,
+                        'alerts' => $newAlerts,
+                    ]);
+
+                if ($response->successful()) {
+                    Log::info('Uploaded ' . count($newAlerts) . ' Suricata alerts to Hub');
+                } else {
+                    Log::warning('Failed to upload Suricata alerts', ['status' => $response->status()]);
+                }
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Suricata alert collection failed: ' . $e->getMessage());
         }
     }
 
