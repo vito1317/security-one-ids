@@ -82,7 +82,7 @@ get_heartbeat_interval() {
 }
 
 # Auto-install Snort 3 on Linux if not found
-ensure_snort_installed() {
+ # ensure_snort_installed () {
     # Only run on Linux
     if [[ "$OSTYPE" == "darwin"* ]]; then
         return 0
@@ -244,7 +244,7 @@ log_message "INFO" "PHP: $PHP_BIN"
 log_message "INFO" "Install Dir: $INSTALL_DIR"
 
 # Auto-install Snort if not present
-ensure_snort_installed
+ # ensure_snort_installed 
 
 # ============================================================
 # Thread 1: HEARTBEAT (independent, high-frequency)
