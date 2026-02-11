@@ -617,6 +617,21 @@ class WafSyncService
                 $suricata = new \App\Services\Detection\SuricataEngine();
             }
 
+            // Detect mode change: if mode has changed, restart Suricata with new mode
+            $modeFile = storage_path('app/suricata_mode.txt');
+            $currentMode = file_exists($modeFile) ? trim(file_get_contents($modeFile)) : null;
+
+            if ($suricata->isRunning() && $currentMode !== null && $currentMode !== $mode) {
+                Log::info("Suricata mode changed from {$currentMode} to {$mode}, restarting...");
+                $suricata->stop();
+                sleep(2);
+                $this->reportAgentEvent('suricata_mode_change', "Suricata 模式已切換：{$currentMode} → {$mode}", [
+                    'old_mode' => $currentMode,
+                    'new_mode' => $mode,
+                ]);
+                // Fall through to the start block below
+            }
+
             // Start Suricata if not running
             if (!$suricata->isRunning()) {
                 $startResult = $suricata->start($mode);
@@ -634,6 +649,9 @@ class WafSyncService
                     ]);
                 }
             }
+
+            // Store the current mode
+            file_put_contents($modeFile, $mode);
 
             // Auto-update: check once per day
             $this->autoUpdateSuricata($suricata);
