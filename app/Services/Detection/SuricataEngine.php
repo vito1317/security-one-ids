@@ -761,6 +761,7 @@ YAML;
             : [
                 '/etc/suricata/suricata.yaml',
                 '/usr/local/etc/suricata/suricata.yaml',
+                '/opt/homebrew/etc/suricata/suricata.yaml',
                 '/opt/suricata/etc/suricata.yaml',
                 storage_path('app/suricata/suricata.yaml'),
             ];
@@ -786,7 +787,7 @@ YAML;
     {
         $paths = $this->isWindows()
             ? ['C:\\Suricata\\log', 'C:\\Program Files\\Suricata\\log']
-            : ['/var/log/suricata'];
+            : ['/var/log/suricata', '/opt/homebrew/var/log/suricata', '/usr/local/var/log/suricata'];
 
         foreach ($paths as $path) {
             if (is_dir($path)) {
