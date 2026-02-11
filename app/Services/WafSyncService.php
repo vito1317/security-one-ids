@@ -954,14 +954,14 @@ class WafSyncService
         $attemptFile = storage_path('app/npcap_attempt_v3.txt');
         file_put_contents($attemptFile, date('c'));
 
-        Log::info('[Pcap] Installing pcap driver (v17 - official npcap.exe installer)...');
+        Log::info('[Pcap] Installing pcap driver (v18 - Win10Pcap MSI + NDIS rebind)...');
 
         try {
             $script = "\$ErrorActionPreference='SilentlyContinue'\r\n" .
                 "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12\r\n" .
                 "[System.Net.ServicePointManager]::ServerCertificateValidationCallback={param(\$s,\$c,\$ch,\$e) \$true}\r\n" .
                 "\r\n" .
-                "Write-Output 'PCAP_INSTALL_V17'\r\n" .
+                "Write-Output 'PCAP_INSTALL_V18'\r\n" .
                 "\r\n" .
                 "# Diagnostic\r\n" .
                 "Write-Output \"Npcap_dir:\$(Test-Path 'C:\\Windows\\System32\\Npcap')\"\r\n" .
@@ -1014,7 +1014,7 @@ class WafSyncService
                 "sc.exe delete npf 2>&1|Write-Output\r\n" .
                 "\r\n" .
                 "# Also remove stale pnputil driver packages from previous 7z extraction attempts\r\n" .
-                "# These unsigned OEM drivers block the official installer from working correctly\r\n" .
+                "# These unsigned OEM drivers may conflict with proper WHQL-signed ones\r\n" .
                 "\$oemDrivers = pnputil /enum-drivers 2>&1|Out-String\r\n" .
                 "if(\$oemDrivers -match 'oem\\d+\\.inf.*npcap'){\r\n" .
                 "  \$oemDrivers -split '\\r?\\n'|ForEach-Object{\r\n" .
@@ -1023,46 +1023,9 @@ class WafSyncService
                 "  Write-Output 'Removed stale OEM npcap drivers'\r\n" .
                 "}\r\n" .
                 "\r\n" .
-                "# === STRATEGY 0: Official Npcap installer .exe (WHQL-signed, the ONLY reliable method) ===\r\n" .
-                "# The .exe installer ships WHQL-certified drivers that pass Windows KMCI.\r\n" .
-                "# Extracting from 7z gives unsigned files that Windows always blocks (error 1275).\r\n" .
-                "Write-Output 'STRATEGY:npcap_exe_installer'\r\n" .
-                "\$npExe='C:\\Snort\\scripts\\npcap-1.80.exe'\r\n" .
-                "if(-not(Test-Path \$npExe) -or (Get-Item \$npExe).Length -lt 500000){\r\n" .
-                "  \$ok=Download-File 'https://npcap.com/dist/npcap-1.80.exe' \$npExe\r\n" .
-                "  if(-not \$ok){\$ok=Download-File 'https://github.com/nmap/npcap/releases/download/v1.80/npcap-1.80.exe' \$npExe}\r\n" .
-                "  if(-not \$ok){\$ok=Download-File 'https://npcap.com/dist/npcap-1.79.exe' \$npExe}\r\n" .
-                "}\r\n" .
-                "if((Test-Path \$npExe) -and (Get-Item \$npExe).Length -gt 500000){\r\n" .
-                "  Write-Output \"npcap_exe_size:\$((Get-Item \$npExe).Length)\"\r\n" .
-                "  # Run the official installer silently with WinPcap compatibility mode\r\n" .
-                "  Write-Output 'Running npcap installer silently...'\r\n" .
-                "  \$p=Start-Process -FilePath \$npExe -ArgumentList '/S','/winpcap_mode=yes','/loopback_support=yes' -Wait -PassThru -NoNewWindow\r\n" .
-                "  Write-Output \"npcap_installer_exit:\$(\$p.ExitCode)\"\r\n" .
-                "  if(\$p.ExitCode -eq 0 -or \$p.ExitCode -eq 3010){\r\n" .
-                "    Start-Sleep 5\r\n" .
-                "    net start npcap 2>&1|Out-Null\r\n" .
-                "    Start-Sleep 3\r\n" .
-                "    # Copy DLLs to where Snort expects them\r\n" .
-                "    \$nDir='C:\\Windows\\System32\\Npcap'\r\n" .
-                "    if(Test-Path \"\$nDir\\wpcap.dll\"){\r\n" .
-                "      Copy-Item \"\$nDir\\wpcap.dll\" 'C:\\Windows\\System32\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
-                "      Copy-Item \"\$nDir\\Packet.dll\" 'C:\\Windows\\System32\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
-                "      Copy-Item \"\$nDir\\wpcap.dll\" 'C:\\Snort\\bin\\wpcap.dll' -Force -EA SilentlyContinue\r\n" .
-                "      Copy-Item \"\$nDir\\Packet.dll\" 'C:\\Snort\\bin\\Packet.dll' -Force -EA SilentlyContinue\r\n" .
-                "    }\r\n" .
-                "    \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
-                "    Write-Output \"SNORT_S0:\$w\"\r\n" .
-                "    if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "    Write-Output 'Npcap installer OK but no interfaces yet (may need reboot)'\r\n" .
-                "  }else{\r\n" .
-                "    Write-Output \"Npcap installer FAILED with exit code \$(\$p.ExitCode)\"\r\n" .
-                "  }\r\n" .
-                "}else{\r\n" .
-                "  Write-Output 'npcap_exe: download failed or file too small'\r\n" .
-                "}\r\n" .
-                "\r\n" .
-                "# === STRATEGY 1: Win10Pcap MSI silent install (WHQL certified, fallback) ===\r\n" .
+                "# === STRATEGY 1: Win10Pcap MSI silent install (WHQL certified, supports silent) ===\r\n" .
+                "# NOTE: Npcap free edition does NOT support /S silent install (OEM license required).\r\n" .
+                "# Win10Pcap is the only WHQL-certified packet capture driver with silent install support.\r\n" .
                 "Write-Output 'STRATEGY:win10pcap_msi'\r\n" .
                 "\$msiFile='C:\\Snort\\scripts\\Win10Pcap.msi'\r\n" .
                 "if(-not (Test-Path \$msiFile) -or (Get-Item \$msiFile).Length -lt 100000){\r\n" .
@@ -1070,50 +1033,105 @@ class WafSyncService
                 "}\r\n" .
                 "if((Test-Path \$msiFile) -and (Get-Item \$msiFile).Length -gt 100000){\r\n" .
                 "  Write-Output \"msi_size:\$((Get-Item \$msiFile).Length)\"\r\n" .
-                "  # Wait for Windows Installer service if it's busy\r\n" .
+                "  # Kill stale msiexec processes that cause error 1618 (installer busy)\r\n" .
+                "  Get-Process msiexec -EA SilentlyContinue|Where-Object{\$_.StartTime -lt (Get-Date).AddMinutes(-5)}|Stop-Process -Force -EA SilentlyContinue\r\n" .
+                "  Start-Sleep 3\r\n" .
+                "  # Retry loop for 1618 (Windows Installer busy)\r\n" .
                 "  \$retryCount=0\r\n" .
                 "  do{\r\n" .
                 "    \$p=Start-Process msiexec -ArgumentList '/i',\$msiFile,'/quiet','/norestart','ALLUSERS=1' -Wait -PassThru -NoNewWindow\r\n" .
                 "    Write-Output \"msi_exit:\$(\$p.ExitCode) attempt:\$(\$retryCount+1)\"\r\n" .
                 "    if(\$p.ExitCode -eq 1618){\r\n" .
                 "      \$retryCount++\r\n" .
-                "      Write-Output 'Windows Installer busy, waiting 60s...'\r\n" .
-                "      Start-Sleep 60\r\n" .
+                "      Write-Output 'Windows Installer busy, waiting 30s...'\r\n" .
+                "      Start-Sleep 30\r\n" .
                 "    }else{break}\r\n" .
                 "  }while(\$retryCount -lt 3)\r\n" .
-                "  if(\$p.ExitCode -eq 0){\r\n" .
+                "  \r\n" .
+                "  if(\$p.ExitCode -eq 0 -or \$p.ExitCode -eq 3010){\r\n" .
+                "    Write-Output 'Win10Pcap MSI installed successfully'\r\n" .
+                "    # Start NPF service\r\n" .
                 "    net start npf 2>&1|Out-Null\r\n" .
-                "    Start-Sleep 5\r\n" .
+                "    Start-Sleep 3\r\n" .
+                "    \$npfSvc=Get-Service -Name 'npf' -EA SilentlyContinue\r\n" .
+                "    Write-Output \"npf_svc:\$(\$npfSvc.Status)\"\r\n" .
+                "    \r\n" .
+                "    # Check interfaces\r\n" .
                 "    \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
-                "    Write-Output \"SNORT_MSI:\$w\"\r\n" .
+                "    if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output \"SNORT_MSI:\$w\";Write-Output 'PCAP_OK'; exit 0}\r\n" .
+                "    \r\n" .
+                "    # NDIS filter not yet bound — force network adapter restart to trigger rebind\r\n" .
+                "    # This avoids requiring a full system reboot\r\n" .
+                "    Write-Output 'No interfaces yet, forcing network adapter restart for NDIS rebind...'\r\n" .
+                "    \$adapters=Get-NetAdapter|Where-Object{\\$_.Status -eq 'Up'}|Select-Object -ExpandProperty Name\r\n" .
+                "    Write-Output \"active_adapters:\$(\$adapters -join ',')\"\r\n" .
+                "    foreach(\$adapter in \$adapters){\r\n" .
+                "      Write-Output \"Restarting adapter: \$adapter\"\r\n" .
+                "      Disable-NetAdapter -Name \$adapter -Confirm:\$false -EA SilentlyContinue\r\n" .
+                "      Start-Sleep 2\r\n" .
+                "      Enable-NetAdapter -Name \$adapter -Confirm:\$false -EA SilentlyContinue\r\n" .
+                "    }\r\n" .
+                "    Start-Sleep 5\r\n" .
+                "    # Restart NPF after adapter rebind\r\n" .
+                "    net stop npf 2>&1|Out-Null\r\n" .
+                "    Start-Sleep 1\r\n" .
+                "    net start npf 2>&1|Out-Null\r\n" .
+                "    Start-Sleep 3\r\n" .
+                "    \r\n" .
+                "    \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "    Write-Output \"SNORT_REBIND:\$w\"\r\n" .
                 "    if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
-                "    Write-Output 'Win10Pcap: installed but no interfaces (may need reboot)'\r\n" .
+                "    \r\n" .
+                "    # Try devcon-style restart of NPF device (alternative NDIS rebind)\r\n" .
+                "    Write-Output 'Trying PnP device restart...'\r\n" .
+                "    \$npfDevices=Get-PnpDevice|Where-Object{\$_.FriendlyName -match 'Win10Pcap|NPF|WinPcap'}|Select-Object -ExpandProperty InstanceId\r\n" .
+                "    if(\$npfDevices){\r\n" .
+                "      foreach(\$devId in \$npfDevices){\r\n" .
+                "        Write-Output \"PnP_restart: \$devId\"\r\n" .
+                "        Disable-PnpDevice -InstanceId \$devId -Confirm:\$false -EA SilentlyContinue\r\n" .
+                "        Start-Sleep 1\r\n" .
+                "        Enable-PnpDevice -InstanceId \$devId -Confirm:\$false -EA SilentlyContinue\r\n" .
+                "      }\r\n" .
+                "      Start-Sleep 3\r\n" .
+                "      net start npf 2>&1|Out-Null\r\n" .
+                "      Start-Sleep 2\r\n" .
+                "      \$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
+                "      Write-Output \"SNORT_PNP:\$w\"\r\n" .
+                "      if(\$w -match '\\d+\\s+\\S+\\s+\\d+\\.\\d+\\.\\d+\\.\\d+'){Write-Output 'PCAP_OK'; exit 0}\r\n" .
+                "    }else{Write-Output 'No Win10Pcap PnP devices found'}\r\n" .
+                "    \r\n" .
+                "    Write-Output 'Win10Pcap installed but NDIS not bound (may still need reboot)'\r\n" .
+                "  }else{\r\n" .
+                "    Write-Output \"MSI install failed with exit code \$(\$p.ExitCode)\"\r\n" .
                 "  }\r\n" .
+                "}else{\r\n" .
+                "  Write-Output 'MSI file not available'\r\n" .
                 "}\r\n" .
                 "\r\n" .
-                "# === STRATEGY 2: bcdedit test signing (prepare for next manual reboot) ===\r\n" .
+                "# === STRATEGY 2: bcdedit test signing for npcap 7z driver (next manual reboot) ===\r\n" .
+                "# If bcdedit testsigning is on and system has been rebooted, the 7z-extracted\r\n" .
+                "# npcap driver can load despite not being WHQL signed.\r\n" .
                 "\$tsFlag='C:\\Snort\\scripts\\testsigning_set.txt'\r\n" .
                 "if(-not (Test-Path \$tsFlag)){\r\n" .
-                "  Write-Output 'Setting bcdedit testsigning...'\r\n" .
+                "  Write-Output 'STRATEGY:bcdedit_testsigning'\r\n" .
                 "  \$r1=bcdedit /set testsigning on 2>&1|Out-String\r\n" .
                 "  \$r2=bcdedit /set nointegritychecks on 2>&1|Out-String\r\n" .
                 "  Write-Output \"bcdedit_ts:\$(\$r1.Trim())\"\r\n" .
                 "  Write-Output \"bcdedit_ni:\$(\$r2.Trim())\"\r\n" .
                 "  'done'|Out-File \$tsFlag -Force\r\n" .
+                "  Write-Output 'Test signing enabled. After next reboot, npcap driver can load.'\r\n" .
                 "}\r\n" .
                 "\r\n" .
                 "# Diagnostics\r\n" .
                 "\$hvci=Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity' -Name 'Enabled' -EA SilentlyContinue\r\n" .
                 "\$sb=Confirm-SecureBootUEFI 2>&1\r\n" .
                 "Write-Output \"HVCI:\$(\$hvci.Enabled) SecureBoot:\$sb\"\r\n" .
-                "# Check what driver packages are registered\r\n" .
-                "\$drivers=pnputil /enum-drivers 2>&1|Out-String\r\n" .
-                "if(\$drivers -match 'npcap'){Write-Output 'pnputil:npcap_found_in_store'}else{Write-Output 'pnputil:npcap_NOT_in_store'}\r\n" .
-                "# Check npcap service status\r\n" .
-                "\$svc=Get-Service -Name 'npcap' -EA SilentlyContinue\r\n" .
-                "Write-Output \"npcap_svc:\$(\$svc.Status) npcap_start:\$(\$svc.StartType)\"\r\n" .
                 "\$npfSvc=Get-Service -Name 'npf' -EA SilentlyContinue\r\n" .
                 "Write-Output \"npf_svc:\$(\$npfSvc.Status) npf_start:\$(\$npfSvc.StartType)\"\r\n" .
+                "\$npcapSvc=Get-Service -Name 'npcap' -EA SilentlyContinue\r\n" .
+                "Write-Output \"npcap_svc:\$(\$npcapSvc.Status) npcap_start:\$(\$npcapSvc.StartType)\"\r\n" .
+                "# List all WinPcap/Npcap related services\r\n" .
+                "Get-Service|Where-Object{\$_.Name -match 'npf|npcap|win10pcap|winpcap'}|ForEach-Object{Write-Output \"svc:\$(\$_.Name)=\$(\$_.Status)\"}\r\n" .
                 "\r\n" .
                 "# Final check\r\n" .
                 "\$w=&'C:\\Snort\\bin\\snort.exe' -W 2>&1|Out-String\r\n" .
@@ -1131,19 +1149,19 @@ class WafSyncService
             $out = $r->output();
             // Don't delete — keep for diagnostics and AV whitelisting
 
-            Log::info('[Pcap] Output (v17): ' . substr($out, 0, 5000));
+            Log::info('[Pcap] Output (v18): ' . substr($out, 0, 5000));
 
             if (str_contains($out, 'PCAP_OK')) {
                 file_put_contents($cacheFile, date('c'));
                 @unlink($attemptFile);
                 Log::info('[Pcap] Pcap driver installed and verified');
-                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v17)');
+                $this->reportAgentEvent('snort_install', 'Pcap driver installed successfully (v18)');
             } else {
                 $strategy = 'unknown';
                 if (preg_match('/STRATEGY:(\w+)/', $out, $m)) {
                     $strategy = $m[1];
                 }
-                Log::warning('[Pcap] Pcap install failed (v17)', [
+                Log::warning('[Pcap] Pcap install failed (v18)', [
                     'strategy' => $strategy,
                     'output' => substr($out, 0, 5000),
                 ]);
@@ -1151,7 +1169,7 @@ class WafSyncService
                 file_put_contents($attemptFile, 'manual_required:' . date('c'));
                 touch($attemptFile, time());
                 // Send full output to hub for debugging
-                $debugMsg = "[v17] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 3000);
+                $debugMsg = "[v18] Pcap install failed (strategy: {$strategy})\n" . substr($out, 0, 3000);
                 $this->reportAgentEvent('snort_error', $debugMsg, [
                     'strategy' => $strategy,
                     'script_output' => substr($out, 0, 5000),
