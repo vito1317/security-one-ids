@@ -581,15 +581,28 @@ class WafSyncService
                     @unlink($lockFile);
                 }
 
-                // Check failure cooldown (1h)
+                // Check failure cooldown (1h) — but clear on code update
                 $failFile = storage_path('app/suricata_install_failed.txt');
+                $versionFile = storage_path('app/suricata_install_version.txt');
+                $currentCodeVersion = config('app.version', '1.0.0');
                 if (file_exists($failFile)) {
-                    $failedAt = filemtime($failFile);
-                    if (time() - $failedAt < 3600) {
-                        Log::debug('Suricata install previously failed, skipping retry until ' . date('Y-m-d H:i:s', $failedAt + 3600));
-                        return;
+                    // If code was updated since last failure, clear the lock and retry
+                    $lastFailVersion = file_exists($versionFile) ? trim(file_get_contents($versionFile)) : '';
+                    if ($lastFailVersion !== $currentCodeVersion) {
+                        Log::info('Code version changed, clearing Suricata install failure lock', [
+                            'old_version' => $lastFailVersion,
+                            'new_version' => $currentCodeVersion,
+                        ]);
+                        @unlink($failFile);
+                        @unlink($versionFile);
+                    } else {
+                        $failedAt = filemtime($failFile);
+                        if (time() - $failedAt < 3600) {
+                            Log::debug('Suricata install previously failed, skipping retry until ' . date('Y-m-d H:i:s', $failedAt + 3600));
+                            return;
+                        }
+                        @unlink($failFile);
                     }
-                    @unlink($failFile);
                 }
 
                 Log::info('Suricata enabled but not installed, starting installation...');
@@ -610,6 +623,7 @@ class WafSyncService
                     $error = $result['error'] ?? 'Unknown error';
                     Log::error('Suricata installation failed: ' . $error);
                     file_put_contents($failFile, $error);
+                    file_put_contents($versionFile, $currentCodeVersion);
                     $this->reportAgentEvent('error', 'Suricata 安裝失敗：' . $error);
                     return;
                 }
@@ -1055,6 +1069,14 @@ class WafSyncService
     private function installSuricataWindows(): array
     {
         Log::info('[Suricata] Installing on Windows with WinDivert...');
+
+        // Set CYGWIN env var system-wide BEFORE installation to prevent TP_NUM_C_BUFS crash
+        try {
+            Process::timeout(10)->run('setx CYGWIN "tls_num_c_bufs:8192" /M 2>&1');
+            Log::info('[Suricata] Set CYGWIN=tls_num_c_bufs:8192 system-wide');
+        } catch (\Exception $e) {
+            Log::warning('[Suricata] Failed to set CYGWIN env var: ' . $e->getMessage());
+        }
 
         try {
             // Strategy 1: Try WinGet

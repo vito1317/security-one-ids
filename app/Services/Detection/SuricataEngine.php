@@ -149,6 +149,13 @@ class SuricataEngine
                 // Extract arguments: remove the quoted executable path from the full command
                 $args = trim(str_replace("\"{$this->suricataPath}\"", '', $cmd));
 
+                // Ensure CYGWIN env var is set system-wide (persists across reboots)
+                try {
+                    Process::timeout(10)->run('setx CYGWIN "tls_num_c_bufs:8192" /M 2>&1');
+                } catch (\Exception $e) {
+                    // Non-fatal, the .bat wrapper will set it for this session
+                }
+
                 // Create a .bat launcher that sets CYGWIN env var to prevent TP_NUM_C_BUFS crash
                 $batFile = $this->logDir . '\\suricata_launcher.bat';
                 $batContent = "@echo off\r\n" .
