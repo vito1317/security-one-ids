@@ -24,6 +24,13 @@ fi
 
 cd "$INSTALL_DIR" || exit 1
 
+# Export .env variables so PHP/Laravel can read them
+if [ -f "$INSTALL_DIR/.env" ]; then
+    set -a
+    source "$INSTALL_DIR/.env"
+    set +a
+fi
+
 echo "$(date): Security One IDS wrapper started (PHP: $PHP_BIN)" >> "$LOG_DIR/wrapper.log"
 
 while true; do

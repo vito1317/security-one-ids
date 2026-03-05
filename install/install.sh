@@ -3,6 +3,7 @@
 # One-line install:
 # curl -fsSL https://raw.githubusercontent.com/vito1317/security-one-ids/main/install/install.sh | \
 #   sudo WAF_HUB_URL="https://your-waf.example.com" \
+#   INSTALL_TOKEN="your-install-token" \
 #   AGENT_TOKEN="your-token" \
 #   AGENT_NAME="your-agent-name" \
 #   bash
@@ -50,6 +51,7 @@ SERVICE_NAME="security-one-ids"
 
 # Get configuration from user or environment
 WAF_HUB_URL="${WAF_HUB_URL:-}"
+INSTALL_TOKEN="${INSTALL_TOKEN:-}"
 AGENT_TOKEN="${AGENT_TOKEN:-}"
 AGENT_NAME="${AGENT_NAME:-$(hostname)}"
 
@@ -57,6 +59,7 @@ AGENT_NAME="${AGENT_NAME:-$(hostname)}"
 # This handles sudo-rs (Rust sudo) which ignores -E flag
 if [ -z "$WAF_HUB_URL" ] && [ -f "/proc/$PPID/environ" ] 2>/dev/null; then
     WAF_HUB_URL=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^WAF_HUB_URL=' | cut -d'=' -f2- || true)
+    INSTALL_TOKEN=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^INSTALL_TOKEN=' | cut -d'=' -f2- || true)
     AGENT_TOKEN=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^AGENT_TOKEN=' | cut -d'=' -f2- || true)
     _PARENT_AGENT_NAME=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^AGENT_NAME=' | cut -d'=' -f2- || true)
     if [ -n "$_PARENT_AGENT_NAME" ]; then
@@ -527,6 +530,10 @@ if [ -z "$WAF_HUB_URL" ]; then
     read -p "Enter WAF Hub URL (e.g., https://waf.example.com): " WAF_HUB_URL
 fi
 
+if [ -z "$INSTALL_TOKEN" ]; then
+    read -p "Enter Install Token (from WAF Hub admin panel): " INSTALL_TOKEN
+fi
+
 if [ -z "$AGENT_TOKEN" ]; then
     read -p "Enter Agent Token: " AGENT_TOKEN
 fi
@@ -537,6 +544,7 @@ APP_ENV=production
 APP_DEBUG=false
 
 WAF_URL="$WAF_HUB_URL"
+INSTALL_TOKEN="$INSTALL_TOKEN"
 AGENT_TOKEN="$AGENT_TOKEN"
 AGENT_NAME="$AGENT_NAME"
 

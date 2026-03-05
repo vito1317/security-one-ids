@@ -24,6 +24,25 @@ class WafSyncService
         $this->agentToken = !empty($cachedToken) ? $cachedToken : $envToken;
         
         $this->agentName = config('ids.agent_name') ?? env('AGENT_NAME', gethostname());
+
+        // Fallback: directly parse .env file if values are still empty
+        if (empty($this->wafUrl) || empty($this->agentToken)) {
+            $envFile = base_path('.env');
+            if (file_exists($envFile)) {
+                $envValues = parse_ini_file($envFile);
+                if ($envValues) {
+                    if (empty($this->wafUrl) && !empty($envValues['WAF_URL'])) {
+                        $this->wafUrl = rtrim($envValues['WAF_URL'], '/');
+                    }
+                    if (empty($this->agentToken) && !empty($envValues['AGENT_TOKEN'])) {
+                        $this->agentToken = $envValues['AGENT_TOKEN'];
+                    }
+                    if (empty($this->agentName) && !empty($envValues['AGENT_NAME'])) {
+                        $this->agentName = $envValues['AGENT_NAME'];
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -77,6 +96,14 @@ class WafSyncService
 
         try {
             $installToken = config('ids.install_token') ?? env('INSTALL_TOKEN', '');
+            // Fallback: parse .env directly if install_token is empty
+            if (empty($installToken)) {
+                $envFile = base_path('.env');
+                if (file_exists($envFile)) {
+                    $envValues = parse_ini_file($envFile);
+                    $installToken = $envValues['INSTALL_TOKEN'] ?? '';
+                }
+            }
             $response = $this->getHttpClient(30)
                 ->withHeaders(['X-Install-Token' => $installToken])
                 ->post("{$this->wafUrl}/api/ids/agents/register", [
