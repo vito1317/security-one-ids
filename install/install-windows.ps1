@@ -330,7 +330,7 @@ if (-not $gitPath) {
 Write-Host "✅ Git is installed" -ForegroundColor Green
 
 # Clone or update repository
-$RepoUrl = "https://github.com/vito1317/security-one-ids.git"
+$RepoUrl = "https://github.com/Cyber-Security-One/security-one-ids.git"
 
 if (Test-Path "$InstallDir\.git") {
     Write-Host "📂 Existing git repository found, updating..." -ForegroundColor Yellow

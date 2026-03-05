@@ -177,7 +177,7 @@ download_project() {
         print_info "正在下載 Security One IDS/IPS Agent..."
         sudo mkdir -p "$INSTALL_DIR"
         sudo chown $USER:$USER "$INSTALL_DIR"
-        git clone https://github.com/vito1317/security-one-ids.git "$INSTALL_DIR"
+        git clone https://github.com/Cyber-Security-One/security-one-ids.git "$INSTALL_DIR"
         cd "$INSTALL_DIR"
     fi
     

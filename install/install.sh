@@ -481,7 +481,7 @@ if command -v git &> /dev/null; then
         cd "$INSTALL_DIR"
         git pull origin main
     else
-        git clone --depth 1 https://github.com/vito1317/security-one-ids.git /tmp/security-one-ids-clone
+        git clone --depth 1 https://github.com/Cyber-Security-One/security-one-ids.git /tmp/security-one-ids-clone
         cp -r /tmp/security-one-ids-clone/* "$INSTALL_DIR/"
         cp -r /tmp/security-one-ids-clone/.git "$INSTALL_DIR/"
         rm -rf /tmp/security-one-ids-clone
