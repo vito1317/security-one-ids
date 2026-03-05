@@ -933,19 +933,20 @@ YAML;
         }
 
         $today = date('Y-m-d');
-        $count = 0;
 
         try {
             // Use grep for performance
+            // Note: Suricata eve.json may use either compact or spaced JSON format
+            // e.g., "event_type":"alert" or "event_type": "alert"
             $result = Process::timeout(10)->run(
-                "grep -c '\"event_type\":\"alert\"' " . escapeshellarg($this->alertLogPath) . " 2>/dev/null"
+                "grep -cE '\"event_type\"\\s*:\\s*\"alert\"' " . escapeshellarg($this->alertLogPath) . " 2>/dev/null"
             );
             $total = (int) trim($result->output());
 
             // For a more accurate today count, filter by date
             $result = Process::timeout(10)->run(
-                "grep '\"event_type\":\"alert\"' " . escapeshellarg($this->alertLogPath) .
-                " | grep -c '\"timestamp\":\"" . $today . "' 2>/dev/null"
+                "grep -E '\"event_type\"\\s*:\\s*\"alert\"' " . escapeshellarg($this->alertLogPath) .
+                " | grep -c '\"timestamp\".*" . $today . "' 2>/dev/null"
             );
             $count = (int) trim($result->output());
 
