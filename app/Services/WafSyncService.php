@@ -76,7 +76,10 @@ class WafSyncService
         }
 
         try {
-            $response = $this->getHttpClient(30)->post("{$this->wafUrl}/api/ids/agents/register", [
+            $installToken = config('ids.install_token') ?? env('INSTALL_TOKEN', '');
+            $response = $this->getHttpClient(30)
+                ->withHeaders(['X-Install-Token' => $installToken])
+                ->post("{$this->wafUrl}/api/ids/agents/register", [
                 'token' => $this->agentToken,
                 'name' => $this->agentName,
                 'ip_address' => $this->getPublicIp(),
