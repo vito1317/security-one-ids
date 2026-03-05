@@ -212,162 +212,86 @@ if [ "$INSTALL_CLAMAV" = "yes" ]; then
     install_clamav || echo -e "${YELLOW}⚠️  ClamAV installation skipped${NC}"
 fi
 
-# Snort 3 IPS Installation Function
-install_snort() {
-    echo -e "\n${CYAN}🛡️  Installing Snort 3 IPS...${NC}"
+# Suricata IDS/IPS Installation Function
+install_suricata() {
+    echo -e "\n${CYAN}🛡️  Installing Suricata IDS/IPS...${NC}"
     
     if [ "$OS" = "macos" ]; then
         # macOS - use Homebrew
         if command -v brew &> /dev/null; then
             ORIGINAL_USER="${SUDO_USER:-$USER}"
-            echo -e "${YELLOW}Installing Snort via Homebrew as $ORIGINAL_USER...${NC}"
-            sudo -u "$ORIGINAL_USER" brew install snort 2>/dev/null || brew install snort
+            echo -e "${YELLOW}Installing Suricata via Homebrew as $ORIGINAL_USER...${NC}"
+            sudo -u "$ORIGINAL_USER" brew install suricata 2>/dev/null || brew install suricata
         else
-            echo -e "${RED}Homebrew not found. Please install Homebrew first or install Snort manually.${NC}"
+            echo -e "${RED}Homebrew not found. Please install Homebrew first or install Suricata manually.${NC}"
             return 1
         fi
     elif [ "$OS" = "debian" ]; then
         apt-get update -qq
-        # Check if Snort 3 is already installed
-        if command -v snort &>/dev/null; then
-            EXISTING_VER=$(snort -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || echo "")
-            MAJOR=$(echo "$EXISTING_VER" | cut -d. -f1)
-            if [ "$MAJOR" = "3" ]; then
-                echo -e "${GREEN}✅ Snort 3 ($EXISTING_VER) already installed${NC}"
+        # Check if Suricata is already installed
+        if command -v suricata &>/dev/null; then
+            EXISTING_VER=$(suricata -V 2>&1 | grep -oP '(\d+\.\d+[\d.]*)' | head -1 || echo "")
+            if [ -n "$EXISTING_VER" ]; then
+                echo -e "${GREEN}✅ Suricata ($EXISTING_VER) already installed${NC}"
                 return 0
             fi
         fi
         
-        echo -e "${YELLOW}Building Snort 3 from source for Linux...${NC}"
+        echo -e "${YELLOW}Installing Suricata via package manager...${NC}"
         
-        # Install all build dependencies
-        apt-get install -y build-essential libpcap-dev libpcre2-dev \
-            libdnet-dev zlib1g-dev cmake libhwloc-dev pkg-config \
-            libluajit-5.1-dev libssl-dev libsafec-dev \
-            flex bison curl jq git autoconf automake libtool \
-            libgoogle-perftools-dev 2>/dev/null || true
-        
-        # Build libdaq from source (required by Snort 3, not in most repos)
-        echo -e "${CYAN}Building libdaq...${NC}"
-        cd /tmp
-        rm -rf libdaq
-        git clone --depth 1 https://github.com/snort3/libdaq.git
-        cd libdaq
-        ./bootstrap > /dev/null 2>&1
-        ./configure --prefix=/usr/local > /dev/null 2>&1
-        make -j$(nproc) > /dev/null 2>&1
-        make install > /dev/null 2>&1
-        ldconfig
-        cd /tmp && rm -rf libdaq
-        echo -e "${GREEN}✅ libdaq built and installed${NC}"
-        
-        # Fetch latest Snort 3 version from GitHub
-        echo -e "${CYAN}Fetching latest Snort 3 version...${NC}"
-        SNORT_VER=$(curl -fsSL https://api.github.com/repos/snort3/snort3/releases/latest 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '[0-9][0-9.]*' || echo "")
-        if [ -z "$SNORT_VER" ]; then
-            SNORT_VER="3.6.2.0"  # Fallback to known stable version
-            echo -e "${YELLOW}Could not fetch latest version, using fallback: $SNORT_VER${NC}"
-        else
-            echo -e "${GREEN}Latest Snort 3 version: $SNORT_VER${NC}"
+        # Try to add OISF PPA for latest version (Ubuntu/Debian)
+        if command -v add-apt-repository &>/dev/null; then
+            add-apt-repository -y ppa:oisf/suricata-stable 2>/dev/null || true
+            apt-get update -qq 2>/dev/null
         fi
         
-        # Download and build Snort 3
-        echo -e "${CYAN}Building Snort 3 v${SNORT_VER} (this may take 5-10 minutes)...${NC}"
-        cd /tmp
-        rm -rf snort3-${SNORT_VER}* snort3-build
-        curl -fsSL -o snort3-${SNORT_VER}.tar.gz \
-            "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz" 2>/dev/null || \
-        wget -q -O snort3-${SNORT_VER}.tar.gz \
-            "https://github.com/snort3/snort3/archive/refs/tags/${SNORT_VER}.tar.gz"
+        apt-get install -y suricata suricata-update 2>/dev/null || \
+        apt-get install -y suricata 2>/dev/null
         
-        if [ -f "snort3-${SNORT_VER}.tar.gz" ] && [ -s "snort3-${SNORT_VER}.tar.gz" ]; then
-            tar xzf snort3-${SNORT_VER}.tar.gz
-            # Find the extracted directory (may be snort3-VERSION or snort-VERSION)
-            SNORT_SRC_DIR=$(find /tmp -maxdepth 1 -type d -name "snort*${SNORT_VER}" | head -1)
-            if [ -z "$SNORT_SRC_DIR" ]; then
-                echo -e "${RED}Failed to find extracted Snort source directory${NC}"
-                return 1
-            fi
-            cd "$SNORT_SRC_DIR"
-            mkdir -p build && cd build
-            echo -e "${CYAN}Running cmake...${NC}"
-            if ! cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local -DENABLE_TCMALLOC=ON > /tmp/snort3-cmake.log 2>&1; then
-                echo -e "${RED}cmake failed. Log: /tmp/snort3-cmake.log${NC}"
-                # Retry without TCMALLOC
-                echo -e "${YELLOW}Retrying cmake without TCMALLOC...${NC}"
-                if ! cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local > /tmp/snort3-cmake.log 2>&1; then
-                    echo -e "${RED}cmake failed again. Check /tmp/snort3-cmake.log${NC}"
-                    return 1
-                fi
-            fi
-            echo -e "${CYAN}Compiling (this takes a while)...${NC}"
-            if ! make -j$(nproc) > /tmp/snort3-build.log 2>&1; then
-                echo -e "${RED}make failed. Log: /tmp/snort3-build.log${NC}"
-                return 1
-            fi
-            if ! make install > /tmp/snort3-install.log 2>&1; then
-                echo -e "${RED}make install failed. Log: /tmp/snort3-install.log${NC}"
-                return 1
-            fi
-            ldconfig
-            cd /tmp && rm -rf "$SNORT_SRC_DIR" snort3-${SNORT_VER}.tar.gz
-            
-            # Ensure snort is in PATH
-            if [ -f /usr/local/bin/snort ] && ! command -v snort &>/dev/null; then
-                ln -sf /usr/local/bin/snort /usr/bin/snort
-            fi
-            echo -e "${GREEN}✅ Snort 3 built and installed${NC}"
-        else
-            echo -e "${RED}Failed to download Snort 3 source${NC}"
+        if ! command -v suricata &>/dev/null; then
+            echo -e "${RED}Failed to install Suricata via package manager${NC}"
             return 1
         fi
+        
+        echo -e "${GREEN}✅ Suricata installed via package manager${NC}"
     elif [ "$OS" = "redhat" ]; then
         if command -v dnf &> /dev/null; then
             dnf install -y epel-release 2>/dev/null
-            dnf install -y snort 2>/dev/null || dnf install -y snort3 2>/dev/null
+            dnf install -y suricata 2>/dev/null
         else
             yum install -y epel-release 2>/dev/null
-            yum install -y snort 2>/dev/null || yum install -y snort3 2>/dev/null
+            yum install -y suricata 2>/dev/null
         fi
     else
-        echo -e "${YELLOW}Please install Snort 3 manually for your distribution.${NC}"
+        echo -e "${YELLOW}Please install Suricata manually for your distribution.${NC}"
         return 1
     fi
     
     # Create directories
-    mkdir -p /var/log/snort /etc/snort/rules 2>/dev/null
-    chmod 755 /var/log/snort /etc/snort /etc/snort/rules
+    mkdir -p /var/log/suricata /etc/suricata/rules 2>/dev/null
+    chmod 755 /var/log/suricata /etc/suricata /etc/suricata/rules
     
-    # Download community rules
-    echo -e "${CYAN}📥 Downloading Snort community rules...${NC}"
-    cd /tmp
-    curl -fsSL -o snort3-community-rules.tar.gz \
-        "https://www.snort.org/downloads/community/snort3-community-rules.tar.gz" 2>/dev/null || \
-    wget -q -O snort3-community-rules.tar.gz \
-        "https://www.snort.org/downloads/community/snort3-community-rules.tar.gz" 2>/dev/null
-    
-    if [ -f "snort3-community-rules.tar.gz" ] && [ -s "snort3-community-rules.tar.gz" ]; then
-        tar xzf snort3-community-rules.tar.gz -C /etc/snort/rules --strip-components=1 2>/dev/null || true
-        rm -f snort3-community-rules.tar.gz
-        echo -e "${GREEN}✅ Community rules installed${NC}"
+    # Update Suricata rules using suricata-update
+    echo -e "${CYAN}📥 Updating Suricata rules...${NC}"
+    if command -v suricata-update &>/dev/null; then
+        suricata-update 2>/dev/null || true
+        echo -e "${GREEN}✅ Suricata rules updated${NC}"
     else
-        echo -e "${YELLOW}⚠️  Could not download community rules (will retry later)${NC}"
+        echo -e "${YELLOW}⚠️  suricata-update not found, rules will be synced from Hub${NC}"
     fi
     
     # Verify installation
-    if command -v snort &> /dev/null; then
-        SNORT_VER=$(snort -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || echo "unknown")
-        echo -e "${GREEN}✅ Snort $SNORT_VER installed${NC}"
+    if command -v suricata &> /dev/null; then
+        SURI_VER=$(suricata -V 2>&1 | grep -oP '(\d+\.\d+[\d.]*)' | head -1 || echo "unknown")
+        echo -e "${GREEN}✅ Suricata $SURI_VER installed${NC}"
     else
-        echo -e "${YELLOW}⚠️  Snort binary not found in PATH after install${NC}"
+        echo -e "${YELLOW}⚠️  Suricata binary not found in PATH after install${NC}"
     fi
     
-    # Generate default Snort config if missing
-    if command -v snort &> /dev/null; then
-        SNORT_VERSION_NUM=$(snort -V 2>&1 | grep -oP 'Version\s+\K[\d.]+' || echo "3.0.0")
-        # Check for config in common paths
+    # Generate default Suricata config if missing
+    if command -v suricata &> /dev/null; then
         CONFIG_FOUND=false
-        for cfg in /etc/snort/snort.lua /etc/snort/snort.conf /usr/local/etc/snort/snort.lua /opt/homebrew/etc/snort/snort.lua; do
+        for cfg in /etc/suricata/suricata.yaml /usr/local/etc/suricata/suricata.yaml /opt/homebrew/etc/suricata/suricata.yaml; do
             if [ -f "$cfg" ]; then
                 CONFIG_FOUND=true
                 break
@@ -375,60 +299,58 @@ install_snort() {
         done
         
         if [ "$CONFIG_FOUND" = false ]; then
-            echo -e "${YELLOW}Generating default Snort config...${NC}"
-            mkdir -p /etc/snort/rules
+            echo -e "${YELLOW}Generating default Suricata config...${NC}"
+            mkdir -p /etc/suricata/rules
             
-            # Check if Snort 2 or 3
-            MAJOR_VER=$(echo "$SNORT_VERSION_NUM" | cut -d. -f1)
-            if [ "$MAJOR_VER" -lt 3 ] 2>/dev/null; then
-                # Snort 2 config
-                cat > /etc/snort/snort.conf << 'SNORTCONF'
-var HOME_NET any
-var EXTERNAL_NET any
-var RULE_PATH /etc/snort/rules
+            cat > /etc/suricata/suricata.yaml << 'SURICATAYAML'
+%YAML 1.1
+---
+vars:
+  address-groups:
+    HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+    EXTERNAL_NET: "!$HOME_NET"
 
-config logdir: /var/log/snort
-config detection: search-method ac-full
+default-log-dir: /var/log/suricata/
 
-output alert_fast: snort.alert.fast
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: eve.json
+      types:
+        - alert:
+            payload: yes
+            payload-printable: yes
+            packet: yes
+            metadata: yes
+        - stats:
+            totals: yes
+            threads: no
 
-include $RULE_PATH/local.rules
-SNORTCONF
-            else
-                # Snort 3 Lua config
-                cat > /etc/snort/snort.lua << 'SNORTLUA'
--- Security One IDS - Auto-generated Snort 3 config
-HOME_NET = 'any'
-EXTERNAL_NET = 'any'
+af-packet:
+  - interface: default
 
-ips = {
-    variables = default_variables,
-}
-
-alert_json = {
-    file = true,
-    limit = 100,
-    fields = 'timestamp sig_id sig_rev msg src_addr src_port dst_addr dst_port proto action class priority',
-}
-SNORTLUA
-            fi
+default-rule-path: /etc/suricata/rules
+rule-files:
+  - "*.rules"
+SURICATAYAML
             
             # Create local.rules if not exists
-            if [ ! -f /etc/snort/rules/local.rules ]; then
-                echo '# Security One IDS - Local Rules' > /etc/snort/rules/local.rules
+            if [ ! -f /etc/suricata/rules/local.rules ]; then
+                echo '# Security One IDS - Local Rules' > /etc/suricata/rules/local.rules
             fi
-            echo -e "${GREEN}✅ Default Snort config generated${NC}"
+            echo -e "${GREEN}✅ Default Suricata config generated${NC}"
         fi
     fi
     
     return 0
 }
 
-# Always install Snort (required for IDS/IPS functionality)
-INSTALL_SNORT="${INSTALL_SNORT:-yes}"
+# Always install Suricata (required for IDS/IPS functionality)
+INSTALL_SURICATA="${INSTALL_SURICATA:-yes}"
 
-if [ "$INSTALL_SNORT" = "yes" ]; then
-    install_snort || echo -e "${YELLOW}⚠️  Snort installation skipped${NC}"
+if [ "$INSTALL_SURICATA" = "yes" ]; then
+    install_suricata || echo -e "${YELLOW}⚠️  Suricata installation skipped${NC}"
 fi
 
 # Create directories

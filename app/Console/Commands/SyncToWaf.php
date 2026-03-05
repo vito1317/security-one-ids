@@ -42,7 +42,7 @@ class SyncToWaf extends Command
         }
 
         // === Run ALL tasks concurrently (5 parallel processes) ===
-        $this->info('Dispatching 5 concurrent task groups...');
+        $this->info('Dispatching 4 concurrent task groups...');
         $phpBinary = PHP_BINARY ?: 'php';
         $basePath = base_path();
         $startTime = microtime(true);
@@ -59,17 +59,12 @@ class SyncToWaf extends Command
                     ->timeout(300)
                     ->command([$phpBinary, 'artisan', 'ids:sync-quick']);
                 
-                // Group 3: Snort management (install, start, update)
-                $pool->path($basePath)
-                    ->timeout(600)
-                    ->command([$phpBinary, 'artisan', 'ids:sync-snort']);
-                
-                // Group 4: Suricata management (install, start, update)
+                // Group 3: Suricata management (install, start, update)
                 $pool->path($basePath)
                     ->timeout(600)
                     ->command([$phpBinary, 'artisan', 'ids:sync-suricata']);
                 
-                // Group 5: Maintenance (ClamAV, updates, system signals)
+                // Group 4: Maintenance (ClamAV, updates, system signals)
                 $pool->path($basePath)
                     ->timeout(600)
                     ->command([$phpBinary, 'artisan', 'ids:sync-maintenance']);
@@ -77,7 +72,7 @@ class SyncToWaf extends Command
 
             $elapsed = round(microtime(true) - $startTime, 1);
             
-            $labels = ['Heartbeat', 'Quick', 'Snort', 'Suricata', 'Maintenance'];
+            $labels = ['Heartbeat', 'Quick', 'Suricata', 'Maintenance'];
             foreach ($pool as $i => $result) {
                 $label = $labels[$i] ?? "Group {$i}";
                 if ($result->successful()) {
@@ -100,7 +95,6 @@ class SyncToWaf extends Command
             $this->info('Running tasks sequentially...');
             $wafSync->heartbeat();
             $wafSync->runQuickSync();
-            $wafSync->runSnortSync();
             $wafSync->runSuricataSync();
             $wafSync->runMaintenanceSync();
         }

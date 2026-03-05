@@ -811,87 +811,83 @@ $SyncTaskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontS
 Register-ScheduledTask -TaskName "$ServiceName-Sync" -Action $SyncTaskAction -Trigger @($SyncTaskTrigger1, $SyncTaskTrigger2) -Principal $SyncTaskPrincipal -Settings $SyncTaskSettings -Force | Out-Null
 Write-Host "✅ Sync Service created ($ServiceName-Sync) with auto-restart" -ForegroundColor Green
 
-# Snort 3 IPS Installation (always install for IDS/IPS functionality)
-Write-Host "`n🛡️  Installing Snort 3 IPS..." -ForegroundColor Cyan
+# Suricata IDS/IPS Installation (always install for IDS/IPS functionality)
+Write-Host "`n🛡️  Installing Suricata IDS/IPS..." -ForegroundColor Cyan
 
-$InstallSnort = if ($env:INSTALL_SNORT) { $env:INSTALL_SNORT } else { "yes" }
+$InstallSuricata = if ($env:INSTALL_SURICATA) { $env:INSTALL_SURICATA } else { "yes" }
 
-if ($InstallSnort -eq "yes") {
-    Write-Host "`n🛡️  Installing Snort 3 IPS..." -ForegroundColor Cyan
+if ($InstallSuricata -eq "yes") {
+    Write-Host "`n🛡️  Installing Suricata IDS/IPS..." -ForegroundColor Cyan
     
-    $snortInstalled = $false
+    $suricataInstalled = $false
     
     # Method 1: Try Chocolatey
     if (Get-Command choco -ErrorAction SilentlyContinue) {
-        Write-Host "Installing Snort via Chocolatey..." -ForegroundColor Yellow
+        Write-Host "Installing Suricata via Chocolatey..." -ForegroundColor Yellow
         $ErrorActionPreference = 'SilentlyContinue'
-        $proc = Start-Process -FilePath "choco" -ArgumentList "install snort -y" -Wait -NoNewWindow -PassThru
+        $proc = Start-Process -FilePath "choco" -ArgumentList "install suricata -y" -Wait -NoNewWindow -PassThru
         $ErrorActionPreference = 'Continue'
         
         if ($proc.ExitCode -eq 0) {
-            $snortInstalled = $true
-            Write-Host "✅ Snort installed via Chocolatey" -ForegroundColor Green
+            $suricataInstalled = $true
+            Write-Host "✅ Suricata installed via Chocolatey" -ForegroundColor Green
+        }
+    }
+
+    # Method 2: Try winget
+    if (-not $suricataInstalled -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "Installing Suricata via winget..." -ForegroundColor Yellow
+        $ErrorActionPreference = 'SilentlyContinue'
+        $proc = Start-Process -FilePath "winget" -ArgumentList "install -e --id OISF.Suricata --accept-package-agreements --accept-source-agreements" -Wait -NoNewWindow -PassThru
+        $ErrorActionPreference = 'Continue'
+        
+        if ($proc.ExitCode -eq 0) {
+            $suricataInstalled = $true
+            Write-Host "✅ Suricata installed via winget" -ForegroundColor Green
         }
     }
     
-    # Method 2: Download from snort.org
-    if (-not $snortInstalled) {
-        Write-Host "Downloading Snort 3 from official site..." -ForegroundColor Yellow
-        $snortUrl = "https://www.snort.org/downloads/snortplus/snort3-latest.msi"
-        $snortMsi = "$env:TEMP\snort3-latest.msi"
+    # Method 3: Download MSI from OISF
+    if (-not $suricataInstalled) {
+        Write-Host "Downloading Suricata from OISF..." -ForegroundColor Yellow
+        $suricataUrl = "https://www.openinfosecfoundation.org/download/windows/Suricata-latest-1-64bit.msi"
+        $suricataMsi = "$env:TEMP\Suricata-latest.msi"
         
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $snortUrl -OutFile $snortMsi -UseBasicParsing -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri $suricataUrl -OutFile $suricataMsi -UseBasicParsing -ErrorAction SilentlyContinue
             
-            if (Test-Path $snortMsi) {
-                Write-Host "Installing Snort MSI..." -ForegroundColor Yellow
-                $proc = Start-Process -FilePath "msiexec" -ArgumentList "/i `"$snortMsi`" /qn" -Wait -NoNewWindow -PassThru
+            if (Test-Path $suricataMsi) {
+                Write-Host "Installing Suricata MSI..." -ForegroundColor Yellow
+                $proc = Start-Process -FilePath "msiexec" -ArgumentList "/i `"$suricataMsi`" /qn" -Wait -NoNewWindow -PassThru
                 if ($proc.ExitCode -eq 0) {
-                    $snortInstalled = $true
-                    Write-Host "✅ Snort installed from MSI" -ForegroundColor Green
+                    $suricataInstalled = $true
+                    Write-Host "✅ Suricata installed from MSI" -ForegroundColor Green
                 }
-                Remove-Item $snortMsi -Force -ErrorAction SilentlyContinue
+                Remove-Item $suricataMsi -Force -ErrorAction SilentlyContinue
             }
         } catch {
-            Write-Host "⚠️  Could not download Snort: $_" -ForegroundColor Yellow
+            Write-Host "⚠️  Could not download Suricata: $_" -ForegroundColor Yellow
         }
     }
     
-    if ($snortInstalled) {
+    if ($suricataInstalled) {
         # Create directories
-        New-Item -ItemType Directory -Path "C:\Snort\log" -Force -ErrorAction SilentlyContinue | Out-Null
-        New-Item -ItemType Directory -Path "C:\Snort\rules" -Force -ErrorAction SilentlyContinue | Out-Null
-        
-        # Download community rules
-        Write-Host "📥 Downloading Snort community rules..." -ForegroundColor Cyan
-        try {
-            $rulesUrl = "https://www.snort.org/downloads/community/snort3-community-rules.tar.gz"
-            $rulesFile = "$env:TEMP\snort3-community-rules.tar.gz"
-            Invoke-WebRequest -Uri $rulesUrl -OutFile $rulesFile -UseBasicParsing -ErrorAction SilentlyContinue
-            
-            if (Test-Path $rulesFile) {
-                # Extract rules (requires tar, available on Windows 10+)
-                & tar xzf $rulesFile -C "C:\Snort\rules" --strip-components=1 2>$null
-                Remove-Item $rulesFile -Force -ErrorAction SilentlyContinue
-                Write-Host "✅ Community rules installed" -ForegroundColor Green
-            }
-        } catch {
-            Write-Host "⚠️  Could not download community rules (will retry later)" -ForegroundColor Yellow
-        }
+        New-Item -ItemType Directory -Path "C:\Suricata\log" -Force -ErrorAction SilentlyContinue | Out-Null
+        New-Item -ItemType Directory -Path "C:\Suricata\rules" -Force -ErrorAction SilentlyContinue | Out-Null
         
         # Refresh PATH
         $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
         
         # Verify
-        $snortCmd = Get-Command snort -ErrorAction SilentlyContinue
-        if ($snortCmd) {
-            Write-Host "✅ Snort 3 is ready" -ForegroundColor Green
+        $suricataCmd = Get-Command suricata -ErrorAction SilentlyContinue
+        if ($suricataCmd) {
+            Write-Host "✅ Suricata is ready" -ForegroundColor Green
         } else {
-            Write-Host "⚠️  Snort installed but not in PATH. You may need to restart your terminal." -ForegroundColor Yellow
+            Write-Host "⚠️  Suricata installed but not in PATH. You may need to restart your terminal." -ForegroundColor Yellow
         }
     } else {
-        Write-Host "⚠️  Snort installation skipped (can be installed later via Dashboard)" -ForegroundColor Yellow
+        Write-Host "⚠️  Suricata installation skipped (can be installed later via Dashboard)" -ForegroundColor Yellow
     }
 }
 

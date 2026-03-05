@@ -9,15 +9,15 @@ use Illuminate\Support\Facades\Log;
 class SyncSnort extends Command
 {
     protected $signature = 'ids:sync-snort';
-    protected $description = 'Run Snort management tasks (install, Npcap, start, auto-update)';
+    protected $description = 'Deprecated — redirects to Suricata management tasks';
 
     public function handle(WafSyncService $wafSync): int
     {
-        Log::debug('[SyncSnort] Starting Snort management tasks...');
+        Log::debug('[SyncSnort] Deprecated — redirecting to Suricata sync');
 
         try {
-            $wafSync->runSnortSync();
-            Log::debug('[SyncSnort] Completed');
+            $wafSync->runSuricataSync();
+            Log::debug('[SyncSnort] Completed (via Suricata)');
         } catch (\Exception $e) {
             Log::error('[SyncSnort] Error: ' . $e->getMessage());
             return 1;
