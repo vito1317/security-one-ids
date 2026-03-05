@@ -293,6 +293,9 @@ class WafSyncService
 
         // Suricata rules & alerts (only if Suricata enabled)
         if (!empty($addons['suricata_enabled'])) {
+            // Ensure Suricata is running if enabled but not active
+            $this->ensureSuricataRunning($addons);
+
             if (!empty($addons['suricata_rules_hash'])) {
                 $this->syncSuricataRules($addons['suricata_rules_hash'], $addons['suricata_mode'] ?? 'ids');
             }
@@ -408,6 +411,43 @@ class WafSyncService
             
         } catch (\Exception $e) {
             Log::error('ClamAV addon handling failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Ensure Suricata is running if enabled.
+     * Auto-installs if missing, auto-starts if not running.
+     */
+    private function ensureSuricataRunning(array $addons): void
+    {
+        try {
+            $suricata = app(\App\Services\Detection\SuricataEngine::class);
+            $mode = $addons['suricata_mode'] ?? 'ids';
+
+            if (!$suricata->isInstalled()) {
+                Log::info('[Suricata] Enabled but not installed, triggering install...');
+                $this->installSuricata();
+                // Re-detect after install
+                $suricata = app(\App\Services\Detection\SuricataEngine::class);
+                if (!$suricata->isInstalled()) {
+                    Log::error('[Suricata] Installation failed, cannot start');
+                    return;
+                }
+            }
+
+            if (!$suricata->isRunning()) {
+                Log::info("[Suricata] Enabled but not running, starting in {$mode} mode...");
+                $result = $suricata->start($mode);
+                if (!empty($result['success'])) {
+                    Log::info('[Suricata] Started successfully');
+                    $this->reportAgentEvent('suricata_started', "Suricata 已自動啟動（{$mode} 模式）");
+                } else {
+                    Log::error('[Suricata] Failed to start', $result);
+                    $this->reportAgentEvent('error', 'Suricata 自動啟動失敗: ' . ($result['error'] ?? 'unknown'));
+                }
+            }
+        } catch (\Exception $e) {
+            Log::error('[Suricata] ensureSuricataRunning failed: ' . $e->getMessage());
         }
     }
 
