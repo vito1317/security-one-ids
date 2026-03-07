@@ -15,11 +15,19 @@ class VerifyAgentToken
         // To prevent information leakage (e.g., revealing via different response times
         // or codes that the system is misconfigured), we enforce a generic 401 response
         // for both missing configuration and invalid tokens.
-        if (!$token || $agentToken === '' || strlen((string)$token) !== strlen($agentToken)) {
+        if (!is_scalar($token)) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        if (!hash_equals($agentToken, (string)$token)) {
+        $token = (string) $token;
+        if ($token === '' || $agentToken === '') {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        if (!hash_equals(
+            hash('sha256', $agentToken, true),
+            hash('sha256', $token, true)
+        )) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
