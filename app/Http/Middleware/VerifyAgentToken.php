@@ -16,7 +16,9 @@ class VerifyAgentToken
             return response()->json(['error' => 'Agent token not configured'], 500);
         }
 
-        if ($token === null || $token === '' || !hash_equals($agentToken, (string)$token)) {
+        // Use hash_equals for all comparisons to prevent timing attacks.
+        // We cast $token to string to ensure hash_equals doesn't fail on null.
+        if (!hash_equals($agentToken, (string)$token)) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
