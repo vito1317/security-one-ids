@@ -321,7 +321,19 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids.custom_log_paths', []);
+        $paths = cache()->get('ids.custom_log_paths');
+        if (is_array($paths)) {
+            return $paths;
+        }
+
+        $legacyPaths = cache()->get('ids_custom_log_paths', []);
+        if (is_array($legacyPaths) && !empty($legacyPaths)) {
+            cache()->forever('ids.custom_log_paths', $legacyPaths);
+            cache()->forget('ids_custom_log_paths');
+            return $legacyPaths;
+        }
+
+        return [];
     }
 
     /**
