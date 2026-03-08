@@ -6,7 +6,7 @@ use App\Http\Controllers\Api\SystemUpdateController;
 // System Update API (for WAF Hub to trigger updates)
 Route::prefix('api')->middleware(function ($request, $next) {
     $token = $request->input('token') ?? $request->header('X-Agent-Token') ?? $request->bearerToken();
-    $agentToken = env('AGENT_TOKEN');
+    $agentToken = config('ids.agent_token');
 
     if (!$token || $token !== $agentToken) {
         return response()->json(['error' => 'Unauthorized'], 401);
