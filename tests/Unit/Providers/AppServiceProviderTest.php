@@ -24,7 +24,7 @@ class AppServiceProviderTest extends TestCase
         $this->loggerMock = Mockery::mock(LoggerInterface::class);
         $this->configMock = Mockery::mock(ConfigRepository::class);
 
-        $this->provider = new AppServiceProvider($this->app);
+        $this->provider = new AppServiceProvider($this->appMock);
     }
 
     public function test_it_throws_exception_in_production_without_token_in_web_request()
