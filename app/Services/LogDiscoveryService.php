@@ -310,11 +310,6 @@ class LogDiscoveryService
             return false;
         }
 
-        // Validate that path does not contain path traversal vectors just in case
-        if (str_contains($normalizedPath, '..')) {
-            return false;
-        }
-
         $configPaths = config('ids.custom_log_paths', []);
         $cachedPaths = $this->getCustomPaths();
 
