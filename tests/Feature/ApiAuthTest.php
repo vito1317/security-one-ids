@@ -12,8 +12,9 @@ class ApiAuthTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        // Set a known token for testing
-        putenv('AGENT_TOKEN=test-agent-token');
+        // Set a known token for testing. We rely on Config::set to cleanly reset between tests.
+        // Unset the env variable just in case the testing environment had it populated.
+        putenv('AGENT_TOKEN');
         Config::set('ids.agent_token', 'test-agent-token');
     }
 
@@ -39,7 +40,6 @@ class ApiAuthTest extends TestCase
 
     public function test_auth_logic_allows_zero_as_token()
     {
-        putenv('AGENT_TOKEN=0');
         Config::set('ids.agent_token', '0');
 
         $this->postJson('/api/rules/update?token=0', [])->assertStatus(200);

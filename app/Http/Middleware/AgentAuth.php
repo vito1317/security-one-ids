@@ -21,7 +21,7 @@ class AgentAuth
 
         $agentToken = env('AGENT_TOKEN') ?: config('ids.agent_token');
 
-        if ($token === null || $token === '' || !hash_equals((string) $agentToken, (string) $token)) {
+        if ($token === null || $token === '' || strlen($token) !== strlen((string) $agentToken) || !hash_equals((string) $agentToken, (string) $token)) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
