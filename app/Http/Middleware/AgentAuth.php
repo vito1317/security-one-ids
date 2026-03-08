@@ -16,13 +16,19 @@ class AgentAuth
     public function handle(Request $request, Closure $next): Response
     {
         // Prioritize non-empty tokens. If one is empty, fallback to the next.
-        $token = $request->bearerToken();
-        if ($token === null || trim((string)$token) === '') {
-            $token = $request->header('X-Agent-Token');
-        }
-        if ($token === null || trim((string)$token) === '') {
-            $token = $request->input('token');
-        }
+        $extractToken = static function ($value): ?string {
+            if ($value !== null && !is_scalar($value)) {
+                return null;
+            }
+
+            $normalized = $value === null ? null : trim((string) $value);
+
+            return $normalized === '' ? null : $normalized;
+        };
+
+        $token = $extractToken($request->bearerToken())
+            ?? $extractToken($request->header('X-Agent-Token'))
+            ?? $extractToken($request->input('token'));
 
         $agentToken = (string) (env('AGENT_TOKEN') ?? config('ids.agent_token') ?? '');
 
@@ -30,9 +36,7 @@ class AgentAuth
             return response()->json(['error' => 'Server misconfiguration'], 503);
         }
 
-        $token = (string) $token;
-
-        if ($token === '' || !hash_equals($agentToken, $token)) {
+        if ($token === null || !hash_equals($agentToken, $token)) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
