@@ -344,7 +344,7 @@ class LogDiscoveryService
                     }
                 }
             } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::warning("Failed to acquire lock for log path migration: {$e->getMessage()}");
+                Log::warning("Failed to acquire lock for log path migration: {$e->getMessage()}");
 
                 if (!cache()->has('ids.custom_log_paths')) {
                     return $this->getLegacyPathsFallback();
