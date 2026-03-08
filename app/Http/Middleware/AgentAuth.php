@@ -19,7 +19,11 @@ class AgentAuth
             ?? $request->header('X-Agent-Token')
             ?? $request->input('token');
 
-        $agentToken = (string) (env('AGENT_TOKEN') ?: config('ids.agent_token'));
+        $agentTokenEnv = env('AGENT_TOKEN');
+        // If env('AGENT_TOKEN') is explicitly set to an empty string, it won't be strictly null,
+        // so we need to fallback to config if it's strictly empty or null,
+        // while preserving '0' which is not strictly empty.
+        $agentToken = (string) ($agentTokenEnv !== null && $agentTokenEnv !== '' ? $agentTokenEnv : config('ids.agent_token', ''));
 
         if (!is_scalar($token)) {
             return response()->json(['error' => 'Unauthorized'], 401);

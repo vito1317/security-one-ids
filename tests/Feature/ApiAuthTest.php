@@ -18,6 +18,12 @@ class ApiAuthTest extends TestCase
         Config::set('ids.agent_token', 'test-agent-token');
     }
 
+    protected function tearDown(): void
+    {
+        putenv('AGENT_TOKEN');
+        parent::tearDown();
+    }
+
     public function test_auth_logic_rejects_missing_token()
     {
         // Missing token
