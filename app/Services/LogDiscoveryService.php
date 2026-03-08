@@ -302,12 +302,16 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        if (!file_exists($path) || !is_readable($path)) {
+        // Normalize the path using realpath to prevent encoded traversal attacks
+        // realpath returns false if the file does not exist, so we handle both existence and normalization
+        $normalizedPath = realpath($path);
+
+        if ($normalizedPath === false || !is_readable($normalizedPath)) {
             return false;
         }
 
-        // Validate that path does not contain path traversal vectors
-        if (str_contains($path, '..')) {
+        // Validate that path does not contain path traversal vectors just in case
+        if (str_contains($normalizedPath, '..')) {
             return false;
         }
 
@@ -316,15 +320,34 @@ class LogDiscoveryService
 
         // We shouldn't redundantly merge and write to cache if not needed.
         // First check if it's already in config or cache separately.
-        if (in_array($path, $configPaths, true) || in_array($path, $cachedPaths, true)) {
+        if (in_array($normalizedPath, $configPaths, true) || in_array($normalizedPath, $cachedPaths, true)) {
             return true;
         }
 
-        $customPaths = array_values(array_unique(array_merge($configPaths, $cachedPaths)));
+        // Use cache locking to prevent race conditions during concurrent additions
+        $lock = cache()->lock('ids_custom_log_paths_lock', 5);
 
-        $customPaths[] = $path;
-        // Store in cache for persistence
-        cache()->forever('ids.custom_log_paths', $customPaths);
+        if ($lock->get()) {
+            try {
+                // Re-fetch cached paths inside the lock to ensure we have the latest state
+                $cachedPaths = $this->getCustomPaths();
+                if (in_array($normalizedPath, $cachedPaths, true)) {
+                    return true;
+                }
+
+                $customPaths = array_values(array_unique(array_merge($configPaths, $cachedPaths)));
+
+                $customPaths[] = $normalizedPath;
+                // Store in cache for persistence
+                cache()->forever('ids.custom_log_paths', $customPaths);
+            } finally {
+                $lock->release();
+            }
+        } else {
+            // Failed to acquire lock, meaning another process is actively writing to the cache right now.
+            // Returning false will let the caller know the path wasn't successfully added at this time.
+            return false;
+        }
 
         return true;
     }
