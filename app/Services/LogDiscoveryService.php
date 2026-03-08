@@ -302,16 +302,73 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        if (!is_readable($path)) {
+        $attemptsKey = 'ids.custom_log_paths_migration_attempts';
+        $attempts = (int) cache()->get($attemptsKey, 0);
+
+        if ($attempts >= 3) {
+            Log::warning("Skipping addCustomPath: max lock failures reached.");
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        $lock = cache()->lock('migrate_custom_log_paths', 10);
+        $acquired = false;
+        $delayMicroseconds = 100000; // 100ms
+
+        for ($i = 0; $i < 3; $i++) {
+            try {
+                if ($lock->get()) {
+                    $acquired = true;
+                    break;
+                }
+            } catch (\Exception $e) {
+                // Ignore exception and retry
+            }
+            usleep($delayMicroseconds);
+            $delayMicroseconds *= 2;
         }
+
+        if (!$acquired) {
+            cache()->put($attemptsKey, $attempts + 1, now()->addMinutes(5));
+            Log::warning("Failed to acquire lock for addCustomPath after retries.");
+            return false;
+        }
+
+        try {
+            return $this->processAddCustomPath($path);
+        } catch (\Exception $e) {
+            Log::error("Error in addCustomPath: " . $e->getMessage());
+            return false;
+        } finally {
+            $lock->release();
+        }
+    }
+
+    /**
+     * Process adding a custom path within a lock.
+     */
+    private function processAddCustomPath(string $path): bool
+    {
+        if (!is_file($path) || !is_readable($path)) {
+            return false;
+        }
+
+        if (!cache()->has('ids.custom_log_paths')) {
+            $this->migrateLegacyLogPaths();
+        }
+
+        $configPaths = config('ids.custom_log_paths', []);
+        $cachePaths = cache()->get('ids.custom_log_paths', []);
+
+        $allKnownPaths = array_values(array_unique(array_merge($configPaths, $cachePaths)));
+
+        // Only new items are cached to avoid duplication with config fallback.
+        if (!in_array($path, $allKnownPaths)) {
+            $cachePaths[] = $path;
+        }
+
+        // Unconditionally write cache to initialize it properly even if the item was in config.
+        $mergedCache = array_values(array_unique(array_merge($configPaths, $cachePaths)));
+        cache()->forever('ids.custom_log_paths', $mergedCache);
 
         return true;
     }
@@ -321,7 +378,54 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        if (!cache()->has('ids.custom_log_paths')) {
+            return $this->getLegacyPathsFallback();
+        }
+
+        return cache()->get('ids.custom_log_paths', []);
+    }
+
+    /**
+     * Helper to migrate legacy log paths from cache.
+     */
+    private function migrateLegacyLogPaths(): void
+    {
+        $paths = [];
+        $migrated = false;
+
+        foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+            if (cache()->has($legacyKey)) {
+                $legacyPaths = cache()->get($legacyKey);
+                if (is_array($legacyPaths)) {
+                    foreach ($legacyPaths as $path) {
+                        if (is_file($path) && is_readable($path)) {
+                            $paths[] = $path;
+                        }
+                    }
+                }
+                $migrated = true;
+            }
+        }
+
+        if ($migrated) {
+            $paths = array_values(array_unique($paths));
+            cache()->forever('ids.custom_log_paths', $paths);
+            foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+                cache()->forget($legacyKey);
+            }
+        }
+    }
+
+    /**
+     * Helper to return legacy paths directly as a fallback during lock failures.
+     */
+    private function getLegacyPathsFallback(): array
+    {
+        $legacyPaths = array_merge(
+            (array) cache()->get('ids_custom_log_paths', []),
+            (array) cache()->get('ids::custom_log_paths', [])
+        );
+        return array_values(array_unique($legacyPaths));
     }
 
     /**
