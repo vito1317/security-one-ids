@@ -9,7 +9,7 @@ trait DetectsPlatform
      *
      * @return bool
      */
-    private function isWindows(): bool
+    public function isWindows(): bool
     {
         return PHP_OS_FAMILY === 'Windows';
     }
