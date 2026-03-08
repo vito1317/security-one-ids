@@ -12,6 +12,20 @@ trait DetectsPlatform
     private ?bool $isWindowsCached = null;
 
     /**
+     * Get platform family with backward-compatible fallback.
+     *
+     * @return string
+     */
+    protected function platformFamily(): string
+    {
+        if (defined('PHP_OS_FAMILY')) {
+            return PHP_OS_FAMILY;
+        }
+
+        return stripos(PHP_OS, 'WIN') === 0 ? 'Windows' : PHP_OS;
+    }
+
+    /**
      * Determine if the current platform is Windows.
      *
      * @return bool
@@ -22,11 +36,7 @@ trait DetectsPlatform
             return $this->isWindowsCached;
         }
 
-        if (defined('PHP_OS_FAMILY')) {
-            $this->isWindowsCached = PHP_OS_FAMILY === 'Windows';
-        } else {
-            $this->isWindowsCached = stripos(PHP_OS, 'WIN') === 0;
-        }
+        $this->isWindowsCached = $this->platformFamily() === 'Windows';
 
         return $this->isWindowsCached;
     }
