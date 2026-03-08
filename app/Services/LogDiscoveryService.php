@@ -358,15 +358,20 @@ class LogDiscoveryService
         try {
             $cachedPaths = $this->getCustomPaths();
 
-            // First check if it's already in the cache. If so, return immediately.
-            if (in_array($path, $cachedPaths, true) || in_array($realPath, $cachedPaths, true)) {
+            $normalizedCached = [];
+            foreach ($cachedPaths as $cachedPath) {
+                $cachedReal = realpath($cachedPath);
+                if ($cachedReal !== false) {
+                    $normalizedCached[] = $cachedReal;
+                }
+            }
+
+            if (in_array($realPath, $normalizedCached, true) || in_array($path, $cachedPaths, true)) {
                 return true;
             }
 
-            // At this point, it is NOT in the cache.
-            // We store the input path rather than $realPath to remain consistent with config values
-            // and previous cache entries, which generally contain the user-input path.
-            $cachedPaths[] = $path;
+            // Store the verified realPath to prevent symlink Time-of-Check to Time-of-Use attacks
+            $cachedPaths[] = $realPath;
             $merged = array_values(array_unique($cachedPaths));
             cache()->forever('ids.custom_log_paths', $merged);
         } finally {
