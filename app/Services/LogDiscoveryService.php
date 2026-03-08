@@ -314,7 +314,7 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        $path = urldecode($path);
+        $path = rawurldecode($path);
         $realPath = realpath($path);
 
         if ($realPath === false || !is_file($realPath) || !is_readable($realPath) || is_link($path) || is_link($realPath)) {
@@ -336,7 +336,8 @@ class LogDiscoveryService
         $lock = cache()->lock('ids.custom_log_paths_lock', 5);
         $acquired = false;
         $retries = 10;
-        $delayMicroseconds = 500000;
+        $delayMicroseconds = 100000;
+        $maxDelayMicroseconds = 2000000;
 
         try {
             while ($retries > 0) {
@@ -345,6 +346,7 @@ class LogDiscoveryService
                     break;
                 }
                 usleep($delayMicroseconds);
+                $delayMicroseconds = min($delayMicroseconds * 2, $maxDelayMicroseconds);
                 $retries--;
             }
 
