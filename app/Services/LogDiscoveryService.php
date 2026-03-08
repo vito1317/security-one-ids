@@ -329,10 +329,11 @@ class LogDiscoveryService
         $hasLegacy2 = cache()->has('ids.custom_log_paths');
 
         if ($hasLegacy1 || $hasLegacy2) {
-            $lock = cache()->lock('migrate_custom_log_paths', 10);
             $acquired = false;
+            $lock = null;
 
             try {
+                $lock = cache()->lock('migrate_custom_log_paths', 10);
                 $retries = 0;
                 $maxRetries = 5;
                 $delay = 10000; // 10ms initial delay
@@ -376,7 +377,7 @@ class LogDiscoveryService
             } catch (\Exception $e) {
                 Log::error('Failed to acquire cache lock for custom log paths migration: ' . $e->getMessage());
             } finally {
-                if ($acquired) {
+                if ($lock !== null && $acquired) {
                     $lock->release();
                 }
             }
