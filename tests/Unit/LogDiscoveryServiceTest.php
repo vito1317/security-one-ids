@@ -58,7 +58,7 @@ class LogDiscoveryServiceTest extends TestCase
         }
     }
 
-    public function test_add_custom_path_returns_true_without_caching_when_path_already_in_config(): void
+    public function test_add_custom_path_returns_true_when_path_already_in_config_and_adds_to_cache(): void
     {
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log_');
         file_put_contents($tempPath, 'test log content');
@@ -82,7 +82,7 @@ class LogDiscoveryServiceTest extends TestCase
         }
     }
 
-    public function test_add_custom_path_returns_true_without_caching_when_path_already_in_cache(): void
+    public function test_add_custom_path_returns_true_and_does_not_duplicate_when_path_already_in_cache(): void
     {
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log_');
         file_put_contents($tempPath, 'test log content');
@@ -95,6 +95,7 @@ class LogDiscoveryServiceTest extends TestCase
             $result = $this->service->addCustomPath($tempPath);
 
             $this->assertTrue($result);
+            $this->assertCount(1, cache()->get('ids.custom_log_paths'));
             $this->assertEquals([$tempPath], cache()->get('ids.custom_log_paths'));
         } finally {
             if (file_exists($tempPath)) {
