@@ -382,11 +382,14 @@ class LogDiscoveryService
                 }
             }
 
-            if (!$acquired && !cache()->has('ids::custom_log_paths')) {
-                // If acquired is false and the new key doesn't exist, return legacy data directly without migrating
+            if (!$acquired) {
+                // Lock 未获取到时，直接合并新旧 key 返回，避免遗漏 legacy 数据
                 $legacyPaths1 = $hasLegacy1 ? cache()->get('ids_custom_log_paths', []) : [];
                 $legacyPaths2 = $hasLegacy2 ? cache()->get('ids.custom_log_paths', []) : [];
+                $currentPaths = cache()->get('ids::custom_log_paths', []);
+
                 return array_values(array_unique(array_merge(
+                    is_array($currentPaths) ? $currentPaths : [],
                     is_array($legacyPaths1) ? $legacyPaths1 : [],
                     is_array($legacyPaths2) ? $legacyPaths2 : []
                 )));
