@@ -306,11 +306,27 @@ class LogDiscoveryService
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
+        $customPaths = $this->getCustomPaths();
+        $configPaths = config('ids.custom_log_paths', []);
+
+        // Merge runtime cache state with legacy config state to ensure no paths are lost
+        $allPaths = array_values(array_unique(array_merge($customPaths, $configPaths)));
+
+        if (!in_array($path, $allPaths)) {
+            $allPaths[] = $path;
             // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+            cache()->forever('ids.custom_log_paths', $allPaths);
+        } elseif ($allPaths !== $customPaths) {
+            // Even if the path already exists, sync legacy config paths into cache
+            cache()->forever('ids.custom_log_paths', $allPaths);
+        }
+
+        // Remove legacy cache keys to complete the migration and prevent inconsistency
+        if (cache()->has('ids_custom_log_paths')) {
+            cache()->forget('ids_custom_log_paths');
+        }
+        if (cache()->has('ids::custom_log_paths')) {
+            cache()->forget('ids::custom_log_paths');
         }
 
         return true;
@@ -321,7 +337,7 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        return cache()->get('ids.custom_log_paths', cache()->get('ids_custom_log_paths', []));
     }
 
     /**
