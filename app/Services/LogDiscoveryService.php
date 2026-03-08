@@ -359,11 +359,11 @@ class LogDiscoveryService
                             }
                         }
                     } elseif (!cache()->has('ids.custom_log_paths')) {
-                        $legacyPaths = array_merge(
+                        $legacyPaths = array_values(array_unique(array_merge(
                             (array) cache()->get('ids_custom_log_paths', []),
                             (array) cache()->get('ids::custom_log_paths', [])
-                        );
-                        return array_values(array_unique($legacyPaths));
+                        )));
+                        return $legacyPaths;
                     }
                 } finally {
                     if ($acquired) {
@@ -375,11 +375,12 @@ class LogDiscoveryService
                 // If lock mechanism fails (e.g. unsupported driver), fallback to reading legacy keys
                 // directly so we don't break the application.
                 if (!cache()->has('ids.custom_log_paths')) {
-                    $legacyPaths = array_merge(
+                    $legacyPaths = array_values(array_unique(array_merge(
                         (array) cache()->get('ids_custom_log_paths', []),
                         (array) cache()->get('ids::custom_log_paths', [])
-                    );
-                    return array_values(array_unique($legacyPaths));
+                    )));
+                    cache()->forever('ids.custom_log_paths', $legacyPaths);
+                    return $legacyPaths;
                 }
             }
         }
