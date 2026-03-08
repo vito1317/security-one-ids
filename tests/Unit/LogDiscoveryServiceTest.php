@@ -14,14 +14,13 @@ class LogDiscoveryServiceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // Use the array driver to isolate cache state per test
+        config(['cache.default' => 'array']);
         $this->service = app(LogDiscoveryService::class);
-        // Ensure we start with a clean state without modifying global config across tests
-        Cache::forget('ids_custom_log_paths');
     }
 
     protected function tearDown(): void
     {
-        Cache::forget('ids_custom_log_paths');
         parent::tearDown();
     }
 
@@ -39,11 +38,9 @@ class LogDiscoveryServiceTest extends TestCase
 
     public function test_add_custom_path_adds_path_and_caches_when_valid_and_not_in_config(): void
     {
-        Cache::forget('ids_custom_log_paths');
-
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        $this->assertNotEmpty($tempPath);
+        $this->assertIsString($tempPath);
         $this->assertFileExists($tempPath);
 
         try {
@@ -65,11 +62,9 @@ class LogDiscoveryServiceTest extends TestCase
 
     public function test_add_custom_path_returns_true_without_caching_when_path_already_in_config(): void
     {
-        Cache::forget('ids_custom_log_paths');
-
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        $this->assertNotEmpty($tempPath);
+        $this->assertIsString($tempPath);
         $this->assertFileExists($tempPath);
 
         try {
@@ -91,7 +86,7 @@ class LogDiscoveryServiceTest extends TestCase
             }
 
             // Explicitly reset the config to prevent global state mutation leaking to other tests
-            Config::offsetUnset('ids.custom_log_paths');
+            Config::set('ids.custom_log_paths', []);
         }
     }
 }
