@@ -319,6 +319,12 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
+        // Validate raw input for path traversal characters before decoding
+        $rawSegments = explode('/', str_replace('\\', '/', $path));
+        if (in_array('..', $rawSegments, true)) {
+            return false;
+        }
+
         $path = urldecode($path);
         $realPath = realpath($path);
 
@@ -326,7 +332,7 @@ class LogDiscoveryService
             return false;
         }
 
-        // Validate that path does not contain path traversal vectors
+        // Re-validate that decoded path does not contain path traversal vectors
         $segments = explode('/', str_replace('\\', '/', $path));
         if (in_array('..', $segments, true)) {
             return false;
@@ -336,17 +342,15 @@ class LogDiscoveryService
             return false;
         }
 
-        $configPaths = config('ids.custom_log_paths', []);
-
-        // We shouldn't redundantly merge and write to cache if not needed.
-        // First check if it's already in config.
-        if (in_array($path, $configPaths, true) || in_array($realPath, $configPaths, true)) {
-            return true;
-        }
-
         $lock = cache()->lock('ids.custom_log_paths_lock', 5);
 
-        $lockAcquired = $lock->get();
+        // Try to acquire lock with blocking to avoid silent transient failures
+        try {
+            $lockAcquired = $lock->block(5);
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+            Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
+            return false;
+        }
 
         if (!$lockAcquired) {
             Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
@@ -354,6 +358,12 @@ class LogDiscoveryService
         }
 
         try {
+            // Re-read config inside lock to prevent race conditions
+            $configPaths = config('ids.custom_log_paths', []);
+            if (in_array($path, $configPaths, true) || in_array($realPath, $configPaths, true)) {
+                return true;
+            }
+
             $cachedPaths = $this->getCustomPaths();
 
             // If it's already in the cache, we're good.
