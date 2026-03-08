@@ -306,11 +306,75 @@ class LogDiscoveryService
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        $configPaths = config('ids.custom_log_paths', []);
+
+        // Use a single lock for the entire read-modify-write operation
+        $lock = cache()->lock('ids.custom_log_paths.lock', 10);
+        $acquired = false;
+
+        try {
+            $retries = 0;
+            $maxRetries = 5;
+            $delayMicroseconds = 10000; // 10ms initial delay
+
+            while ($retries < $maxRetries) {
+                if ($lock->get()) {
+                    $acquired = true;
+                    break;
+                }
+                usleep($delayMicroseconds);
+                $delayMicroseconds *= 2;
+                $retries++;
+            }
+
+            if ($acquired) {
+                // Read current state entirely within the lock
+                $cachedPaths = cache()->get('ids.custom_log_paths', []);
+
+                $hasLegacy1 = cache()->has('ids_custom_log_paths');
+                $hasLegacy2 = cache()->has('ids::custom_log_paths');
+
+                $legacyPaths1 = $hasLegacy1 ? cache()->get('ids_custom_log_paths', []) : [];
+                $legacyPaths2 = $hasLegacy2 ? cache()->get('ids::custom_log_paths', []) : [];
+
+                $mergedPaths = array_values(array_unique(array_merge(
+                    is_array($legacyPaths1) ? $legacyPaths1 : [],
+                    is_array($legacyPaths2) ? $legacyPaths2 : [],
+                    is_array($cachedPaths) ? $cachedPaths : []
+                )));
+
+                // Check and add new path
+                $unifiedList = array_values(array_unique(array_merge($configPaths, $mergedPaths)));
+
+                if (!in_array($path, $unifiedList, true)) {
+                    $mergedPaths[] = $path;
+                }
+
+                // Final definitive write
+                $finalPaths = array_values(array_unique($mergedPaths));
+                cache()->forever('ids.custom_log_paths', $finalPaths);
+
+                // Cleanup legacy keys
+                if ($hasLegacy1) {
+                    cache()->forget('ids_custom_log_paths');
+                }
+                if ($hasLegacy2) {
+                    cache()->forget('ids::custom_log_paths');
+                }
+            } else {
+                Log::warning('Failed to acquire cache lock for custom log paths migration within retry limit in addCustomPath.');
+                return false; // Return false since we couldn't safely add the path due to contention
+            }
+        } catch (\Throwable $e) {
+            Log::error('Exception during custom log paths operation in addCustomPath.', [
+                'exception' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return false;
+        } finally {
+            if ($acquired) {
+                $lock->release();
+            }
         }
 
         return true;
@@ -321,7 +385,17 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        $paths = cache()->get('ids.custom_log_paths');
+
+        if ($paths === null) {
+            // Lock-free read fallback
+            $paths = cache()->get('ids::custom_log_paths');
+            if ($paths === null) {
+                $paths = cache()->get('ids_custom_log_paths', []);
+            }
+        }
+
+        return is_array($paths) ? $paths : [];
     }
 
     /**
