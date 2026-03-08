@@ -13,6 +13,11 @@ use Illuminate\Support\Facades\Log;
 class LogDiscoveryService
 {
     /**
+     * Regex pattern to validate custom log path characters
+     */
+    private const ALLOWED_PATH_PATTERN = '/^[a-zA-Z0-9\/._-]+$/';
+
+    /**
      * Common web server log file locations to scan
      */
     private const LOG_PATHS = [
@@ -302,15 +307,44 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        if (!is_readable($path)) {
+        $decodedPath = urldecode($path);
+
+        if (!preg_match(self::ALLOWED_PATH_PATTERN, $decodedPath) || str_contains($decodedPath, '..')) {
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        $realPath = realpath($decodedPath);
+        if ($realPath === false || !is_readable($realPath)) {
+            return false;
+        }
+
+        $path = $realPath;
+
+        $configPaths = config('ids.custom_log_paths', []);
+        if (in_array($path, $configPaths)) {
+            return true;
+        }
+
+        $lock = \Illuminate\Support\Facades\Cache::lock('ids.custom_log_paths.lock', 10);
+
+        try {
+            if (!$lock->block(5)) {
+                return false;
+            }
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+            return false;
+        }
+
+        try {
+            $customPaths = $this->getCustomPaths();
+            if (!in_array($path, $customPaths)) {
+                $customPaths[] = $path;
+                // Keep the write operation inside the lock to maintain atomicity
+                // and prevent race conditions that lead to data loss
+                cache()->forever('ids.custom_log_paths', $customPaths);
+            }
+        } finally {
+            $lock->release();
         }
 
         return true;
@@ -321,7 +355,35 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        if (cache()->has('ids_custom_log_paths')) {
+            $lock = \Illuminate\Support\Facades\Cache::lock('ids.custom_log_paths.migration.lock', 10);
+
+            try {
+                if ($lock->block(5)) {
+                    // Double check in case another process migrated it while waiting for the lock
+                    if (cache()->has('ids_custom_log_paths')) {
+                        $legacyPaths = cache()->pull('ids_custom_log_paths');
+                        $currentPaths = cache()->get('ids.custom_log_paths', []);
+
+                        if (is_array($legacyPaths) && !empty($legacyPaths)) {
+                            $mergedPaths = array_values(array_unique(array_merge(
+                                is_array($currentPaths) ? $currentPaths : [],
+                                $legacyPaths
+                            )));
+                            cache()->forever('ids.custom_log_paths', $mergedPaths);
+                            return $mergedPaths;
+                        }
+                    }
+                }
+            } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+                // Ignore lock timeout and just return current paths
+            } finally {
+                $lock?->release();
+            }
+        }
+
+        $currentPaths = cache()->get('ids.custom_log_paths', []);
+        return is_array($currentPaths) ? $currentPaths : [];
     }
 
     /**
