@@ -342,8 +342,19 @@ class LogDiscoveryService
         // We shouldn't redundantly merge and write to cache if not needed.
         // First check if it's already in config.
         // Perform case-insensitive comparison to handle filesystems like Windows/macOS where casing could vary
-        $lowercaseConfigPaths = array_map('strtolower', $configPaths);
-        if (in_array(strtolower($path), $lowercaseConfigPaths, true) || in_array(strtolower($realPath), $lowercaseConfigPaths, true)) {
+        $resolvedConfigPaths = [];
+        foreach ($configPaths as $configPath) {
+            if (!is_string($configPath)) {
+                continue;
+            }
+
+            $resolvedConfigPath = realpath($configPath);
+            if ($resolvedConfigPath !== false) {
+                $resolvedConfigPaths[] = strtolower($resolvedConfigPath);
+            }
+        }
+
+        if (in_array(strtolower($realPath), $resolvedConfigPaths, true)) {
             return true;
         }
 
@@ -370,8 +381,19 @@ class LogDiscoveryService
             $cachedPaths = $this->getCustomPaths();
 
             // If it's already in the cache, we're good.
-            $lowercaseCachedPaths = array_map('strtolower', $cachedPaths);
-            if (in_array(strtolower($path), $lowercaseCachedPaths, true) || in_array(strtolower($realPath), $lowercaseCachedPaths, true)) {
+            $resolvedCachedPaths = [];
+            foreach ($cachedPaths as $cachedPath) {
+                if (!is_string($cachedPath)) {
+                    continue;
+                }
+
+                $resolvedCachedPath = realpath($cachedPath);
+                if ($resolvedCachedPath !== false) {
+                    $resolvedCachedPaths[] = strtolower($resolvedCachedPath);
+                }
+            }
+
+            if (in_array(strtolower($realPath), $resolvedCachedPaths, true)) {
                 return true;
             }
 
