@@ -349,16 +349,23 @@ class LogDiscoveryService
 
         $lock = cache()->lock('ids.custom_log_paths_lock', self::LOCK_TIMEOUT_SECONDS);
         $acquired = false;
-        $retries = 5;
-        $delayMicroseconds = 100000; // 100ms in microseconds
+        $delayMicroseconds = 100000; // 100ms
+        $maxDelayMicroseconds = 1000000; // 1s
+        $deadline = microtime(true) + self::LOCK_TIMEOUT_SECONDS;
 
-        for ($i = 0; $i < $retries; $i++) {
+        while (microtime(true) < $deadline) {
             if ($lock->get()) {
                 $acquired = true;
                 break;
             }
-            usleep($delayMicroseconds);
-            $delayMicroseconds *= 2; // exponential backoff
+
+            $remainingMicroseconds = (int) (($deadline - microtime(true)) * 1000000);
+            if ($remainingMicroseconds <= 0) {
+                break;
+            }
+
+            usleep(min($delayMicroseconds, $remainingMicroseconds));
+            $delayMicroseconds = min($delayMicroseconds * 2, $maxDelayMicroseconds);
         }
 
         if (!$acquired) {
