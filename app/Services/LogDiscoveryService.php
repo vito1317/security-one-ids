@@ -304,14 +304,18 @@ class LogDiscoveryService
     }
 
     /**
-     * Add a custom log path to monitor
-     */
-    /**
      * Attempts to acquire a lock with exponential backoff
      */
     private function acquireLock(string $lockKey, int $timeout, int $maxRetries, int $initialDelay, &$lock)
     {
-        $lock = cache()->lock($lockKey, $timeout);
+        try {
+            $lock = cache()->lock($lockKey, $timeout);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning("Failed to create lock for {$lockKey}: " . $e->getMessage());
+            $lock = null;
+            return false;
+        }
+
         $acquired = false;
         $delay = $initialDelay;
 
@@ -427,6 +431,23 @@ class LogDiscoveryService
 
                             self::$migrated = true;
                         }
+                    } else {
+                        // Lock not acquired, degrade to read-only temporary merge to prevent data loss
+                        $merged = cache()->get($newKey, []);
+
+                        foreach ($legacyKeys as $legacyKey) {
+                            if (cache()->has($legacyKey)) {
+                                $legacyData = cache()->get($legacyKey, []);
+                                if (is_array($legacyData)) {
+                                    $merged = array_merge($merged, $legacyData);
+                                }
+                            }
+                        }
+
+                        $configPaths = config('ids.custom_log_paths', []);
+                        $merged = array_diff($merged, $configPaths);
+
+                        return array_values(array_unique($merged));
                     }
                 } finally {
                     if ($acquired && $lock) {
@@ -434,7 +455,7 @@ class LogDiscoveryService
                     }
                 }
             } else {
-                self::$migrated = true; // Fallback to avoid constant loops if we can't lock
+                self::$migrated = true; // No legacy keys exist
             }
         }
 
