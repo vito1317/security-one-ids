@@ -14,6 +14,7 @@ class ApiAuthTest extends TestCase
         parent::setUp();
         // Set a known token for testing
         putenv('AGENT_TOKEN=test-agent-token');
+        Config::set('ids.agent_token', 'test-agent-token');
     }
 
     public function test_auth_logic_rejects_missing_token()
@@ -26,5 +27,13 @@ class ApiAuthTest extends TestCase
 
         // Wrong token
         $this->postJson('/api/rules/update?token=wrong-token', [])->assertStatus(401);
+
+        // Valid token should pass
+        $this->postJson('/api/rules/update?token=test-agent-token', [])->assertStatus(200);
+        $this->postJson('/api/rules/update', [], ['X-Agent-Token' => 'test-agent-token'])->assertStatus(200);
+        $this->postJson('/api/rules/update', [], ['Authorization' => 'Bearer test-agent-token'])->assertStatus(200);
+
+        // Empty query token should not override valid bearer/header
+        $this->postJson('/api/rules/update?token=', [], ['Authorization' => 'Bearer test-agent-token'])->assertStatus(200);
     }
 }

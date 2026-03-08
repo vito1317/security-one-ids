@@ -15,8 +15,11 @@ class AgentAuth
      */
     public function handle(Request $request, Closure $next): Response
     {
-        $token = $request->input('token') ?? $request->header('X-Agent-Token') ?? $request->bearerToken();
-        $agentToken = env('AGENT_TOKEN');
+        $token = $request->bearerToken()
+            ?? $request->header('X-Agent-Token')
+            ?? ($request->input('token') ?: null);
+
+        $agentToken = env('AGENT_TOKEN') ?: config('ids.agent_token');
 
         if (!$token || !hash_equals((string) $agentToken, (string) $token)) {
             return response()->json(['error' => 'Unauthorized'], 401);
