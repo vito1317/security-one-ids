@@ -40,7 +40,8 @@ class LogDiscoveryServiceTest extends TestCase
     {
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        $this->assertNotFalse($tempPath);
+        $this->assertNotEmpty($tempPath);
+        $this->assertFileExists($tempPath);
 
         try {
             file_put_contents($tempPath, 'test log content');
@@ -63,7 +64,8 @@ class LogDiscoveryServiceTest extends TestCase
     {
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        $this->assertNotFalse($tempPath);
+        $this->assertNotEmpty($tempPath);
+        $this->assertFileExists($tempPath);
 
         try {
             file_put_contents($tempPath, 'test log content');
