@@ -3,6 +3,9 @@
 namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Contracts\Config\Repository as ConfigRepository;
+use Psr\Log\LoggerInterface;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -17,16 +20,18 @@ class AppServiceProvider extends ServiceProvider
     /**
      * Bootstrap any application services.
      */
-    public function boot(): void
+    public function boot(Application $app, LoggerInterface $logger, ConfigRepository $config): void
     {
-        if ($this->app->environment('production') && trim((string) config('ids.agent_token', '')) === '') {
+        $token = $config->get('ids.agent_token', '');
+
+        if ($app->environment('production') && ($token === null || trim((string) $token) === '')) {
             // Only throw an exception if we are specifically handling web requests
             // to avoid breaking deployment pipelines (like config:cache, key:generate, package:discover, etc.)
             // We rely on runningInConsole() to detect CLI SAPIs (like the queue worker or artisan setup).
-            if (!$this->app->runningInConsole()) {
+            if (!$app->runningInConsole()) {
                 throw new \RuntimeException('AGENT_TOKEN must be set in production environment.');
             } else {
-                \Illuminate\Support\Facades\Log::warning('AGENT_TOKEN is empty in production environment during console command. This may lead to an insecure configuration cache.');
+                $logger->warning('AGENT_TOKEN is empty in production environment during console command. This may lead to an insecure configuration cache.');
             }
         }
     }
