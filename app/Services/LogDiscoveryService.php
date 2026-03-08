@@ -334,32 +334,9 @@ class LogDiscoveryService
                 try {
                     $acquired = $lock->get();
                     if ($acquired) {
-                        $paths = [];
-                        $migrated = false;
-
-                        foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
-                            if (cache()->has($legacyKey)) {
-                                $legacyPaths = cache()->get($legacyKey);
-                                if (is_array($legacyPaths)) {
-                                    $paths = array_merge($paths, $legacyPaths);
-                                }
-                                $migrated = true;
-                            }
-                        }
-
-                        if ($migrated) {
-                            $paths = array_values(array_unique($paths));
-                            cache()->forever('ids.custom_log_paths', $paths);
-                            foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
-                                cache()->forget($legacyKey);
-                            }
-                        }
+                        $this->migrateLegacyLogPaths();
                     } elseif (!cache()->has('ids.custom_log_paths')) {
-                        $legacyPaths = array_merge(
-                            (array) cache()->get('ids_custom_log_paths', []),
-                            (array) cache()->get('ids::custom_log_paths', [])
-                        );
-                        return array_values(array_unique($legacyPaths));
+                        return $this->getLegacyPathsFallback();
                     }
                 } finally {
                     if ($acquired) {
@@ -369,19 +346,52 @@ class LogDiscoveryService
             } catch (\Exception $e) {
                 \Illuminate\Support\Facades\Log::warning("Failed to acquire lock for log path migration: {$e->getMessage()}");
 
-                // If lock mechanism fails (e.g. unsupported driver), fallback to reading legacy keys
-                // directly so we don't break the application.
                 if (!cache()->has('ids.custom_log_paths')) {
-                    $legacyPaths = array_merge(
-                        (array) cache()->get('ids_custom_log_paths', []),
-                        (array) cache()->get('ids::custom_log_paths', [])
-                    );
-                    return array_values(array_unique($legacyPaths));
+                    return $this->getLegacyPathsFallback();
                 }
             }
         }
 
         return cache()->get('ids.custom_log_paths', []);
+    }
+
+    /**
+     * Helper to migrate legacy log paths from cache.
+     */
+    private function migrateLegacyLogPaths(): void
+    {
+        $paths = [];
+        $migrated = false;
+
+        foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+            if (cache()->has($legacyKey)) {
+                $legacyPaths = cache()->get($legacyKey);
+                if (is_array($legacyPaths)) {
+                    $paths = array_merge($paths, $legacyPaths);
+                }
+                $migrated = true;
+            }
+        }
+
+        if ($migrated) {
+            $paths = array_values(array_unique($paths));
+            cache()->forever('ids.custom_log_paths', $paths);
+            foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+                cache()->forget($legacyKey);
+            }
+        }
+    }
+
+    /**
+     * Helper to return legacy paths directly as a fallback during lock failures.
+     */
+    private function getLegacyPathsFallback(): array
+    {
+        $legacyPaths = array_merge(
+            (array) cache()->get('ids_custom_log_paths', []),
+            (array) cache()->get('ids::custom_log_paths', [])
+        );
+        return array_values(array_unique($legacyPaths));
     }
 
     /**
