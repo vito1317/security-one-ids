@@ -321,6 +321,7 @@ class LogDiscoveryService
                     }
                 } else {
                     Log::warning("Failed to acquire lock for adding custom log path: {$path}");
+                    return false;
                 }
             } finally {
                 // The lock is an instance of Illuminate\Contracts\Cache\Lock, release it safely
