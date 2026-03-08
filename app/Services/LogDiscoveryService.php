@@ -306,7 +306,7 @@ class LogDiscoveryService
             return false;
         }
 
-        $lock = cache()->lock('lock::ids::custom_log_paths_add', 10);
+        $lock = cache()->lock('lock::ids::custom_log_paths_add', 30);
         $acquired = false;
         $delay = 10000;
 
@@ -325,7 +325,7 @@ class LogDiscoveryService
 
                 $allPaths = array_values(array_unique(array_merge($cachedPaths, $configPaths)));
 
-                if (!in_array($path, $allPaths)) {
+                if (!in_array($path, $allPaths, true)) {
                     $cachedPaths[] = $path;
                     $cachedPaths = array_values(array_unique($cachedPaths));
                     cache()->forever('ids::custom_log_paths', $cachedPaths);
@@ -333,6 +333,9 @@ class LogDiscoveryService
             } else {
                 return false;
             }
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
+            return false;
         } finally {
             if ($acquired) {
                 $lock->release();
