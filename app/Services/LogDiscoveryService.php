@@ -306,11 +306,37 @@ class LogDiscoveryService
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        $lock = cache()->lock('add_custom_log_path', 10);
+        $acquired = false;
+        $delay = 10000; // 10ms
+
+        for ($i = 0; $i < 10; $i++) {
+            if ($lock->get()) {
+                $acquired = true;
+                break;
+            }
+            usleep($delay);
+            $delay *= 2;
+        }
+
+        if (!$acquired) {
+            return false;
+        }
+
+        try {
+            $cachedPaths = cache()->get('ids::custom_log_paths', []);
+            $configPaths = config('ids.custom_log_paths', []);
+
+            $allPaths = array_values(array_unique(array_merge($cachedPaths, $configPaths)));
+
+            if (!in_array($path, $allPaths, true)) {
+                $cachedPaths[] = $path;
+                cache()->forever('ids::custom_log_paths', array_values(array_unique($cachedPaths)));
+            }
+        } finally {
+            if ($acquired) {
+                $lock->release();
+            }
         }
 
         return true;
@@ -321,7 +347,51 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        $hasLegacy1 = cache()->has('ids_custom_log_paths');
+        $hasLegacy2 = cache()->has('ids.custom_log_paths');
+
+        if ($hasLegacy1 || $hasLegacy2) {
+            $lock = cache()->lock('migrate_custom_log_paths', 10);
+            $acquired = false;
+            $delay = 10000;
+
+            for ($i = 0; $i < 10; $i++) {
+                if ($lock->get()) {
+                    $acquired = true;
+                    break;
+                }
+                usleep($delay);
+                $delay *= 2;
+            }
+
+            if ($acquired) {
+                try {
+                    $hasLegacy1 = cache()->has('ids_custom_log_paths');
+                    $hasLegacy2 = cache()->has('ids.custom_log_paths');
+
+                    if ($hasLegacy1 || $hasLegacy2) {
+                        $legacyPaths1 = $hasLegacy1 ? cache()->get('ids_custom_log_paths', []) : [];
+                        $legacyPaths2 = $hasLegacy2 ? cache()->get('ids.custom_log_paths', []) : [];
+                        $currentPaths = cache()->get('ids::custom_log_paths', []);
+
+                        $merged = array_values(array_unique(array_merge($legacyPaths1, $legacyPaths2, $currentPaths)));
+
+                        cache()->forever('ids::custom_log_paths', $merged);
+
+                        if ($hasLegacy1) cache()->forget('ids_custom_log_paths');
+                        if ($hasLegacy2) cache()->forget('ids.custom_log_paths');
+
+                        return $merged;
+                    }
+                } finally {
+                    if ($acquired) {
+                        $lock->release();
+                    }
+                }
+            }
+        }
+
+        return cache()->get('ids::custom_log_paths', []);
     }
 
     /**
