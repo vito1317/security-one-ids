@@ -319,22 +319,17 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        // Validate raw input for path traversal characters before decoding
-        $rawSegments = explode('/', str_replace('\\', '/', $path));
-        if (in_array('..', $rawSegments, true)) {
+        $path = urldecode($path);
+
+        // Ensure that any encoded traversal sequences are decoded before checking for '..'
+        $segments = explode('/', str_replace('\\', '/', $path));
+        if (in_array('..', $segments, true)) {
             return false;
         }
 
-        $path = urldecode($path);
         $realPath = realpath($path);
 
         if ($realPath === false || !is_file($realPath) || !is_readable($realPath)) {
-            return false;
-        }
-
-        // Re-validate that decoded path does not contain path traversal vectors
-        $segments = explode('/', str_replace('\\', '/', $path));
-        if (in_array('..', $segments, true)) {
             return false;
         }
 
@@ -346,13 +341,9 @@ class LogDiscoveryService
 
         // Try to acquire lock with blocking to avoid silent transient failures
         try {
-            $lockAcquired = $lock->block(5);
+            $lock->block(5);
+            $lockAcquired = true;
         } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-            Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
-            return false;
-        }
-
-        if (!$lockAcquired) {
             Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
             return false;
         }
