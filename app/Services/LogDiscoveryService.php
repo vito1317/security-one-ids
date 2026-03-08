@@ -321,7 +321,8 @@ class LogDiscoveryService
         }
 
         // Validate that path does not contain path traversal vectors
-        if (str_contains($path, '..')) {
+        $segments = explode('/', str_replace('\\', '/', $path));
+        if (in_array('..', $segments, true)) {
             return false;
         }
 
@@ -344,7 +345,7 @@ class LogDiscoveryService
             return true;
         }
 
-        $cachedPaths[] = $path;
+        $cachedPaths[] = $realPath;
         // Store in cache for persistence
         cache()->forever('ids.custom_log_paths', $cachedPaths);
 
