@@ -328,9 +328,11 @@ class LogDiscoveryService
     {
         if (!cache()->has('ids.custom_log_paths')) {
             $lock = cache()->lock('migrate_custom_log_paths', 10);
+            $acquired = false;
 
             try {
-                if ($lock->get()) {
+                $acquired = $lock->get();
+                if ($acquired) {
                     $paths = [];
                     $migrated = false;
 
@@ -351,9 +353,17 @@ class LogDiscoveryService
                             cache()->forget($legacyKey);
                         }
                     }
+                } elseif (!cache()->has('ids.custom_log_paths')) {
+                    $legacyPaths = array_merge(
+                        (array) cache()->get('ids_custom_log_paths', []),
+                        (array) cache()->get('ids::custom_log_paths', [])
+                    );
+                    return array_values(array_unique($legacyPaths));
                 }
             } finally {
-                optional($lock)->release();
+                if ($acquired) {
+                    $lock->release();
+                }
             }
         }
 
