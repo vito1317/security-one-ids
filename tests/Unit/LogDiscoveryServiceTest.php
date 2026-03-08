@@ -15,7 +15,13 @@ class LogDiscoveryServiceTest extends TestCase
         parent::setUp();
         $this->service = app(LogDiscoveryService::class);
         // Ensure we start with a clean state without modifying global config across tests
-        Cache::forget('ids.custom_log_paths');
+        Cache::forget('ids_custom_log_paths');
+    }
+
+    protected function tearDown(): void
+    {
+        Cache::forget('ids_custom_log_paths');
+        parent::tearDown();
     }
 
     public function test_add_custom_path_fails_when_path_not_readable(): void
@@ -41,7 +47,7 @@ class LogDiscoveryServiceTest extends TestCase
         $this->assertTrue($result);
 
         // Verify the cache state instead of mocking the Facade
-        $cachedPaths = Cache::get('ids.custom_log_paths', []);
+        $cachedPaths = Cache::get('ids_custom_log_paths', []);
         $this->assertTrue(in_array($tempPath, $cachedPaths));
 
         // Clean up
@@ -63,7 +69,7 @@ class LogDiscoveryServiceTest extends TestCase
         $this->assertTrue($result);
 
         // Verify it was not added to the cache, since it was already in the config
-        $cachedPaths = Cache::get('ids.custom_log_paths', []);
+        $cachedPaths = Cache::get('ids_custom_log_paths', []);
         $this->assertFalse(in_array($tempPath, $cachedPaths));
 
         // Clean up
