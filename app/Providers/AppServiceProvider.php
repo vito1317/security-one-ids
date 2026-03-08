@@ -19,6 +19,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        if ($this->app->environment('production') && trim(config('ids.agent_token', '')) === '') {
+            if (!$this->app->isDownForMaintenance()) {
+                throw new \RuntimeException('AGENT_TOKEN must be set in production environment.');
+            }
+        }
     }
 }
