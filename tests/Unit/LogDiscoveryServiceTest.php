@@ -38,23 +38,21 @@ class LogDiscoveryServiceTest extends TestCase
 
     public function test_add_custom_path_adds_path_and_caches_when_valid_and_not_in_config(): void
     {
-        // Create a temporary readable file
-        $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        $this->assertIsString($tempPath);
-        $this->assertFileExists($tempPath);
-
         try {
-            file_put_contents($tempPath, 'test log content');
+            // Create a temporary readable file
+            $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
+            $this->assertIsString($tempPath);
+            $this->assertFileExists($tempPath);
 
             $result = $this->service->addCustomPath($tempPath);
 
             $this->assertTrue($result);
 
             // Verify the cache state instead of mocking the Facade
-            $cachedPaths = Cache::get('ids_custom_log_paths', []);
+            $cachedPaths = Cache::get('ids.custom_log_paths', []);
             $this->assertTrue(in_array($tempPath, $cachedPaths));
         } finally {
-            if (is_file($tempPath)) {
+            if (isset($tempPath) && is_file($tempPath)) {
                 unlink($tempPath);
             }
         }
@@ -62,13 +60,11 @@ class LogDiscoveryServiceTest extends TestCase
 
     public function test_add_custom_path_returns_true_without_caching_when_path_already_in_config(): void
     {
-        // Create a temporary readable file
-        $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        $this->assertIsString($tempPath);
-        $this->assertFileExists($tempPath);
-
         try {
-            file_put_contents($tempPath, 'test log content');
+            // Create a temporary readable file
+            $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
+            $this->assertIsString($tempPath);
+            $this->assertFileExists($tempPath);
 
             // Set the global config for this specific test case
             Config::set('ids.custom_log_paths', [$tempPath]);
@@ -78,10 +74,10 @@ class LogDiscoveryServiceTest extends TestCase
             $this->assertTrue($result);
 
             // Verify it was not added to the cache, since it was already in the config
-            $cachedPaths = Cache::get('ids_custom_log_paths', []);
+            $cachedPaths = Cache::get('ids.custom_log_paths', []);
             $this->assertFalse(in_array($tempPath, $cachedPaths));
         } finally {
-            if (is_file($tempPath)) {
+            if (isset($tempPath) && is_file($tempPath)) {
                 unlink($tempPath);
             }
 
