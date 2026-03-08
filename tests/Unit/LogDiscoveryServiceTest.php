@@ -50,8 +50,8 @@ class LogDiscoveryServiceTest extends TestCase
             $result = $this->service->addCustomPath($tempPath);
 
             $this->assertTrue($result);
-            $this->assertTrue(cache()->has('ids::custom_log_paths'));
-            $this->assertContains($tempPath, cache()->get('ids::custom_log_paths'));
+            $this->assertTrue(cache()->has('ids.custom_log_paths'));
+            $this->assertContains($tempPath, cache()->get('ids.custom_log_paths'));
         } finally {
             if (file_exists($tempPath)) {
                 unlink($tempPath);
@@ -69,12 +69,12 @@ class LogDiscoveryServiceTest extends TestCase
 
             // Explicitly ensure cache is empty before the operation, as the service
             // might lazy load config paths into cache on startup or prior accesses.
-            cache()->forget('ids::custom_log_paths');
+            cache()->forget('ids.custom_log_paths');
 
             $result = $this->service->addCustomPath($tempPath);
 
             $this->assertTrue($result);
-            $this->assertFalse(cache()->has('ids::custom_log_paths'));
+            $this->assertFalse(cache()->has('ids.custom_log_paths'));
         } finally {
             if (file_exists($tempPath)) {
                 unlink($tempPath);
@@ -89,12 +89,12 @@ class LogDiscoveryServiceTest extends TestCase
 
         try {
             $this->app['config']->set('ids.custom_log_paths', []);
-            cache()->forever('ids::custom_log_paths', [$tempPath]);
+            cache()->forever('ids.custom_log_paths', [$tempPath]);
 
             $result = $this->service->addCustomPath($tempPath);
 
             $this->assertTrue($result);
-            $this->assertEquals([$tempPath], cache()->get('ids::custom_log_paths'));
+            $this->assertEquals([$tempPath], cache()->get('ids.custom_log_paths'));
         } finally {
             if (file_exists($tempPath)) {
                 unlink($tempPath);
