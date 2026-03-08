@@ -345,7 +345,8 @@ class LogDiscoveryService
             if (in_array($path, $cachedPaths, true) || in_array($realPath, $cachedPaths, true)) {
                 return true;
             }
-            throw new \RuntimeException("Could not acquire lock to add custom log path: {$path}");
+            Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
+            return false;
         }
 
         try {
@@ -406,7 +407,16 @@ class LogDiscoveryService
             }
         }
 
-        return cache()->get('ids.custom_log_paths', []);
+        $paths = cache()->get('ids.custom_log_paths', []);
+
+        if (!is_array($paths)) {
+            Log::warning('Corrupted custom log paths cache key encountered and discarded.', [
+                'type' => gettype($paths)
+            ]);
+            return [];
+        }
+
+        return $paths;
     }
 
     /**
