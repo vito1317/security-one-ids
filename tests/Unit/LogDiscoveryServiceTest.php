@@ -99,19 +99,34 @@ class LogDiscoveryServiceTest extends TestCase
 
     public function test_get_custom_paths_migrates_legacy_cache_key(): void
     {
-        $legacyPaths = ['/var/log/custom1.log', '/var/log/custom2.log'];
-        cache()->forever('ids_custom_log_paths', $legacyPaths);
+        if (!is_writable(sys_get_temp_dir())) {
+            $this->markTestSkipped('Temp directory is not writable');
+        }
 
-        // Ensure new key is empty
-        $this->assertFalse(cache()->has('ids.custom_log_paths'));
+        $tempPath1 = tempnam(sys_get_temp_dir(), uniqid('legacy_log1_', true));
+        $tempPath2 = tempnam(sys_get_temp_dir(), uniqid('legacy_log2_', true));
+        file_put_contents($tempPath1, 'legacy log content 1');
+        file_put_contents($tempPath2, 'legacy log content 2');
 
-        $paths = $this->service->getCustomPaths();
+        try {
+            $legacyPaths = [$tempPath1, $tempPath2, '/var/log/invalid_non_existent.log'];
+            $expectedPaths = [realpath($tempPath1), realpath($tempPath2)];
+            cache()->forever('ids_custom_log_paths', $legacyPaths);
 
-        $this->assertEquals($legacyPaths, $paths);
+            // Ensure new key is empty
+            $this->assertFalse(cache()->has('ids.custom_log_paths'));
 
-        // Verify migration
-        $this->assertTrue(cache()->has('ids.custom_log_paths'));
-        $this->assertEquals($legacyPaths, cache()->get('ids.custom_log_paths'));
-        $this->assertFalse(cache()->has('ids_custom_log_paths'));
+            $paths = $this->service->getCustomPaths();
+
+            $this->assertEquals($expectedPaths, $paths);
+
+            // Verify migration only kept valid paths
+            $this->assertTrue(cache()->has('ids.custom_log_paths'));
+            $this->assertEquals($expectedPaths, cache()->get('ids.custom_log_paths'));
+            $this->assertFalse(cache()->has('ids_custom_log_paths'));
+        } finally {
+            if (file_exists($tempPath1)) unlink($tempPath1);
+            if (file_exists($tempPath2)) unlink($tempPath2);
+        }
     }
 }
