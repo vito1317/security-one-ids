@@ -302,18 +302,126 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        if (!is_readable($path)) {
+        // Validate raw input for path traversal characters before decoding
+        $rawSegments = explode('/', str_replace('\\', '/', $path));
+        if (in_array('..', $rawSegments, true)) {
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
+        $path = urldecode($path);
+        $realPath = realpath($path);
+
+        if ($realPath === false || !is_file($realPath) || !is_readable($realPath)) {
+            return false;
+        }
+
+        // Re-validate that decoded path does not contain path traversal vectors
+        $segments = explode('/', str_replace('\\', '/', $path));
+        if (in_array('..', $segments, true)) {
+            return false;
+        }
+
+        // Migrate legacy paths before attempting to acquire the lock
+        $this->migrateLegacyPaths();
+
+        $lock = cache()->lock('ids.custom_log_paths_lock', 5);
+
+        // Try to acquire lock with blocking to avoid silent transient failures
+        try {
+            $lockAcquired = $lock->block(5);
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+            Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
+            return false;
+        } catch (\Exception $e) {
+            Log::error("Exception occurred while acquiring lock to add custom log path", ['path' => $path, 'exception' => $e->getMessage()]);
+            return false;
+        }
+
+        if (!$lockAcquired) {
+            Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
+            return false;
+        }
+
+        try {
+            // Re-read config inside lock to prevent race conditions
+            $configPaths = config('ids.custom_log_paths', []);
+            $realConfigPaths = array_filter(array_map('realpath', $configPaths));
+            if (in_array($realPath, $realConfigPaths, true)) {
+                return true;
+            }
+
+            // Read directly from cache without triggering migration again
+            $cachedPaths = cache()->get('ids::custom_log_paths', []);
+            if (!is_array($cachedPaths)) {
+                $cachedPaths = [];
+            }
+
+            // If it's already in the cache, we're good.
+            if (in_array($realPath, $cachedPaths, true)) {
+                return true;
+            }
+
+            $cachedPaths[] = $realPath;
             // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+            cache()->forever('ids::custom_log_paths', $cachedPaths);
+        } finally {
+            if ($lockAcquired) {
+                $lock->release();
+            }
         }
 
         return true;
+    }
+
+    private function migrateLegacyPaths(): void
+    {
+        if (cache()->has('ids_custom_log_paths')) {
+            $attempts = cache()->get('ids.custom_log_paths_migration_attempts', 0);
+
+            if ($attempts >= 3) {
+                return;
+            }
+
+            try {
+                $lock = cache()->lock('ids.custom_log_paths_migration_lock', 10);
+
+                if ($lock->get()) {
+                    try {
+                        // Double check inside the lock
+                        if (cache()->has('ids_custom_log_paths')) {
+                            $legacyPaths = cache()->get('ids_custom_log_paths', []);
+
+                            if (!is_array($legacyPaths)) {
+                                Log::warning('Corrupted legacy custom log paths cache key encountered and discarded.', [
+                                    'type' => gettype($legacyPaths)
+                                ]);
+                                $legacyPaths = [];
+                            }
+
+                            $currentPaths = cache()->get('ids::custom_log_paths', []);
+                            $currentPaths = is_array($currentPaths) ? $currentPaths : [];
+
+                            if (!empty($legacyPaths)) {
+                                $mergedPaths = array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
+                                cache()->forever('ids::custom_log_paths', $mergedPaths);
+                            }
+
+                            cache()->forget('ids_custom_log_paths');
+                            cache()->forget('ids.custom_log_paths_migration_attempts');
+                        }
+                    } finally {
+                        $lock->release();
+                    }
+                } else {
+                    cache()->put('ids.custom_log_paths_migration_attempts', $attempts + 1, now()->addMinutes(5));
+                }
+            } catch (\Exception $e) {
+                Log::error('Exception occurred while acquiring lock for legacy path migration.', [
+                    'exception' => $e->getMessage()
+                ]);
+                cache()->put('ids.custom_log_paths_migration_attempts', $attempts + 1, now()->addMinutes(5));
+            }
+        }
     }
 
     /**
@@ -321,7 +429,18 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        $this->migrateLegacyPaths();
+
+        $paths = cache()->get('ids::custom_log_paths', []);
+
+        if (!is_array($paths)) {
+            Log::warning('Corrupted custom log paths cache key encountered and discarded.', [
+                'type' => gettype($paths)
+            ]);
+            return [];
+        }
+
+        return $paths;
     }
 
     /**
