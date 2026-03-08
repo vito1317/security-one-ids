@@ -306,13 +306,6 @@ class LogDiscoveryService
             return false;
         }
 
-        $configPaths = config('ids.custom_log_paths', []);
-
-        // If it's already in the config, no need to cache
-        if (in_array($path, $configPaths, true)) {
-            return true;
-        }
-
         $cachedPaths = $this->getCustomPaths();
 
         if (!in_array($path, $cachedPaths, true)) {

@@ -39,6 +39,10 @@ class LogDiscoveryServiceTest extends TestCase
         }
 
         $tempPath = tempnam(sys_get_temp_dir(), uniqid('test_log_', true));
+        if ($tempPath === false) {
+            $this->fail('Failed to create temporary file.');
+        }
+
         file_put_contents($tempPath, 'test log content');
         $this->tempFiles[] = $tempPath;
 
@@ -73,7 +77,7 @@ class LogDiscoveryServiceTest extends TestCase
         $this->assertEquals([$tempPath], cache()->get('ids.custom_log_paths'));
     }
 
-    public function test_add_custom_path_returns_true_without_caching_when_path_already_in_config(): void
+    public function test_add_custom_path_caches_path_even_if_already_in_config(): void
     {
         $tempPath = $this->createTempLogFile();
 
@@ -87,8 +91,9 @@ class LogDiscoveryServiceTest extends TestCase
 
         $this->assertTrue($result);
 
-        // Verify cache is not set since it was already in config
-        $this->assertFalse(cache()->has('ids.custom_log_paths'));
+        // Verify cache is set since config is only fallback source
+        $this->assertTrue(cache()->has('ids.custom_log_paths'));
+        $this->assertEquals([$tempPath], cache()->get('ids.custom_log_paths'));
     }
 
     public function test_add_custom_path_is_idempotent_when_path_in_both_config_and_cache(): void
