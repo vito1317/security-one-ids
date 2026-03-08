@@ -313,16 +313,31 @@ class LogDiscoveryService
             return true;
         }
 
-        $cachedPaths = $this->getCustomPaths();
+        $lock = cache()->lock('lock.ids.custom_log_paths', 10);
 
-        if (!in_array($path, $cachedPaths, true)) {
-            $cachedPaths[] = $path;
+        if ($lock->get()) {
+            try {
+                $cachedPaths = $this->getCustomPaths();
 
-            // Clean up array keys just in case and deduplicate paths
-            $pathsToCache = array_values(array_unique(array_merge($cachedPaths, $configPaths)));
+                if (!in_array($path, $cachedPaths, true)) {
+                    $cachedPaths[] = $path;
 
-            // Store in cache for persistence
-            cache()->forever('ids.custom_log_paths', $pathsToCache);
+                    // Clean up array keys just in case and deduplicate paths
+                    $pathsToCache = array_values(array_unique($cachedPaths));
+
+                    // Store in cache for persistence
+                    cache()->forever('ids.custom_log_paths', $pathsToCache);
+                }
+            } finally {
+                $lock->release();
+            }
+        } else {
+            // If we couldn't get the lock, wait and check if it was added by another process
+            sleep(1);
+            $cachedPaths = $this->getCustomPaths();
+            if (!in_array($path, $cachedPaths, true)) {
+                return false; // Failed to acquire lock and path not added
+            }
         }
 
         return true;
