@@ -75,13 +75,15 @@ class LogDiscoveryServiceTest extends TestCase
             // we use Laravel's internal config array mutation which is automatically reset by TestCase after the test
             \Illuminate\Support\Facades\Config::set('ids.custom_log_paths', [$tempPath]);
 
+            // Ensure cache is completely untouched before we begin
+            $this->assertFalse(Cache::has('ids_custom_log_paths'));
+
             $result = $this->service->addCustomPath($tempPath);
 
             $this->assertTrue($result);
 
             // Verify it was not added to the cache, since it was already in the config
-            $cachedPaths = Cache::get('ids_custom_log_paths', []);
-            $this->assertFalse(in_array($tempPath, $cachedPaths));
+            $this->assertFalse(Cache::has('ids_custom_log_paths'));
         } finally {
             if (is_file($tempPath)) {
                 unlink($tempPath);
