@@ -46,9 +46,10 @@ class LogDiscoveryServiceTest extends TestCase
 
     public function test_add_custom_path_fails_when_path_not_readable(): void
     {
-        $path = '/path/to/non/existent/file.log';
+        $path = '/path/to/non/existent/file_' . uniqid() . '.log';
 
         // ensure the file actually does not exist
+        $this->assertFileDoesNotExist($path);
         $this->assertFalse(is_readable($path));
 
         $result = $this->service->addCustomPath($path);
