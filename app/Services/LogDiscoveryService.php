@@ -328,8 +328,10 @@ class LogDiscoveryService
             try {
                 $lock->block(5);
             } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-                // If we can't get the lock, just fall through to read the current paths
-                return cache()->get('ids.custom_log_paths', []);
+                // If we can't get the lock, merge both keys to avoid missing legacy paths during migration
+                $legacyPaths = cache()->get('ids_custom_log_paths', []);
+                $currentPaths = cache()->get('ids.custom_log_paths', []);
+                return array_values(array_unique(array_merge($legacyPaths, $currentPaths)));
             }
 
             try {

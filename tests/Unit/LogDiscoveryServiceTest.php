@@ -75,10 +75,11 @@ class LogDiscoveryServiceTest extends TestCase
 
         // Because Cache is mocked, we need to handle the other Cache calls as well
         Cache::shouldReceive('has')->with('ids_custom_log_paths')->andReturn(true);
+        Cache::shouldReceive('get')->with('ids_custom_log_paths', [])->andReturn(['/legacy/path.log']);
         Cache::shouldReceive('get')->with('ids.custom_log_paths', [])->andReturn(['/current/path.log']);
 
         $paths = $this->service->getCustomPaths();
 
-        $this->assertEquals(['/current/path.log'], $paths);
+        $this->assertEquals(['/legacy/path.log', '/current/path.log'], $paths);
     }
 }
