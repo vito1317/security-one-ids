@@ -15,8 +15,6 @@ use Illuminate\Support\Facades\Process;
  */
 class SuricataEngine
 {
-    use DetectsPlatform;
-
     private string $suricataPath;
     private string $configPath;
     private string $alertLogPath;
@@ -24,6 +22,8 @@ class SuricataEngine
     private string $logDir;
     private string $rulesDir;
     private ?string $cachedInterface = null;
+
+    use DetectsPlatform;
 
     public function __construct()
     {
