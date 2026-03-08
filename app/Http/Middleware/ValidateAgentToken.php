@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class ValidateAgentToken
 {
@@ -16,7 +17,7 @@ class ValidateAgentToken
     public function handle(Request $request, Closure $next): Response
     {
         if (app()->environment('production') && trim((string) config('ids.agent_token', '')) === '') {
-            throw new \RuntimeException('AGENT_TOKEN must be explicitly configured in production.');
+            throw new HttpException(500, 'AGENT_TOKEN must be explicitly configured in production.');
         }
 
         return $next($request);
