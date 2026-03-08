@@ -306,11 +306,38 @@ class LogDiscoveryService
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        $configPaths = config('ids.custom_log_paths', []);
+        if (in_array($path, $configPaths, true)) {
+            return true;
+        }
+
+        try {
+            $lock = cache()->lock('ids.custom_log_paths:add', 10);
+
+            if ($lock->get()) {
+                try {
+                    $cachePaths = $this->getCustomPaths();
+
+                    if (!in_array($path, $cachePaths, true)) {
+                        $cachePaths[] = $path;
+                        cache()->forever('ids.custom_log_paths', $cachePaths);
+                    }
+                } finally {
+                    $lock->release();
+                }
+            } else {
+                Log::warning("Failed to acquire lock for adding custom log path: {$path}");
+            }
+        } catch (\BadMethodCallException $e) {
+            // Store does not support locks, fallback to best-effort
+            $cachePaths = $this->getCustomPaths();
+
+            if (!in_array($path, $cachePaths, true)) {
+                $cachePaths[] = $path;
+                cache()->forever('ids.custom_log_paths', $cachePaths);
+            }
+        } catch (\Throwable $e) {
+            Log::warning("Error while adding custom log path: {$path}", ['exception' => $e->getMessage()]);
         }
 
         return true;
@@ -321,7 +348,58 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        $paths = cache()->get('ids.custom_log_paths', []);
+
+        foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+            $attemptKey = 'ids.custom_log_paths_migration_attempts_' . $legacyKey;
+
+            if (cache()->has($legacyKey)) {
+                $attempts = cache()->get($attemptKey, 0);
+                if ($attempts >= 3) {
+                    continue; // Skip if migration failed repeatedly
+                }
+
+                try {
+                    $lock = cache()->lock('migrate_' . $legacyKey, 10);
+
+                    if ($lock->get()) {
+                        try {
+                            // Double-check inside the lock
+                            if (cache()->has($legacyKey)) {
+                                $legacyPaths = cache()->get($legacyKey, []);
+                                if (is_array($legacyPaths)) {
+                                    $paths = array_values(array_unique(array_merge($paths, $legacyPaths)));
+                                }
+                                cache()->forever('ids.custom_log_paths', $paths);
+                                cache()->forget($legacyKey);
+                                cache()->forget($attemptKey); // Clear attempts on success
+                            }
+                        } finally {
+                            $lock->release();
+                        }
+                    } else {
+                        cache()->increment($attemptKey);
+                        Log::warning("Failed to acquire lock for cache migration of key: {$legacyKey}");
+                    }
+                } catch (\BadMethodCallException $e) {
+                    // Store does not support locks, fallback to best-effort migration
+                    if (cache()->has($legacyKey)) {
+                        $legacyPaths = cache()->get($legacyKey, []);
+                        if (is_array($legacyPaths)) {
+                            $paths = array_values(array_unique(array_merge($paths, $legacyPaths)));
+                        }
+                        cache()->forever('ids.custom_log_paths', $paths);
+                        cache()->forget($legacyKey);
+                        cache()->forget($attemptKey);
+                    }
+                } catch (\Throwable $e) {
+                    cache()->increment($attemptKey);
+                    Log::warning("Error during cache migration of key: {$legacyKey}", ['exception' => $e->getMessage()]);
+                }
+            }
+        }
+
+        return $paths;
     }
 
     /**
