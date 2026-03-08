@@ -13,6 +13,10 @@ use Illuminate\Support\Facades\Process;
  */
 class SnortEngine
 {
+    use \App\Traits\DetectsPlatform {
+        isWindows as private;
+    }
+
     private string $snortPath;
     private string $configPath;
     private string $alertLogPath;
@@ -1734,11 +1738,6 @@ LUA;
         }
 
         return null;
-    }
-
-    private function isWindows(): bool
-    {
-        return PHP_OS_FAMILY === 'Windows';
     }
 
     /**
