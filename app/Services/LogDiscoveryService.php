@@ -306,8 +306,11 @@ class LogDiscoveryService
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
+        $configPaths = config('ids.custom_log_paths', []);
+        $cachedPaths = $this->getCustomPaths();
+        $customPaths = array_values(array_unique(array_merge($configPaths, $cachedPaths)));
+
+        if (!in_array($path, $customPaths, true)) {
             $customPaths[] = $path;
             // Store in cache for persistence
             cache()->forever('ids.custom_log_paths', $customPaths);
@@ -324,7 +327,13 @@ class LogDiscoveryService
         // Handle backward compatibility for old cache key
         if (cache()->has('ids_custom_log_paths')) {
             $legacyPaths = cache()->get('ids_custom_log_paths', []);
-            cache()->forever('ids.custom_log_paths', $legacyPaths);
+            $currentPaths = cache()->get('ids.custom_log_paths', []);
+
+            $legacyPaths = is_array($legacyPaths) ? $legacyPaths : [];
+            $currentPaths = is_array($currentPaths) ? $currentPaths : [];
+
+            $mergedPaths = array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
+            cache()->forever('ids.custom_log_paths', $mergedPaths);
             cache()->forget('ids_custom_log_paths');
         }
 
