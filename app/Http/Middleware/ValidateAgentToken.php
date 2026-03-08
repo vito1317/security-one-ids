@@ -16,8 +16,13 @@ class ValidateAgentToken
      */
     public function handle(Request $request, Closure $next): Response
     {
-        if (app()->environment('production') && trim((string) config('ids.agent_token', '')) === '') {
-            throw new HttpException(500, 'AGENT_TOKEN must be explicitly configured in production.');
+        // Skip health check routes to ensure probes pass even if misconfigured
+        if ($request->is('up') || $request->is('health')) {
+            return $next($request);
+        }
+
+        if (app()->isProduction() && trim((string) config('ids.agent_token', '')) === '') {
+            throw new HttpException(503, 'Service Unavailable: AGENT_TOKEN must be explicitly configured in production.');
         }
 
         return $next($request);
