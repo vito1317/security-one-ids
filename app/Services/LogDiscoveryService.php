@@ -309,9 +309,11 @@ class LogDiscoveryService
         // Use a lock to prevent race conditions during concurrent additions
         $lock = cache()->lock('ids.custom_log_paths_lock', 10);
 
+        $acquired = false;
         try {
-            $lock->block(5);
+            $acquired = $lock->block(5);
         } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+            Log::warning("Lock timeout while trying to add custom path", ['path' => $path, 'error' => $e->getMessage()]);
             return false;
         }
 
@@ -324,7 +326,9 @@ class LogDiscoveryService
             // Always set cache even if previously in config (because config paths aren't necessarily in cache)
             cache()->forever('ids.custom_log_paths', $cachedPaths);
         } finally {
-            $lock->release();
+            if ($acquired) {
+                $lock->release();
+            }
         }
 
         return true;
@@ -337,10 +341,12 @@ class LogDiscoveryService
     {
         if (cache()->has('ids_custom_log_paths')) {
             $lock = cache()->lock('migrate_ids_custom_log_paths', 10);
+            $acquired = false;
             try {
-                $lock->block(5);
+                $acquired = $lock->block(5);
             } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-                return cache()->get('ids.custom_log_paths', config('ids.custom_log_paths', []));
+                Log::warning("Lock timeout while trying to migrate custom log paths cache key", ['error' => $e->getMessage()]);
+                throw clone $e;
             }
 
             try {
@@ -353,7 +359,9 @@ class LogDiscoveryService
                     cache()->forget('ids_custom_log_paths');
                 }
             } finally {
-                $lock->release();
+                if ($acquired) {
+                    $lock->release();
+                }
             }
         }
 
