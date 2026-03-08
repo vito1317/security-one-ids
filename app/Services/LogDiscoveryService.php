@@ -306,11 +306,13 @@ class LogDiscoveryService
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
+        $configPaths = config('ids.custom_log_paths', []);
+        $cachePaths = $this->getCustomPaths();
+
+        if (!in_array($path, $configPaths) && !in_array($path, $cachePaths)) {
+            $cachePaths[] = $path;
             // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+            cache()->forever('ids::custom_log_paths', $cachePaths);
         }
 
         return true;
@@ -321,7 +323,23 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        // Backward compatibility: migrate legacy keys
+        if (cache()->has('ids_custom_log_paths')) {
+            $legacyPaths = cache()->get('ids_custom_log_paths', []);
+            cache()->forever('ids::custom_log_paths', $legacyPaths);
+            cache()->forget('ids_custom_log_paths');
+            return $legacyPaths;
+        }
+
+        // Backward compatibility: check if dot notation was mistakenly used
+        if (cache()->has('ids.custom_log_paths')) {
+            $legacyPaths = cache()->get('ids.custom_log_paths', []);
+            cache()->forever('ids::custom_log_paths', $legacyPaths);
+            cache()->forget('ids.custom_log_paths');
+            return $legacyPaths;
+        }
+
+        return cache()->get('ids::custom_log_paths', []);
     }
 
     /**
