@@ -346,7 +346,7 @@ class LogDiscoveryService
                 $acquired = $lock->block(5);
             } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
                 Log::warning("Lock timeout while trying to migrate custom log paths cache key", ['error' => $e->getMessage()]);
-                throw clone $e;
+                return cache()->get('ids.custom_log_paths', cache()->get('ids_custom_log_paths', config('ids.custom_log_paths', [])));
             }
 
             try {
