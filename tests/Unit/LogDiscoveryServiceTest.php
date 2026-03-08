@@ -61,6 +61,7 @@ class LogDiscoveryServiceTest extends TestCase
             $cachedPaths = Cache::get('ids_custom_log_paths', []);
             $this->assertTrue(in_array($tempPath, $cachedPaths));
         } finally {
+            \Illuminate\Support\Facades\Config::set('ids.custom_log_paths', null);
             if (is_file($tempPath)) {
                 unlink($tempPath);
             }
@@ -93,6 +94,7 @@ class LogDiscoveryServiceTest extends TestCase
             // Verify it was not added to the cache, since it was already in the config
             $this->assertFalse(Cache::has('ids_custom_log_paths'));
         } finally {
+            \Illuminate\Support\Facades\Config::set('ids.custom_log_paths', null);
             if (is_file($tempPath)) {
                 unlink($tempPath);
             }
