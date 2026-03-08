@@ -330,7 +330,21 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids.custom_log_paths', []);
+        $newKey = 'ids.custom_log_paths';
+        $oldKey = 'ids_custom_log_paths';
+
+        $paths = cache()->get($newKey);
+        if (is_array($paths)) {
+            return $paths;
+        }
+
+        $legacyPaths = cache()->get($oldKey, []);
+        if (!empty($legacyPaths)) {
+            cache()->forever($newKey, $legacyPaths);
+            cache()->forget($oldKey);
+        }
+
+        return $legacyPaths;
     }
 
     /**
