@@ -40,39 +40,49 @@ class LogDiscoveryServiceTest extends TestCase
     {
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        file_put_contents($tempPath, 'test log content');
+        $this->assertNotFalse($tempPath);
 
-        $result = $this->service->addCustomPath($tempPath);
+        try {
+            file_put_contents($tempPath, 'test log content');
 
-        $this->assertTrue($result);
+            $result = $this->service->addCustomPath($tempPath);
 
-        // Verify the cache state instead of mocking the Facade
-        $cachedPaths = Cache::get('ids_custom_log_paths', []);
-        $this->assertTrue(in_array($tempPath, $cachedPaths));
+            $this->assertTrue($result);
 
-        // Clean up
-        unlink($tempPath);
+            // Verify the cache state instead of mocking the Facade
+            $cachedPaths = Cache::get('ids_custom_log_paths', []);
+            $this->assertTrue(in_array($tempPath, $cachedPaths));
+        } finally {
+            if (is_file($tempPath)) {
+                unlink($tempPath);
+            }
+        }
     }
 
     public function test_add_custom_path_returns_true_without_caching_when_path_already_in_config(): void
     {
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        file_put_contents($tempPath, 'test log content');
+        $this->assertNotFalse($tempPath);
 
-        // To isolate config modification without polluting global state across tests,
-        // we use Laravel's internal config array mutation which is automatically reset by TestCase after the test
-        $this->app['config']->set('ids.custom_log_paths', [$tempPath]);
+        try {
+            file_put_contents($tempPath, 'test log content');
 
-        $result = $this->service->addCustomPath($tempPath);
+            // To isolate config modification without polluting global state across tests,
+            // we use Laravel's internal config array mutation which is automatically reset by TestCase after the test
+            $this->app['config']->set('ids.custom_log_paths', [$tempPath]);
 
-        $this->assertTrue($result);
+            $result = $this->service->addCustomPath($tempPath);
 
-        // Verify it was not added to the cache, since it was already in the config
-        $cachedPaths = Cache::get('ids_custom_log_paths', []);
-        $this->assertFalse(in_array($tempPath, $cachedPaths));
+            $this->assertTrue($result);
 
-        // Clean up
-        unlink($tempPath);
+            // Verify it was not added to the cache, since it was already in the config
+            $cachedPaths = Cache::get('ids_custom_log_paths', []);
+            $this->assertFalse(in_array($tempPath, $cachedPaths));
+        } finally {
+            if (is_file($tempPath)) {
+                unlink($tempPath);
+            }
+        }
     }
 }
