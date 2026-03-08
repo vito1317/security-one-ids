@@ -58,11 +58,13 @@ class LogDiscoveryServiceTest extends TestCase
 
         try {
             $this->app['config']->set('ids.custom_log_paths', [$tempPath]);
+            $initialCacheHas = cache()->has('ids.custom_log_paths');
             $initialCacheState = cache()->get('ids.custom_log_paths', []);
 
             $result = $this->service->addCustomPath($tempPath);
 
             $this->assertTrue($result);
+            $this->assertSame($initialCacheHas, cache()->has('ids.custom_log_paths'));
             $this->assertEquals($initialCacheState, cache()->get('ids.custom_log_paths', []));
         } finally {
             if (file_exists($tempPath)) {
