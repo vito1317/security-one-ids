@@ -15,9 +15,13 @@ class AgentAuth
      */
     public function handle(Request $request, Closure $next): Response
     {
-        $token = $request->bearerToken()
-            ?? $request->header('X-Agent-Token')
-            ?? $request->input('token');
+        $token = $request->bearerToken();
+        if ($token === null || $token === '') {
+            $token = $request->header('X-Agent-Token');
+        }
+        if ($token === null || $token === '') {
+            $token = $request->input('token');
+        }
 
         $agentToken = (string) (env('AGENT_TOKEN') ?? config('ids.agent_token', ''));
 
