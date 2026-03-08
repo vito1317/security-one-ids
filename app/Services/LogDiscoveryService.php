@@ -360,7 +360,17 @@ class LogDiscoveryService
                 return true;
             }
 
-            $cachedPaths = $this->getCustomPaths();
+            $cachedPaths = cache()->get('ids.custom_log_paths', []);
+            $cachedPaths = is_array($cachedPaths) ? $cachedPaths : [];
+
+            // Execute legacy migration in-line to prevent locking issues
+            if (cache()->has('ids_custom_log_paths')) {
+                $legacyPaths = cache()->get('ids_custom_log_paths', []);
+                if (is_array($legacyPaths) && !empty($legacyPaths)) {
+                    $cachedPaths = array_values(array_unique(array_merge($cachedPaths, $legacyPaths)));
+                }
+                cache()->forget('ids_custom_log_paths');
+            }
 
             // If it's already in the cache, we're good.
             if (in_array($path, $cachedPaths, true) || in_array($realPath, $cachedPaths, true)) {
