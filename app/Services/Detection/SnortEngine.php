@@ -14,7 +14,6 @@ use Illuminate\Support\Facades\Process;
  */
 class SnortEngine
 {
-    // Use shared platform detection logic
     use DetectsPlatform;
 
     private string $snortPath;

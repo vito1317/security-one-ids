@@ -15,7 +15,6 @@ use Illuminate\Support\Facades\Process;
  */
 class SuricataEngine
 {
-    // Use shared platform detection logic
     use DetectsPlatform;
 
     private string $suricataPath;
