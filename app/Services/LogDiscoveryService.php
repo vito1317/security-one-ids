@@ -12,6 +12,10 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
+    private const CACHE_KEY_CUSTOM_PATHS = 'ids.custom_log_paths';
+    private const LEGACY_CACHE_KEYS = ['ids_custom_log_paths', 'ids::custom_log_paths'];
+    private const CACHE_LOCK_KEY = 'migrate_custom_log_paths';
+
     /**
      * Common web server log file locations to scan
      */
@@ -302,15 +306,23 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        if (!is_readable($path)) {
+        if (!file_exists($path) || !is_readable($path)) {
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        $configPaths = config('ids.custom_log_paths', []);
+
+        // If path is already defined in config, don't write it to cache
+        if (in_array($path, $configPaths)) {
+            return true;
+        }
+
+        $cachePaths = $this->getCustomPaths();
+
+        if (!in_array($path, $cachePaths)) {
+            $cachePaths[] = $path;
+            // Store new paths in cache for persistence using dot notation
+            cache()->forever(self::CACHE_KEY_CUSTOM_PATHS, array_values(array_unique($cachePaths)));
         }
 
         return true;
@@ -321,7 +333,108 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        if (!cache()->has(self::CACHE_KEY_CUSTOM_PATHS)) {
+            // Check if legacy keys exist before trying to acquire lock
+            $hasLegacy = false;
+            foreach (self::LEGACY_CACHE_KEYS as $legacyKey) {
+                if (cache()->has($legacyKey)) {
+                    $hasLegacy = true;
+                    break;
+                }
+            }
+
+            if (!$hasLegacy) {
+                cache()->forever(self::CACHE_KEY_CUSTOM_PATHS, []);
+                return [];
+            }
+
+            try {
+                $lock = cache()->lock(self::CACHE_LOCK_KEY, 10);
+                $acquired = false;
+                $attempts = 0;
+                $sleepTime = 50000; // 50ms initial sleep
+
+                try {
+                    while ($attempts < 5) {
+                        $acquired = $lock->get();
+                        if ($acquired === true) {
+                            $this->migrateLegacyPaths();
+                            break;
+                        }
+
+                        // Check if another process completed it while we were waiting
+                        if (cache()->has(self::CACHE_KEY_CUSTOM_PATHS)) {
+                            break;
+                        }
+
+                        $attempts++;
+                        if ($attempts < 5) {
+                            usleep($sleepTime);
+                            $sleepTime *= 2; // Exponential backoff
+                        }
+                    }
+
+                    if ($acquired !== true && !cache()->has(self::CACHE_KEY_CUSTOM_PATHS)) {
+                        // Lock contention timeout - return fallback without altering state
+                        $legacyPaths = [];
+                        foreach (self::LEGACY_CACHE_KEYS as $legacyKey) {
+                            $legacyPaths = array_merge($legacyPaths, (array) cache()->get($legacyKey, []));
+                        }
+                        return array_values(array_unique($legacyPaths));
+                    }
+                } finally {
+                    if ($acquired === true) {
+                        $lock->release();
+                    }
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning("Failed to acquire lock for log path migration: {$e->getMessage()}");
+
+                // If lock mechanism itself fails (e.g. unsupported driver), fallback to reading legacy keys
+                // directly so we don't break the application.
+                if (!cache()->has(self::CACHE_KEY_CUSTOM_PATHS)) {
+                    $legacyPaths = [];
+                    foreach (self::LEGACY_CACHE_KEYS as $legacyKey) {
+                        $legacyPaths = array_merge($legacyPaths, (array) cache()->get($legacyKey, []));
+                    }
+                    return array_values(array_unique($legacyPaths));
+                }
+            }
+        }
+
+        return cache()->get(self::CACHE_KEY_CUSTOM_PATHS, []);
+    }
+
+    /**
+     * Migrate legacy custom log paths to the new cache key format
+     */
+    private function migrateLegacyPaths(): void
+    {
+        if (cache()->has(self::CACHE_KEY_CUSTOM_PATHS)) {
+            return;
+        }
+
+        $paths = [];
+        $migrated = false;
+
+        foreach (self::LEGACY_CACHE_KEYS as $legacyKey) {
+            if (cache()->has($legacyKey)) {
+                $legacyPaths = cache()->get($legacyKey);
+                if (is_array($legacyPaths)) {
+                    $paths = array_merge($paths, $legacyPaths);
+                }
+                $migrated = true;
+            }
+        }
+
+        $paths = array_values(array_unique($paths));
+        cache()->forever(self::CACHE_KEY_CUSTOM_PATHS, $paths);
+
+        if ($migrated) {
+            foreach (self::LEGACY_CACHE_KEYS as $legacyKey) {
+                cache()->forget($legacyKey);
+            }
+        }
     }
 
     /**
