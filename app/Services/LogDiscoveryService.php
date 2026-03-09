@@ -12,6 +12,13 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
+    public const CACHE_KEY_NEW = 'ids.custom_log_paths';
+    public const CACHE_KEY_LEGACY_1 = 'ids_custom_log_paths';
+    public const CACHE_KEY_LEGACY_2 = 'ids::custom_log_paths';
+
+    /** Initial wait time in microseconds before retrying a lock acquisition */
+    private const LOCK_RETRY_INTERVAL_US = 50000;
+
     /**
      * Common web server log file locations to scan
      */
@@ -317,8 +324,8 @@ class LogDiscoveryService
 
         if (!in_array($path, $cachePaths)) {
             $cachePaths[] = $path;
-            // Store new paths in cache for persistence using dot notation
-            cache()->forever('ids.custom_log_paths', array_values(array_unique($cachePaths)));
+            // Store new paths in cache for persistence
+            cache()->forever(self::CACHE_KEY_NEW, array_values(array_unique($cachePaths)));
         }
 
         return true;
@@ -329,64 +336,68 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        if (!cache()->has('ids.custom_log_paths')) {
-            // Unnecessary lock acquisition for every cache miss
-            if (!cache()->has('ids_custom_log_paths') && !cache()->has('ids::custom_log_paths')) {
-                cache()->forever('ids.custom_log_paths', []);
-                return [];
-            }
+        if (cache()->has(self::CACHE_KEY_NEW)) {
+            return cache()->get(self::CACHE_KEY_NEW);
+        }
+
+        // Fast-path: Unnecessary lock acquisition for every cache miss
+        if (!cache()->has(self::CACHE_KEY_LEGACY_1) && !cache()->has(self::CACHE_KEY_LEGACY_2)) {
+            cache()->forever(self::CACHE_KEY_NEW, []);
+            return [];
+        }
+
+        try {
+            $lock = cache()->lock('migrate_custom_log_paths', 10);
+            $acquired = false;
+            $startTime = microtime(true);
+            $timeout = 2.0; // Wait up to 2 seconds for the lock
+            $sleepUs = self::LOCK_RETRY_INTERVAL_US;
 
             try {
-                $lock = cache()->lock('migrate_custom_log_paths', 10);
-                $acquired = false;
-                $attempts = 0;
-
-                try {
-                    while ($attempts < 3) {
-                        $acquired = $lock->get();
-                        if ($acquired) {
-                            $this->migrateLegacyPaths();
-                            break;
-                        }
-
-                        // Check if another process completed it while we were waiting
-                        if (cache()->has('ids.custom_log_paths')) {
-                            break;
-                        }
-
-                        $attempts++;
-                        usleep(100000); // Wait 100ms before retrying
-                    }
-
-                    if (!$acquired && !cache()->has('ids.custom_log_paths')) {
-                        // Lock contention timeout - return fallback without altering state
-                        $legacyPaths = array_merge(
-                            (array) cache()->get('ids_custom_log_paths', []),
-                            (array) cache()->get('ids::custom_log_paths', [])
-                        );
-                        return array_values(array_unique($legacyPaths));
-                    }
-                } finally {
+                while ((microtime(true) - $startTime) < $timeout) {
+                    $acquired = $lock->get();
                     if ($acquired) {
-                        $lock->release();
+                        $this->migrateLegacyPaths();
+                        break;
                     }
-                }
-            } catch (\Throwable $e) {
-                \Illuminate\Support\Facades\Log::warning("Failed to acquire lock for log path migration: {$e->getMessage()}");
 
-                // If lock mechanism itself fails (e.g. unsupported driver), fallback to reading legacy keys
-                // directly so we don't break the application.
-                if (!cache()->has('ids.custom_log_paths')) {
+                    // Check if another process completed it while we were waiting
+                    if (cache()->has(self::CACHE_KEY_NEW)) {
+                        break;
+                    }
+
+                    usleep($sleepUs);
+                    $sleepUs = (int) min($sleepUs * 1.5, 500000); // Exponential backoff, max 500ms
+                }
+
+                if (!$acquired && !cache()->has(self::CACHE_KEY_NEW)) {
+                    // Lock contention timeout - return fallback without altering state
                     $legacyPaths = array_merge(
-                        (array) cache()->get('ids_custom_log_paths', []),
-                        (array) cache()->get('ids::custom_log_paths', [])
+                        (array) cache()->get(self::CACHE_KEY_LEGACY_1, []),
+                        (array) cache()->get(self::CACHE_KEY_LEGACY_2, [])
                     );
                     return array_values(array_unique($legacyPaths));
                 }
+            } finally {
+                if ($acquired) {
+                    $lock->release();
+                }
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error("Failed to acquire lock for log path migration due to cache driver error: {$e->getMessage()}", ['exception' => $e]);
+
+            // If lock mechanism itself fails (e.g. unsupported driver), fallback to reading legacy keys
+            // directly so we don't break the application.
+            if (!cache()->has(self::CACHE_KEY_NEW)) {
+                $legacyPaths = array_merge(
+                    (array) cache()->get(self::CACHE_KEY_LEGACY_1, []),
+                    (array) cache()->get(self::CACHE_KEY_LEGACY_2, [])
+                );
+                return array_values(array_unique($legacyPaths));
             }
         }
 
-        return cache()->get('ids.custom_log_paths', []);
+        return cache()->get(self::CACHE_KEY_NEW, []);
     }
 
     /**
@@ -394,14 +405,14 @@ class LogDiscoveryService
      */
     private function migrateLegacyPaths(): void
     {
-        if (cache()->has('ids.custom_log_paths')) {
+        if (cache()->has(self::CACHE_KEY_NEW)) {
             return;
         }
 
         $paths = [];
         $migrated = false;
 
-        foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+        foreach ([self::CACHE_KEY_LEGACY_1, self::CACHE_KEY_LEGACY_2] as $legacyKey) {
             if (cache()->has($legacyKey)) {
                 $legacyPaths = cache()->get($legacyKey);
                 if (is_array($legacyPaths)) {
@@ -412,10 +423,10 @@ class LogDiscoveryService
         }
 
         $paths = array_values(array_unique($paths));
-        cache()->forever('ids.custom_log_paths', $paths);
+        cache()->forever(self::CACHE_KEY_NEW, $paths);
 
         if ($migrated) {
-            foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+            foreach ([self::CACHE_KEY_LEGACY_1, self::CACHE_KEY_LEGACY_2] as $legacyKey) {
                 cache()->forget($legacyKey);
             }
         }

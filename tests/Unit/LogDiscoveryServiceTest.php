@@ -38,7 +38,9 @@ class LogDiscoveryServiceTest extends TestCase
 
         // Tiny sleep to ensure filesystem reflects deletion accurately
         usleep(1000);
+        clearstatcache(true, $path);
 
+        $this->assertFalse(file_exists($path));
         $this->assertFalse(is_readable($path));
 
         $result = $this->service->addCustomPath($path);
