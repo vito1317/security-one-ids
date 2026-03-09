@@ -24,7 +24,7 @@ class AppServiceProvider extends ServiceProvider
             if ($this->app->runningInConsole()) {
                 // Only block queue workers specific to the IDS/IPS application
                 $this->app['events']->listen(\Illuminate\Queue\Events\WorkerStarting::class, function (\Illuminate\Queue\Events\WorkerStarting $event) {
-                    if ($event->connectionName === config('ids.queue.connection') || $event->queue === config('ids.queue.name')) {
+                    if ($event->connectionName === config('ids.queue.connection') && $event->queue === config('ids.queue.name')) {
                         throw new \App\Exceptions\MissingAgentTokenException('AGENT_TOKEN is missing in production. IDS queue worker startup has been blocked.');
                     }
                 });
