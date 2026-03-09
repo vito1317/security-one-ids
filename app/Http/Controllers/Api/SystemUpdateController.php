@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Process;
 
 class SystemUpdateController extends Controller
 {
@@ -15,11 +16,10 @@ class SystemUpdateController extends Controller
     {
         Log::info('System update triggered via API');
 
-        // Run update command in background
-        $command = 'cd /var/www/html && git pull origin main 2>&1';
-        
         try {
-            exec($command, $output, $returnCode);
+            $result = Process::path(base_path())->run('git pull origin main 2>&1');
+            $returnCode = $result->exitCode();
+            $output = explode("\n", trim($result->output() . "\n" . $result->errorOutput()));
             
             if ($returnCode === 0) {
                 // Clear caches
@@ -71,8 +71,11 @@ class SystemUpdateController extends Controller
 
         try {
             // Get git info
-            exec('git rev-parse HEAD 2>/dev/null', $hashOutput);
-            exec('git rev-parse --abbrev-ref HEAD 2>/dev/null', $branchOutput);
+            $hashResult = Process::path(base_path())->run('git rev-parse HEAD 2>/dev/null');
+            $branchResult = Process::path(base_path())->run('git rev-parse --abbrev-ref HEAD 2>/dev/null');
+
+            $hashOutput = array_filter(explode("\n", trim($hashResult->output())));
+            $branchOutput = array_filter(explode("\n", trim($branchResult->output())));
             
             $gitHash = !empty($hashOutput) ? substr($hashOutput[0], 0, 7) : 'unknown';
             $gitBranch = !empty($branchOutput) ? $branchOutput[0] : 'unknown';
@@ -97,7 +100,9 @@ class SystemUpdateController extends Controller
         Log::info('Service restart triggered');
 
         try {
-            exec('supervisorctl restart all 2>&1', $output, $returnCode);
+            $result = Process::run('supervisorctl restart all 2>&1');
+            $returnCode = $result->exitCode();
+            $output = explode("\n", trim($result->output() . "\n" . $result->errorOutput()));
 
             return response()->json([
                 'success' => $returnCode === 0,
