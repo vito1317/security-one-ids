@@ -7,14 +7,11 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Log Discovery Service
- * 
+ *
  * Auto-discovers web server log files on the system
  */
 class LogDiscoveryService
 {
-    private const CACHE_KEY = 'ids.custom_log_paths';
-    private const LEGACY_CACHE_KEY = 'ids_custom_log_paths';
-
     /**
      * Common web server log file locations to scan
      */
@@ -25,7 +22,7 @@ class LogDiscoveryService
         '/var/log/nginx/*-access.log',
         '/var/log/nginx/error.log',
         '/usr/local/nginx/logs/access.log',
-        
+
         // === Linux Apache ===
         '/var/log/apache2/access.log',
         '/var/log/apache2/*/access.log',
@@ -33,7 +30,7 @@ class LogDiscoveryService
         '/var/log/apache2/other_vhosts_access.log',
         '/var/log/httpd/access_log',
         '/var/log/httpd/*/access_log',
-        
+
         // === macOS ===
         '/var/log/apache2/access_log',
         '/var/log/apache2/error_log',
@@ -44,7 +41,7 @@ class LogDiscoveryService
         '/opt/homebrew/var/log/httpd/access_log',
         '/private/var/log/apache2/access_log',
         '/private/var/log/apache2/error_log',
-        
+
         // === Docker / Container ===
         '/var/log/host-nginx/access.log',
         '/var/log/host-nginx/*/access.log',
@@ -54,7 +51,7 @@ class LogDiscoveryService
         '/var/log/host-httpd/access_log',
         '/var/log/custom-logs-*/access.log',
         '/var/log/custom-logs-*/*.log',
-        
+
         // === Common custom paths ===
         '/var/www/*/logs/access.log',
         '/home/*/logs/access.log',
@@ -74,13 +71,13 @@ class LogDiscoveryService
         '/var/log/ufw.log',
         '/var/log/fail2ban.log',
         '/var/log/firewalld',
-        
+
         // === macOS system logs ===
         '/var/log/system.log',
         '/var/log/install.log',
         '/private/var/log/system.log',
         '/private/var/log/asl/*.asl',
-        
+
         // === Application logs ===
         '/var/log/mysql/error.log',
         '/var/log/postgresql/*.log',
@@ -239,7 +236,7 @@ class LogDiscoveryService
         }
 
         $type = $this->detectServerType($path);
-        
+
         return [
             'path' => $path,
             'type' => $type,
@@ -276,7 +273,7 @@ class LogDiscoveryService
 
         // Try to match against known formats
         $sampleLine = end($lines);
-        
+
         foreach (self::LOG_FORMATS as $name => $pattern) {
             if (preg_match($pattern, $sampleLine)) {
                 return $name;
@@ -321,7 +318,7 @@ class LogDiscoveryService
         if (!in_array($path, $cachePaths)) {
             $cachePaths[] = $path;
             // Store new paths in cache for persistence using dot notation
-            cache()->forever(self::CACHE_KEY, array_values(array_unique($cachePaths)));
+            cache()->forever('ids.custom_log_paths', array_values(array_unique($cachePaths)));
         }
 
         return true;
@@ -332,10 +329,10 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        if (!cache()->has(self::CACHE_KEY)) {
-            // Only acquire lock if legacy key actually exists and needs migration
-            if (!cache()->has(self::LEGACY_CACHE_KEY)) {
-                cache()->forever(self::CACHE_KEY, []);
+        if (!cache()->has('ids.custom_log_paths')) {
+            // Unnecessary lock acquisition for every cache miss
+            if (!cache()->has('ids_custom_log_paths') && !cache()->has('ids::custom_log_paths')) {
+                cache()->forever('ids.custom_log_paths', []);
                 return [];
             }
 
@@ -343,7 +340,6 @@ class LogDiscoveryService
                 $lock = cache()->lock('migrate_custom_log_paths', 10);
                 $acquired = false;
                 $attempts = 0;
-                $sleepDuration = 100000;
 
                 try {
                     while ($attempts < 3) {
@@ -354,18 +350,20 @@ class LogDiscoveryService
                         }
 
                         // Check if another process completed it while we were waiting
-                        if (cache()->has(self::CACHE_KEY) || !cache()->has(self::LEGACY_CACHE_KEY)) {
+                        if (cache()->has('ids.custom_log_paths')) {
                             break;
                         }
 
                         $attempts++;
-                        usleep($sleepDuration);
-                        $sleepDuration *= 2; // Exponential backoff
+                        usleep(100000); // Wait 100ms before retrying
                     }
 
-                    if (!$acquired && !cache()->has(self::CACHE_KEY)) {
+                    if (!$acquired && !cache()->has('ids.custom_log_paths')) {
                         // Lock contention timeout - return fallback without altering state
-                        $legacyPaths = (array) cache()->get(self::LEGACY_CACHE_KEY, []);
+                        $legacyPaths = array_merge(
+                            (array) cache()->get('ids_custom_log_paths', []),
+                            (array) cache()->get('ids::custom_log_paths', [])
+                        );
                         return array_values(array_unique($legacyPaths));
                     }
                 } finally {
@@ -378,14 +376,17 @@ class LogDiscoveryService
 
                 // If lock mechanism itself fails (e.g. unsupported driver), fallback to reading legacy keys
                 // directly so we don't break the application.
-                if (!cache()->has(self::CACHE_KEY)) {
-                    $legacyPaths = (array) cache()->get(self::LEGACY_CACHE_KEY, []);
+                if (!cache()->has('ids.custom_log_paths')) {
+                    $legacyPaths = array_merge(
+                        (array) cache()->get('ids_custom_log_paths', []),
+                        (array) cache()->get('ids::custom_log_paths', [])
+                    );
                     return array_values(array_unique($legacyPaths));
                 }
             }
         }
 
-        return cache()->get(self::CACHE_KEY, []);
+        return cache()->get('ids.custom_log_paths', []);
     }
 
     /**
@@ -393,26 +394,30 @@ class LogDiscoveryService
      */
     private function migrateLegacyPaths(): void
     {
-        if (cache()->has(self::CACHE_KEY)) {
+        if (cache()->has('ids.custom_log_paths')) {
             return;
         }
 
         $paths = [];
         $migrated = false;
 
-        if (cache()->has(self::LEGACY_CACHE_KEY)) {
-            $legacyPaths = cache()->get(self::LEGACY_CACHE_KEY);
-            if (is_array($legacyPaths)) {
-                $paths = array_merge($paths, $legacyPaths);
+        foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+            if (cache()->has($legacyKey)) {
+                $legacyPaths = cache()->get($legacyKey);
+                if (is_array($legacyPaths)) {
+                    $paths = array_merge($paths, $legacyPaths);
+                }
+                $migrated = true;
             }
-            $migrated = true;
         }
 
         $paths = array_values(array_unique($paths));
-        cache()->forever(self::CACHE_KEY, $paths);
+        cache()->forever('ids.custom_log_paths', $paths);
 
         if ($migrated) {
-            cache()->forget(self::LEGACY_CACHE_KEY);
+            foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
+                cache()->forget($legacyKey);
+            }
         }
     }
 
