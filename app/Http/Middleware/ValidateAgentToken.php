@@ -6,7 +6,6 @@ use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use App\Exceptions\MissingAgentTokenException;
-use Illuminate\Support\Facades\Log;
 
 class ValidateAgentToken
 {

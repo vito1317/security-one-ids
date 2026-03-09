@@ -22,9 +22,9 @@ class AppServiceProvider extends ServiceProvider
         if (app()->environment('production') && trim((string) config('ids.agent_token', '')) === '') {
             // Only register CLI event listeners if we are running in the console
             if ($this->app->runningInConsole()) {
-                // Log an error universally for background CLI tasks rather than crashing them
+                // Catch queue workers universally and explicitly block them from starting
                 $this->app['events']->listen(\Illuminate\Queue\Events\WorkerStarting::class, function (\Illuminate\Queue\Events\WorkerStarting $event) {
-                    \Illuminate\Support\Facades\Log::error('AGENT_TOKEN is missing in production. This may cause background WAF/IDS jobs to fail.');
+                    throw new \App\Exceptions\MissingAgentTokenException('AGENT_TOKEN is missing in production. Queue worker startup has been blocked.');
                 });
 
                 // Catch custom background IDS commands before they execute and log explicitly
