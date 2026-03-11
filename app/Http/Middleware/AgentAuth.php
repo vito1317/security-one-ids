@@ -15,44 +15,43 @@ class AgentAuth
      */
     public function handle(Request $request, Closure $next): Response
     {
-        $token = $request->bearerToken();
-        if (is_string($token)) {
-            $token = trim($token);
-        }
-
-        if ($token === null || $token === '') {
-            $token = $request->header('X-Agent-Token');
-            if (is_string($token)) {
-                $token = trim($token);
-            }
-        }
-
-        if ($token === null || $token === '') {
-            $token = $request->input('token');
-            if (is_string($token)) {
-                $token = trim($token);
-            }
-        }
+        $token = $this->extractToken($request);
 
         $agentTokenEnv = env('AGENT_TOKEN');
-        // Fallback to config ONLY if the environment variable is strictly null (missing) or explicitly empty string (default fallback for env() without value).
-        // We preserve '0' which is not strictly empty.
+        // Fallback to config if env is strictly null or empty string, preserving '0'.
         $agentToken = (string) ($agentTokenEnv !== null && $agentTokenEnv !== '' ? $agentTokenEnv : (config('ids.agent_token') ?? ''));
 
         if ($agentToken === '') {
             return response()->json(['error' => 'Server misconfiguration: AGENT_TOKEN is not set'], 503);
         }
 
-        if (!is_scalar($token)) {
-            return response()->json(['error' => 'Unauthorized'], 401);
-        }
-
-        $token = (string) $token;
-
-        if ($token === '' || strlen($token) !== strlen($agentToken) || !hash_equals($agentToken, $token)) {
+        if ($token === null || $token === '' || strlen($token) !== strlen($agentToken) || !hash_equals($agentToken, $token)) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
         return $next($request);
+    }
+
+    /**
+     * Safely extract and normalize the token from highest to lowest priority source.
+     */
+    private function extractToken(Request $request): ?string
+    {
+        $sources = [
+            $request->bearerToken(),
+            $request->header('X-Agent-Token'),
+            $request->input('token'),
+        ];
+
+        foreach ($sources as $source) {
+            if (is_scalar($source)) {
+                $normalized = trim((string) $source);
+                if ($normalized !== '') {
+                    return $normalized;
+                }
+            }
+        }
+
+        return null;
     }
 }
