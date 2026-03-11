@@ -417,6 +417,16 @@ class LogDiscoveryService
                         }
                     }
                     self::$migrated = true;
+                } else {
+                    // Read-only fallback: merge and return without writing if we couldn't acquire the lock
+                    $merged = cache()->get($newKey, []);
+                    foreach ($legacyKeys as $legacyKey) {
+                        $legacyData = cache()->get($legacyKey, []);
+                        if (is_array($legacyData)) {
+                            $merged = array_merge($merged, $legacyData);
+                        }
+                    }
+                    return array_values(array_unique($merged));
                 }
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning("Failed to migrate custom paths: " . $e->getMessage());
