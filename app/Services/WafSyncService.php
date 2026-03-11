@@ -1542,7 +1542,7 @@ class WafSyncService
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                $cleanUser = str_replace(["\r", "\n"], '', $user);
+                $cleanUser = (string) preg_replace('/[\r\n]+/', '', $user);
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
                 
                 if ($cleanUser && preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
@@ -1653,19 +1653,30 @@ class WafSyncService
                     $user = trim($user);
                     if (!$user) continue;
                     
-                    $cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
+                    $cleanUser = (string) preg_replace('/[\r\n]+/', '', $user);
 
-                    if (!preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser)) continue;
+                    if (empty($cleanUser) || !preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser)) {
+                        file_put_contents($logFile, "[{$timestamp}] Invalid user skipped: {$cleanUser}\n", FILE_APPEND);
+                        continue;
+                    }
 
                     // Remove DisabledUser from AuthenticationAuthority
-                    $process1 = Process::timeout(60)->run(['sudo', 'dscl', '.', '-delete', '/Users/' . $cleanUser, 'AuthenticationAuthority']);
-                    $returnCode1 = $process1->exitCode();
-                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanUser}: code={$returnCode1}\n", FILE_APPEND);
+                    try {
+                        $process1 = Process::timeout(60)->run(['sudo', 'dscl', '.', '-delete', '/Users/' . $cleanUser, 'AuthenticationAuthority']);
+                        $returnCode1 = $process1->exitCode();
+                        file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanUser}: code={$returnCode1}\n", FILE_APPEND);
+                    } catch (\Exception $e) {
+                        file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanUser} exception: " . $e->getMessage() . "\n", FILE_APPEND);
+                    }
                     
                     // Re-enable with pwpolicy  
-                    $process2 = Process::timeout(60)->run(['sudo', 'pwpolicy', '-u', $cleanUser, 'enableuser']);
-                    $returnCode2 = $process2->exitCode();
-                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
+                    try {
+                        $process2 = Process::timeout(60)->run(['sudo', 'pwpolicy', '-u', $cleanUser, 'enableuser']);
+                        $returnCode2 = $process2->exitCode();
+                        file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
+                    } catch (\Exception $e) {
+                        file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser} exception: " . $e->getMessage() . "\n", FILE_APPEND);
+                    }
                 }
                 
             } else {
