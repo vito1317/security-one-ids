@@ -2,16 +2,22 @@
 
 namespace App\Services\Detection;
 
-<<<<<<< /tmp/merge_ours_sd1j6dh7ssr3bwqHbVB
+<<<<<<< /tmp/merge_ours_62fj46dhm3nm2Jkg45v
 use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use App\Traits\DetectsPlatform;
 =======
+--- Resolution #1 ---
 use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
->>>>>>> /tmp/merge_theirs_gulk7pbbiit10e8kyNV
+
+--- Resolution #2 ---
+    use DetectsPlatform;
+
+--- Resolution #3 ---
+>>>>>>> /tmp/merge_theirs_mbe7i54scce1esG7nLs
 
 /**
  * Snort 3 IPS Detection Engine
@@ -21,12 +27,16 @@ use Illuminate\Support\Facades\Process;
  */
 class SnortEngine
 {
-<<<<<<< /tmp/merge_ours_sd1j6dh7ssr3bwqHbVB
+<<<<<<< /tmp/merge_ours_62fj46dhm3nm2Jkg45v
     use DetectsPlatform;
 
 =======
-use DetectsPlatform;
->>>>>>> /tmp/merge_theirs_gulk7pbbiit10e8kyNV
+<<<<<<< HEAD
+=======
+    use DetectsPlatform;
+
+>>>>>>> origin/main
+>>>>>>> /tmp/merge_theirs_mbe7i54scce1esG7nLs
     private string $snortPath;
     private string $configPath;
     private string $alertLogPath;
@@ -1750,13 +1760,17 @@ LUA;
         return null;
     }
 
-<<<<<<< /tmp/merge_ours_sd1j6dh7ssr3bwqHbVB
+<<<<<<< /tmp/merge_ours_62fj46dhm3nm2Jkg45v
 =======
-private function isWindows(): bool
+<<<<<<< HEAD
+    private function isWindows(): bool
     {
         return PHP_OS_FAMILY === 'Windows';
     }
->>>>>>> /tmp/merge_theirs_gulk7pbbiit10e8kyNV
+
+=======
+>>>>>>> origin/main
+>>>>>>> /tmp/merge_theirs_mbe7i54scce1esG7nLs
     /**
      * Fix log directory permissions so non-root PHP agent can read alert files.
      * Snort runs as root (needed for pcap), creating root-owned files.
