@@ -1544,10 +1544,10 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
-                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
-                    $process = Process::run(['sudo', 'dscl', '.', '-create', "/Users/{$consoleUser}", 'AuthenticationAuthority', ';DisabledUser;']);
+                    $process = Process::run(['sudo', 'dscl', '.', '-create', '/Users/' . $consoleUser, 'AuthenticationAuthority', ';DisabledUser;']);
                     $returnCode = $process->exitCode();
                     $outputStr = trim($process->output() . "\n" . $process->errorOutput());
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output={$outputStr}\n", FILE_APPEND);
@@ -1561,7 +1561,7 @@ class WafSyncService
                     
                     if ($returnCode !== 0) {
                         // Method 3: Set an impossible password hash
-                        $process = Process::run(['sudo', 'dscl', '.', '-passwd', "/Users/{$consoleUser}", '*']);
+                        $process = Process::run(['sudo', 'dscl', '.', '-passwd', '/Users/' . $consoleUser, '*']);
                         $returnCode = $process->exitCode();
                         file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
                     }
@@ -1622,10 +1622,10 @@ class WafSyncService
                 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user) continue;
+                    if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
                     
                     // Remove DisabledUser from AuthenticationAuthority
-                    $process = Process::run(['sudo', 'dscl', '.', '-delete', "/Users/{$user}", 'AuthenticationAuthority']);
+                    $process = Process::run(['sudo', 'dscl', '.', '-delete', '/Users/' . $user, 'AuthenticationAuthority']);
                     $returnCode = $process->exitCode();
                     file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$user}: code={$returnCode}\n", FILE_APPEND);
                     
