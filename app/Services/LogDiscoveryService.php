@@ -450,6 +450,14 @@ class LogDiscoveryService
                 } finally {
                     $lock->release();
                 }
+            } else {
+                $legacyPaths = cache()->get('ids_custom_log_paths', []);
+                $legacyPaths = is_array($legacyPaths) ? $legacyPaths : [];
+
+                $currentPaths = cache()->get('ids.custom_log_paths', []);
+                $currentPaths = is_array($currentPaths) ? $currentPaths : [];
+
+                return array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
             }
         }
 

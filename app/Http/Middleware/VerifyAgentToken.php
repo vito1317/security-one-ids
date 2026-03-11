@@ -27,14 +27,16 @@ class VerifyAgentToken
 
         $token = (string) $token;
         $configured = $agentToken !== '';
+
         $expectedSeed = $configured ? $agentToken : str_repeat("\0", 32);
+        $tokenForHash = $token !== '' ? $token : str_repeat("\0", 32);
+
+        $expectedHash = hash('sha256', $expectedSeed, true);
+        $actualHash = hash('sha256', $tokenForHash, true);
 
         $isValid = $configured
             && $token !== ''
-            && hash_equals(
-                hash('sha256', $expectedSeed, true),
-                hash('sha256', $token, true)
-            );
+            && hash_equals($expectedHash, $actualHash);
 
         if (!$isValid) {
             return response()->json(['error' => 'Unauthorized'], 401);

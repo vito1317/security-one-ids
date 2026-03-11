@@ -22,23 +22,39 @@ class AppServiceProviderTest extends TestCase
     }
 
 
-    public function test_it_throws_exception_in_production_without_token_on_unsafe_command()
+    public function test_production_without_agent_token_blocks_all_critical_background_commands(): void
     {
-        // Mock application running in console true
-        $app = \Mockery::mock($this->app)->makePartial();
-        $app->shouldReceive('runningInConsole')->andReturn(true);
-        $app->shouldReceive('isDownForMaintenance')->andReturn(false);
-        $app->shouldReceive('runningConsoleCommand')->with('queue:work')->andReturn(true);
+        $commands = [
+            'queue:work',
+            'schedule:run',
+            'schedule:work',
+            'waf:heartbeat',
+            'waf:sync',
+            'desktop:scan',
+        ];
 
-        Config::set('ids.agent_token', '');
-        $app['env'] = 'production';
+        foreach ($commands as $command) {
+            $app = \Mockery::mock($this->app)->makePartial();
+            $app->shouldReceive('runningInConsole')->andReturn(true);
+            $app->shouldReceive('isDownForMaintenance')->andReturn(false);
 
-        $provider = new AppServiceProvider($app);
+            // Return true ONLY for the current command being tested, false otherwise
+            $app->shouldReceive('runningConsoleCommand')->andReturnUsing(function ($cmd) use ($command) {
+                return $cmd === $command;
+            });
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('AGENT_TOKEN must be set in production environment for background processes.');
+            Config::set('ids.agent_token', '');
+            $app['env'] = 'production';
 
-        $provider->boot();
+            $provider = new AppServiceProvider($app);
+
+            try {
+                $provider->boot();
+                $this->fail("Expected RuntimeException was not thrown for command: {$command}");
+            } catch (\RuntimeException $e) {
+                $this->assertEquals('AGENT_TOKEN must be set in production environment for background processes.', $e->getMessage());
+            }
+        }
     }
 
     public function test_it_does_nothing_if_running_safe_command()
