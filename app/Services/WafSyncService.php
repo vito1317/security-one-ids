@@ -46,6 +46,14 @@ class WafSyncService
     }
 
     /**
+     * Sanitize input for safe logging by removing newlines and carriage returns
+     */
+    protected function sanitizeForLog(string $input): string
+    {
+        return preg_replace('/[\r\n]+/', ' ', $input) ?? $input;
+    }
+
+    /**
      * Get HTTP client with SSL configuration for Windows
      */
     protected function getHttpClient(int $timeout = 30): \Illuminate\Http\Client\PendingRequest
@@ -1195,13 +1203,13 @@ class WafSyncService
                 // Create task
                 $createCommand = "schtasks /create /tn \"{$taskName}\" /tr \"shutdown /r /t 5 /f /c \\\"Security One IDS: Remote Reboot\\\"\" /sc once /st {$rebootTime} /sd {$rebootDate} /f /ru SYSTEM";
                 exec($createCommand . ' 2>&1', $output, $returnCode);
-                file_put_contents($logFile, "[{$timestamp}] schtasks create result: code={$returnCode}, output=" . implode(' ', $output) . "\n", FILE_APPEND);
+                file_put_contents($logFile, "[{$timestamp}] schtasks create result: code={$returnCode}, output=" . $this->sanitizeForLog(implode(' ', $output)) . "\n", FILE_APPEND);
                 
                 if ($returnCode === 0) {
                     // Run the task immediately
                     $output = [];
                     exec("schtasks /run /tn \"{$taskName}\" 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] schtasks run result: code={$returnCode}, output=" . implode(' ', $output) . "\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] schtasks run result: code={$returnCode}, output=" . $this->sanitizeForLog(implode(' ', $output)) . "\n", FILE_APPEND);
                 }
                 
                 // Fallback: try direct shutdown if schtasks failed
@@ -1209,7 +1217,7 @@ class WafSyncService
                     file_put_contents($logFile, "[{$timestamp}] schtasks failed, trying direct shutdown...\n", FILE_APPEND);
                     $output = [];
                     exec('C:\\Windows\\System32\\shutdown.exe /r /t 10 /f 2>&1', $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] Direct shutdown result: code={$returnCode}, output=" . implode(' ', $output) . "\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] Direct shutdown result: code={$returnCode}, output=" . $this->sanitizeForLog(implode(' ', $output)) . "\n", FILE_APPEND);
                 }
                 
                 // Last resort: PowerShell
@@ -1232,7 +1240,7 @@ class WafSyncService
                 
                 // Method 1: Try shutdown with sudo (launchd runs as root)
                 exec('sudo /sbin/shutdown -r now 2>&1', $output, $returnCode);
-                file_put_contents($logFile, "[{$timestamp}] shutdown result: code={$returnCode}, output=" . implode(' ', $output) . "\n", FILE_APPEND);
+                file_put_contents($logFile, "[{$timestamp}] shutdown result: code={$returnCode}, output=" . $this->sanitizeForLog(implode(' ', $output)) . "\n", FILE_APPEND);
                 
                 if ($returnCode !== 0) {
                     // Method 2: Try without sudo (if running as root)
@@ -1303,7 +1311,7 @@ class WafSyncService
                 
                 // Method 1: Try query user (Windows Pro/Enterprise with RDS)
                 exec('query user 2>&1', $userOutput, $rc);
-                file_put_contents($logFile, "[{$timestamp}] query user output: " . implode(" ", $userOutput) . "\n", FILE_APPEND);
+                file_put_contents($logFile, "[{$timestamp}] query user output: " . $this->sanitizeForLog(implode(" ", $userOutput)) . "\n", FILE_APPEND);
                 
                 foreach ($userOutput as $line) {
                     if (preg_match('/^>?(\S+)\s+\S+\s+\d+\s+Active/i', trim($line), $matches)) {
@@ -1316,7 +1324,7 @@ class WafSyncService
                 if (!$username) {
                     $userOutput = [];
                     exec('wmic computersystem get username 2>&1', $userOutput, $rc);
-                    file_put_contents($logFile, "[{$timestamp}] wmic username output: " . implode(" ", $userOutput) . "\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] wmic username output: " . $this->sanitizeForLog(implode(" ", $userOutput)) . "\n", FILE_APPEND);
                     foreach ($userOutput as $line) {
                         $line = trim($line);
                         // Format: DOMAIN\username or just username
@@ -1336,7 +1344,7 @@ class WafSyncService
                 if (!$username) {
                     $userOutput = [];
                     exec('tasklist /FI "IMAGENAME eq explorer.exe" /FO CSV /NH 2>&1', $userOutput, $rc);
-                    file_put_contents($logFile, "[{$timestamp}] tasklist output: " . implode(" ", $userOutput) . "\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] tasklist output: " . $this->sanitizeForLog(implode(" ", $userOutput)) . "\n", FILE_APPEND);
                     // If explorer.exe is running, someone is logged in
                     if (!empty($userOutput) && strpos($userOutput[0], 'explorer.exe') !== false) {
                         // Get username from environment
@@ -1356,7 +1364,7 @@ class WafSyncService
                     // Create task that runs as INTERACTIVE user (the one currently logged in)
                     $createCmd = 'schtasks /Create /TN "SecurityOneLock" /TR "wscript.exe \"' . $lockScript . '\"" /SC ONCE /ST 00:00 /F /RU "' . $username . '" /IT';
                     exec($createCmd . ' 2>&1', $output, $rc1);
-                    file_put_contents($logFile, "[{$timestamp}] schtasks create for user '{$username}': code={$rc1}, output=" . implode(" ", array_slice($output, -3)) . "\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] schtasks create for user '{$username}': code={$rc1}, output=" . $this->sanitizeForLog(implode(" ", array_slice($output, -3))) . "\n", FILE_APPEND);
                     
                     if ($rc1 === 0) {
                         // Run the task
@@ -1542,24 +1550,28 @@ class WafSyncService
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
+                // Sanitize consoleUser for log injection prevention by removing newlines
+                $cleanLogConsoleUser = $this->sanitizeForLog($consoleUser);
+                file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanLogConsoleUser}\n", FILE_APPEND);
                 
                 if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                    $escapedConsoleUser = escapeshellarg($consoleUser);
+
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
-                    exec("sudo dscl . -create /Users/{$consoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+                    exec("sudo dscl . -create /Users/{$escapedConsoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanLogConsoleUser}: code={$returnCode}, output=" . $this->sanitizeForLog(implode(" ", $output)) . "\n", FILE_APPEND);
                     
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
-                        exec("sudo pwpolicy -u {$consoleUser} disableuser 2>&1", $output, $returnCode);
+                        exec("sudo pwpolicy -u {$escapedConsoleUser} disableuser 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
                     }
                     
                     if ($returnCode !== 0) {
                         // Method 3: Set an impossible password hash
-                        exec("sudo dscl . -passwd /Users/{$consoleUser} '*' 2>&1", $output, $returnCode);
+                        exec("sudo dscl . -passwd /Users/{$escapedConsoleUser} '*' 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
                     }
                 } else {
@@ -1621,13 +1633,16 @@ class WafSyncService
                     $user = trim($user);
                     if (!$user) continue;
                     
+                    $escapedUser = escapeshellarg($user);
+                    $cleanLogUser = $this->sanitizeForLog($user);
+
                     // Remove DisabledUser from AuthenticationAuthority
-                    exec("sudo dscl . -delete /Users/{$user} AuthenticationAuthority 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$user}: code={$returnCode}\n", FILE_APPEND);
+                    exec("sudo dscl . -delete /Users/{$escapedUser} AuthenticationAuthority 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanLogUser}: code={$returnCode}\n", FILE_APPEND);
                     
                     // Re-enable with pwpolicy  
-                    exec("sudo pwpolicy -u {$user} enableuser 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$user}: code={$returnCode}\n", FILE_APPEND);
+                    exec("sudo pwpolicy -u {$escapedUser} enableuser 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanLogUser}: code={$returnCode}\n", FILE_APPEND);
                 }
                 
             } else {
