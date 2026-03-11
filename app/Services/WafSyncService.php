@@ -1544,14 +1544,15 @@ class WafSyncService
                 $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 
                 $cleanUser = trim($user);
-                $logSafeUser = addslashes(str_replace(["\n", "\r"], '', $cleanUser));
-                $logSafeRawUser = addslashes(str_replace(["\n", "\r"], '', $user));
+                $logSafeUser = str_replace(["\n", "\r"], '', $cleanUser);
+                $logSafeRawUser = str_replace(["\n", "\r"], '', $user);
                 file_put_contents($logFile, "[{$timestamp}] Raw console user: {$logSafeRawUser}, Sanitized: {$logSafeUser}\n", FILE_APPEND);
 
                 if ($cleanUser && preg_match('/^[a-zA-Z0-9_][a-zA-Z0-9._-]*$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $method1Success = false;
+                    $returnCode1 = null;
                     try {
                         $process1 = Process::timeout(60)->run(['sudo', 'dscl', '.', '-create', '/Users/' . $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
                         $method1Success = $process1->successful();
@@ -1559,7 +1560,6 @@ class WafSyncService
                         $outputStr = trim($process1->output() . ' ' . $process1->errorOutput());
                         file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$returnCode1}, output={$outputStr}\n", FILE_APPEND);
                     } catch (\Exception $e) {
-                        $method1Success = false;
                         $returnCode1 = 1;
                         file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} exception: " . $e->getMessage() . "\n", FILE_APPEND);
                     }
@@ -1567,13 +1567,13 @@ class WafSyncService
                     if (!$method1Success) {
                         // Method 2: Lock the user's password (they won't be able to login)
                         $method2Success = false;
+                        $returnCode2 = null;
                         try {
                             $process2 = Process::timeout(60)->run(['sudo', 'pwpolicy', '-u', $cleanUser, 'disableuser']);
                             $method2Success = $process2->successful();
                             $returnCode2 = $process2->exitCode();
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
                         } catch (\Exception $e) {
-                            $method2Success = false;
                             $returnCode2 = 1;
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser} exception: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
@@ -1581,13 +1581,13 @@ class WafSyncService
                         if (!$method2Success) {
                             // Method 3: Set password expiration to immediate past
                             $method3Success = false;
+                            $returnCode3 = null;
                             try {
                                 $process3 = Process::timeout(60)->run(['sudo', 'chpass', '-e', '0', $cleanUser]);
                                 $method3Success = $process3->successful();
                                 $returnCode3 = $process3->exitCode();
                                 file_put_contents($logFile, "[{$timestamp}] chpass set expire immediately: code={$returnCode3}\n", FILE_APPEND);
                             } catch (\Exception $e) {
-                                $method3Success = false;
                                 $returnCode3 = 1;
                                 file_put_contents($logFile, "[{$timestamp}] chpass set expire immediately exception: " . $e->getMessage() . "\n", FILE_APPEND);
                             }
@@ -1656,11 +1656,12 @@ class WafSyncService
                     $user = trim($user);
                     if (!$user) continue;
                     
-                    $cleanUser = trim($user);
+                    $cleanUser = $user;
 
-                    if (empty($cleanUser) || !preg_match('/^[a-zA-Z0-9_][a-zA-Z0-9._-]*$/', $cleanUser)) {
-                        Log::error('Invalid user for enable login: ' . $cleanUser);
-                        file_put_contents($logFile, "[{$timestamp}] Invalid user for enable login: {$cleanUser}\n", FILE_APPEND);
+                    if (!preg_match('/^[a-zA-Z0-9_][a-zA-Z0-9._-]*$/', $cleanUser)) {
+                        $safeInvalidUser = str_replace(["\n", "\r"], '', $cleanUser);
+                        Log::error('Invalid user for enable login: ' . $safeInvalidUser);
+                        file_put_contents($logFile, "[{$timestamp}] Invalid user for enable login: {$safeInvalidUser}\n", FILE_APPEND);
                         continue;
                     }
 
