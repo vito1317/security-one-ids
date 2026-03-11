@@ -1546,7 +1546,7 @@ class WafSyncService
                 $cleanUser = preg_replace('/[^a-zA-Z0-9._-]/', '', $user);
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
                 
-                if (!empty($cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
+                if (!empty($cleanUser) && preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser) && $cleanUser[0] !== '-' && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
                     $returnCode1 = 0;
                     $returnCode2 = 0;
 
@@ -1588,7 +1588,7 @@ class WafSyncService
                             file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode3}\n", FILE_APPEND);
                         } catch (\Exception $e) {
                             $returnCode3 = 1;
-                            file_put_contents($logFile, "[{$timestamp}] dscl set impossible password error: " . $e->getMessage() . "\n", FILE_APPEND);
+                            file_put_contents($logFile, "[{$timestamp}] dscl set impossible password error for {$cleanUser}: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
                     }
                 } else {
@@ -1652,7 +1652,7 @@ class WafSyncService
                     
                     $cleanUser = (string) preg_replace('/[^a-zA-Z0-9._-]/', '', $user);
 
-                    if (empty($cleanUser)) continue;
+                    if (empty($cleanUser) || !preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser) || $cleanUser[0] === '-') continue;
 
                     // Remove DisabledUser from AuthenticationAuthority
                     try {
