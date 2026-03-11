@@ -1542,8 +1542,8 @@ class WafSyncService
             } elseif (PHP_OS_FAMILY === 'Darwin') {
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
-                $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                $cleanUser = preg_replace('/[\r\n]+/', ' ', $user);
+                $rawUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
+                $cleanUser = preg_replace('/[\r\n]+/', ' ', $rawUser);
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
                 
                 if ($cleanUser && preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
@@ -1730,7 +1730,9 @@ class WafSyncService
                 }
 
                 if (!empty($failedUsers)) {
-                    Log::error("Critical failure: Could not enable the following users: " . implode(', ', $failedUsers));
+                    $failedUsersList = implode(', ', $failedUsers);
+                    Log::error("Critical failure: Could not enable the following users: " . $failedUsersList);
+                    throw new \Exception("Partial enable failure. Could not enable users: " . $failedUsersList);
                 }
                 
             } else {
