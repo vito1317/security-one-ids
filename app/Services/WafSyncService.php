@@ -1544,25 +1544,27 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
-                $cleanUser = preg_replace('/[^a-zA-Z0-9._-]/', '', $consoleUser);
-
-                if ($cleanUser && $cleanUser !== 'root' && $cleanUser !== '_mbsetupuser') {
+                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                    if (!preg_match('/^[a-zA-Z0-9._][a-zA-Z0-9._\s-]*$/', $consoleUser)) {
+                        file_put_contents($logFile, "[{$timestamp}] Error: Invalid console username format detected: " . substr(preg_replace('/[^a-zA-Z0-9\s.,_-]/', '', $consoleUser), 0, 50) . "\n", FILE_APPEND);
+                        return;
+                    }
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
                     $returnCode1 = -1;
-                    exec("sudo -n dscl . -create /Users/" . escapeshellarg($cleanUser) . " AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode1);
+                    exec("sudo -n dscl . -create /Users/" . escapeshellarg($consoleUser) . " AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode1);
 
                     if ($returnCode1 === 0) {
-                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$returnCode1}\n", FILE_APPEND);
+                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode1}\n", FILE_APPEND);
                     } else {
                         $sanitizedOutput = substr(preg_replace('/[^a-zA-Z0-9\s.,_-]/', '', implode(' ', $output)), 0, 255);
-                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} error: {$sanitizedOutput}\n", FILE_APPEND);
+                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser} error: {$sanitizedOutput}\n", FILE_APPEND);
 
                         // Method 2: Lock the user's password (they won't be able to login)
                         $output = [];
                         $returnCode2 = -1;
-                        exec("sudo -n pwpolicy -u " . escapeshellarg($cleanUser) . " disableuser 2>&1", $output, $returnCode2);
+                        exec("sudo -n pwpolicy -u " . escapeshellarg($consoleUser) . " disableuser 2>&1", $output, $returnCode2);
 
                         if ($returnCode2 === 0) {
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode2}\n", FILE_APPEND);
@@ -1573,13 +1575,13 @@ class WafSyncService
                             // Method 3: Set an impossible password hash
                             $output = [];
                             $returnCode3 = -1;
-                            exec("sudo -n dscl . -passwd /Users/" . escapeshellarg($cleanUser) . " '*' 2>&1", $output, $returnCode3);
+                            exec("sudo -n dscl . -passwd /Users/" . escapeshellarg($consoleUser) . " '*' 2>&1", $output, $returnCode3);
                             file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode3}\n", FILE_APPEND);
 
                             if ($returnCode3 !== 0) {
                                 $sanitizedOutput3 = substr(preg_replace('/[^a-zA-Z0-9\s.,_-]/', '', implode(' ', $output)), 0, 255);
                                 file_put_contents($logFile, "[{$timestamp}] Error: All methods failed to disable user. Final error: {$sanitizedOutput3}\n", FILE_APPEND);
-                                Log::error("Failed to disable user {$cleanUser}: sudo access denied or password required for all methods");
+                                Log::error("Failed to disable user {$consoleUser}: sudo access denied or password required for all methods");
                                 return;
                             }
                         }
