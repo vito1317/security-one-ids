@@ -337,54 +337,59 @@ class LogDiscoveryService
 
 $realPath = realpath($path);
 
-        if ($realPath === false || !is_file($realPath) || !is_readable($realPath)) {
-            return false;
-        }
-
-        if (!$this->isAllowedPath($realPath)) {
-            return false;
-        }
-
-        $lock = cache()->lock('ids.custom_log_paths_lock', 5);
-
-        // Try to acquire lock with blocking to avoid silent transient failures
-        try {
-            $lock->block(5);
-            $lockAcquired = true;
-        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-            Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
-            return false;
-        }
-
-        try {
-            // Re-read config inside lock to prevent race conditions
-            $configPaths = config('ids.custom_log_paths', []);
-            if (in_array($path, $configPaths, true) || in_array($realPath, $configPaths, true)) {
-                return true;
+            if ($realPath === false || !is_file($realPath) || !is_readable($realPath)) {
+                return false;
             }
 
-            $cachedPaths = cache()->get('ids.custom_log_paths', []);
-            $cachedPaths = is_array($cachedPaths) ? $cachedPaths : [];
+            if (!$this->isAllowedPath($realPath)) {
+                return false;
+            }
 
-            // Execute legacy migration in-line to prevent locking issues
-            if (cache()->has('ids_custom_log_paths')) {
-                $legacyPaths = cache()->get('ids_custom_log_paths', []);
-                if (is_array($legacyPaths) && !empty($legacyPaths)) {
-                    $cachedPaths = array_values(array_unique(array_merge($cachedPaths, $legacyPaths)));
+            $lock = cache()->lock('ids.custom_log_paths_lock', 5);
+
+            // Try to acquire lock with blocking to avoid silent transient failures
+            try {
+                $lock->block(5);
+                $lockAcquired = true;
+            } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+                Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
+                return false;
+            }
+
+            try {
+                // Re-read config inside lock to prevent race conditions
+                $configPaths = config('ids.custom_log_paths', []);
+                if (in_array($path, $configPaths, true) || in_array($realPath, $configPaths, true)) {
+                    return true;
                 }
-                cache()->forget('ids_custom_log_paths');
+
+                $cachedPaths = cache()->get('ids.custom_log_paths', []);
+                $cachedPaths = is_array($cachedPaths) ? $cachedPaths : [];
+
+                // Execute legacy migration in-line to prevent locking issues
+                if (cache()->has('ids_custom_log_paths')) {
+                    $legacyPaths = cache()->get('ids_custom_log_paths', []);
+                    if (is_array($legacyPaths) && !empty($legacyPaths)) {
+                        $cachedPaths = array_values(array_unique(array_merge($cachedPaths, $legacyPaths)));
+                    }
+                    cache()->forget('ids_custom_log_paths');
+                }
+
+                // If it's already in the cache, we're good.
+                if (in_array($path, $cachedPaths, true) || in_array($realPath, $cachedPaths, true)) {
+                    return true;
+                }
+
+                $cachedPaths[] = $realPath;
+                // Store in cache for persistence
+                cache()->forever('ids.custom_log_paths', $cachedPaths);
+            } finally {
+                if ($lockAcquired) {
+                    $lock->release();
+                }
             }
 
-            // If it's already in the cache, we're good.
-            if (in_array($path, $cachedPaths, true) || in_array($realPath, $cachedPaths, true)) {
-                return true;
-            }
-
-            $cachedPaths[] = $realPath;
-            // Store in cache for persistence
-            cache()->forever('ids.custom_log_paths', $cachedPaths);
-        } finally {
-            if ($lockAcquired) {
+            return true;
                 $lock->release();
             }
         }
@@ -453,7 +458,9 @@ $realPath = realpath($path);
                         cache()->forget('ids_custom_log_paths');
                     }
                 } finally {
-                    $lock->release();
+                    if ($lock->isOwnedByCurrentProcess()) {
+                        $lock->release();
+                    }
                 }
             }
         }
