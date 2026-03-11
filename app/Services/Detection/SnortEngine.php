@@ -5,6 +5,7 @@ namespace App\Services\Detection;
 use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use App\Traits\DetectsPlatform;
 
 /**
  * Snort 3 IPS Detection Engine
@@ -14,13 +15,13 @@ use Illuminate\Support\Facades\Process;
  */
 class SnortEngine
 {
+    use DetectsPlatform;
+
     private string $snortPath;
     private string $configPath;
     private string $alertLogPath;
     private string $pidFile;
     private string $logDir;
-
-    use DetectsPlatform;
 
     public function __construct()
     {
