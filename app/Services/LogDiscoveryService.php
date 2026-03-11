@@ -368,15 +368,18 @@ class LogDiscoveryService
         foreach (['ids_custom_log_paths', 'ids::custom_log_paths'] as $legacyKey) {
             if (cache()->has($legacyKey)) {
                 try {
-                    $lock = cache()->lock('migrate_' . $legacyKey, 10);
+                    $lock = cache()->lock('ids.custom_log_paths:add', 10);
 
                     try {
                         if ($lock->get()) {
                             // Double-check inside the lock
                             if (cache()->has($legacyKey)) {
+                                $currentPaths = cache()->get('ids.custom_log_paths', []);
                                 $legacyPaths = cache()->get($legacyKey, []);
                                 if (is_array($legacyPaths)) {
-                                    $paths = array_values(array_unique(array_merge($paths, $legacyPaths)));
+                                    $paths = array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
+                                } else {
+                                    $paths = $currentPaths;
                                 }
                                 cache()->forever('ids.custom_log_paths', $paths);
                                 cache()->forget($legacyKey);
@@ -392,9 +395,12 @@ class LogDiscoveryService
                     Log::warning("Cache lock error during migration of key: {$legacyKey}", ['exception' => $e->getMessage()]);
                     // Fallback to best-effort migration if locks are not supported
                     if (cache()->has($legacyKey)) {
+                        $currentPaths = cache()->get('ids.custom_log_paths', []);
                         $legacyPaths = cache()->get($legacyKey, []);
                         if (is_array($legacyPaths)) {
-                            $paths = array_values(array_unique(array_merge($paths, $legacyPaths)));
+                            $paths = array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
+                        } else {
+                            $paths = $currentPaths;
                         }
                         cache()->forever('ids.custom_log_paths', $paths);
                         cache()->forget($legacyKey);

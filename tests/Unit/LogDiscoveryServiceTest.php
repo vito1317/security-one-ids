@@ -15,6 +15,8 @@ class LogDiscoveryServiceTest extends TestCase
         // Configure array cache driver to isolate test state and prevent side effects
         config(['cache.default' => 'array']);
         cache()->forget('ids.custom_log_paths');
+        cache()->forget('ids_custom_log_paths');
+        cache()->forget('ids::custom_log_paths');
         $this->app['config']->set('ids.custom_log_paths', []);
 
         $this->service = new LogDiscoveryService();
