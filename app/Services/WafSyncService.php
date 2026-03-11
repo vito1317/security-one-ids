@@ -1542,9 +1542,10 @@ class WafSyncService
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
+                $consoleUser = preg_replace('/[\r\n]+/', ' ', $consoleUser);
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
-                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser' && preg_match('/^[a-zA-Z0-9_-]+$/', $consoleUser)) {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
