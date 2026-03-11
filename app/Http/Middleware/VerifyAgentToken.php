@@ -9,7 +9,7 @@ class VerifyAgentToken
 {
     public function handle(Request $request, Closure $next)
     {
-        $token = $request->input('token') ?? $request->header('X-Agent-Token') ?? $request->bearerToken();
+        $token = $request->header('X-Agent-Token') ?? $request->bearerToken() ?? $request->input('token');
         $agentToken = (string) config('ids.agent_token', env('AGENT_TOKEN'));
 
         // To prevent information leakage (e.g., revealing via different response times

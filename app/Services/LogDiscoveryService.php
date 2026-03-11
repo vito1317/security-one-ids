@@ -312,10 +312,11 @@ class LogDiscoveryService
         $lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
         $acquired = false;
         $delayMicroseconds = 10000;
+        $startTime = microtime(true);
 
         try {
-            for ($i = 0; $i < 10; $i++) {
-                if ($acquired = $lock->get()) {
+            while (!($acquired = $lock->get())) {
+                if ((microtime(true) - $startTime) >= self::LOCK_TIMEOUT) {
                     break;
                 }
                 usleep($delayMicroseconds);
