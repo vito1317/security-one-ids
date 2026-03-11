@@ -1571,7 +1571,6 @@ class WafSyncService
                         $outputStr = trim($process1->getOutput() . ' ' . $process1->getErrorOutput());
                         file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$dsclDisableResult}, output={$outputStr}\n", FILE_APPEND);
                     } catch (\Exception $e) {
-                        $dsclDisableExecuted = true;
                         file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                     }
                     
@@ -1586,24 +1585,25 @@ class WafSyncService
                             $pwpolicyDisableResult = $process2->getExitCode() ?? 1;
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser}: code={$pwpolicyDisableResult}\n", FILE_APPEND);
                         } catch (\Exception $e) {
-                            $pwpolicyDisableExecuted = true;
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
 
                         $method2Failed = (!$pwpolicyDisableExecuted || $pwpolicyDisableResult !== 0);
                         if ($method2Failed) {
                             // Method 3: Set an impossible password hash
+                            $dsclPasswdExecuted = false;
                             try {
                                 $process3 = new SymfonyProcess(['sudo', 'dscl', '.', '-passwd', '/Users/' . $cleanUser, '*']);
                                 $process3->setTimeout(60);
                                 $process3->run();
+                                $dsclPasswdExecuted = true;
                                 $dsclPasswdResult = $process3->getExitCode() ?? 1;
                                 file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$dsclPasswdResult}\n", FILE_APPEND);
                             } catch (\Exception $e) {
                                 file_put_contents($logFile, "[{$timestamp}] dscl set impossible password error: " . $e->getMessage() . "\n", FILE_APPEND);
                             }
 
-                            if ($dsclPasswdResult !== 0) {
+                            if (!$dsclPasswdExecuted || $dsclPasswdResult !== 0) {
                                 Log::error("Critical failure: All 3 methods failed to disable user {$cleanUser}");
                                 file_put_contents($logFile, "[{$timestamp}] Critical failure: All 3 methods failed to disable user {$cleanUser}\n", FILE_APPEND);
                                 throw new \RuntimeException("Failed to disable macOS user {$cleanUser} via all available methods.");
