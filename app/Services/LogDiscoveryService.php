@@ -334,13 +334,13 @@ class LogDiscoveryService
 
             return false;
         } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-            // Lock acquisition timed out, re-verify the cache state
-            $cachedPaths = $this->getPathsWithoutLock();
-            if (in_array($path, $cachedPaths, true)) {
-                return true;
+            // Lock acquisition timed out, pure read to re-verify the cache state
+            $cachedPaths = cache()->get(self::CACHE_KEY);
+            if ($cachedPaths === null) {
+                $cachedPaths = cache()->get(self::LEGACY_CACHE_KEY, []);
             }
 
-            return false;
+            return in_array($path, $cachedPaths, true);
         } finally {
             optional($lock)->release();
         }
