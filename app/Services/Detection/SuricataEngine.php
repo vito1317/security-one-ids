@@ -2,9 +2,22 @@
 
 namespace App\Services\Detection;
 
+<<<<<<< /tmp/merge_ours_irghuv36i2qf7wnphgL
 use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use App\Traits\DetectsPlatform;
+=======
+--- Resolution #1 ---
+use App\Traits\DetectsPlatform;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Process;
+
+--- Resolution #2 ---
+    use DetectsPlatform;
+
+--- Resolution #3 ---
+>>>>>>> /tmp/merge_theirs_dudv7p4bkpd5dUXqabr
 
 /**
  * Suricata IDS/IPS Detection Engine
@@ -15,11 +28,16 @@ use Illuminate\Support\Facades\Process;
  */
 class SuricataEngine
 {
+<<<<<<< /tmp/merge_ours_irghuv36i2qf7wnphgL
+    use DetectsPlatform;
+
+=======
 <<<<<<< HEAD
 =======
     use DetectsPlatform;
 
 >>>>>>> origin/main
+>>>>>>> /tmp/merge_theirs_dudv7p4bkpd5dUXqabr
     private string $suricataPath;
     private string $configPath;
     private string $alertLogPath;
@@ -1036,7 +1054,17 @@ YAML;
         };
     }
 
+<<<<<<< /tmp/merge_ours_irghuv36i2qf7wnphgL
+=======
+<<<<<<< HEAD
+    private function isWindows(): bool
+    {
+        return PHP_OS_FAMILY === 'Windows';
+    }
+
+=======
 >>>>>>> origin/main
+>>>>>>> /tmp/merge_theirs_dudv7p4bkpd5dUXqabr
     private function detectLinuxDistro(): string
     {
         if (!file_exists('/etc/os-release')) {
