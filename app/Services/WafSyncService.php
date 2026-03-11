@@ -1536,6 +1536,7 @@ class WafSyncService
             } elseif (PHP_OS_FAMILY === 'Darwin') {
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
+--- Resolution #1 ---
                 $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
 
                 $excludedUsers = ['root', 'daemon', 'nobody', '_mbsetupuser'];
@@ -1589,6 +1590,13 @@ class WafSyncService
                                 file_put_contents($logFile, "[{$timestamp}] all disable methods failed for user {$cleanUser}\n", FILE_APPEND);
                             }
                         }
+                    }
+                }
+
+--- Resolution #2 ---
+                    if (!$user) continue;
+
+                    $cleanUser = (string) preg_replace('/[\r\n]+/', '', $user);
                     }
 
                 } else {
@@ -1648,12 +1656,7 @@ class WafSyncService
 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user) continue;
-
-                    $cleanUser = (string) preg_replace('/[\r\n]+/', '', $user);
-
-
-                    if (!preg_match('/^[a-zA-Z0-9._][a-zA-Z0-9._-]*$/', $cleanUser)) continue;
+if (!preg_match('/^[a-zA-Z0-9._][a-zA-Z0-9._-]*$/', $cleanUser)) continue;
 
                     try {
                         // Remove DisabledUser from AuthenticationAuthority
@@ -1675,6 +1678,11 @@ class WafSyncService
                         Log::warning("WAF Sync: Exception re-enabling macOS user {$cleanUser}");
                     }
 
+--- Resolution #3 ---
+
+--- Resolution #4 ---
+
+--- Resolution #5 ---
                 }
 
             } else {
@@ -2925,7 +2933,10 @@ class WafSyncService
      * @throws \App\Exceptions\CertificateBundleMissingException
      */
     protected function getCaCertPath(): string
+<<<<<<< /tmp/merge_ours_m7npql331mhjcqaB4a7
+=======
 
+>>>>>>> /tmp/merge_theirs_s03f557299qt9mA5rAo
     {
         // Check common locations for cacert.pem on Windows
         $possiblePaths = [];
@@ -2955,7 +2966,11 @@ class WafSyncService
                 return $path;
             }
         }
+<<<<<<< /tmp/merge_ours_m7npql331mhjcqaB4a7
 
+=======
+
+>>>>>>> /tmp/merge_theirs_s03f557299qt9mA5rAo
         // If not found, use bundled certificate
         $bundledPath = base_path('resources/certs/cacert.pem');
         if (file_exists($bundledPath)) {
@@ -2965,7 +2980,10 @@ class WafSyncService
 
         Log::error('CA certificate bundle missing: ' . $bundledPath);
         throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
+<<<<<<< /tmp/merge_ours_m7npql331mhjcqaB4a7
+=======
 
+>>>>>>> /tmp/merge_theirs_s03f557299qt9mA5rAo
     }
 
     /**
