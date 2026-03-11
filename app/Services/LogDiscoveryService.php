@@ -352,12 +352,13 @@ class LogDiscoveryService
             return true;
         }
 
-        $lock = cache()->lock('ids.custom_log_paths_lock', self::LOCK_TIMEOUT_SECONDS);
+        $lock = null;
         $acquired = false;
         $retries = 5;
         $delayMicroseconds = 250000; // 250ms in microseconds
 
         try {
+            $lock = cache()->lock('ids.custom_log_paths_lock', self::LOCK_TIMEOUT_SECONDS);
             for ($i = 0; $i < $retries; $i++) {
                 $acquired = $lock->get();
                 if ($acquired) {
