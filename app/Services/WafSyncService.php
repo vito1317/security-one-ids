@@ -2986,7 +2986,6 @@ if (!$user) continue;
             Log::debug('Using bundled CA certificate at: ' . $bundledPath);
             return $bundledPath;
         }
-
         Log::error('CA certificate bundle missing: ' . $bundledPath);
         throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
     }
