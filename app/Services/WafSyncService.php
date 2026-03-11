@@ -1545,6 +1545,9 @@ class WafSyncService
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
                 if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                    if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser)) {
+                        throw new \Exception('Invalid username format');
+                    }
                     // Prevent OS command injection attacks by escaping the user input
                     $safeConsoleUser = escapeshellarg($consoleUser);
                     // Method 1: Use dscl to disable user account
@@ -1623,6 +1626,9 @@ class WafSyncService
                     $user = trim($user);
                     if (!$user) continue;
                     
+                    if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) {
+                        continue;
+                    }
                     // Prevent OS command injection attacks by escaping the user input
                     $safeUser = escapeshellarg($user);
 
