@@ -27,17 +27,9 @@ class SystemUpdateController extends Controller
                 // Clear caches
                 Artisan::call('config:clear');
                 Artisan::call('cache:clear');
-public function checkForUpdates(): array
-    {
-        $latestVersion = SystemUpdateService::getLatestVersion();
-        $currentVersion = config('app.version');
+--- Resolution #1 ---
 
-        return [
-            'has_update' => version_compare($latestVersion, $currentVersion, '>'),
-            'version' => $latestVersion,
-            'message' => $latestVersion > $currentVersion ? 'Update available' : 'Up to date',
-        ];
-    }
+--- Resolution #2 ---
                 Log::info('System update completed', [
                     'output' => implode("\n", $output),
                 ]);
@@ -85,24 +77,10 @@ public function checkForUpdates(): array
             // Get git info
             exec('git rev-parse HEAD 2>/dev/null', $hashOutput);
             exec('git rev-parse --abbrev-ref HEAD 2>/dev/null', $branchOutput);
-public function triggerUpdate(Request $request): Response
-    {
-        try {
-            SystemUpdateService::performUpdate();
-            
-            return response()->json([
-                'status' => 'success',
-                'message' => 'System update initiated successfully',
-            ], 200);
-        } catch (\Exception $e) {
-            Log::error('System update failed: ' . $e->getMessage());
+<<<<<<< /tmp/merge_ours_427csl0714ad2zQWhoE
 
-            return response()->json([
-                'status' => 'error',
-                'message' => 'Failed to initiate system update',
-            ], 500);
-        }
-    }
+=======
+>>>>>>> /tmp/merge_theirs_7arn2dl8t2q51QwdP8C
             $gitHash = !empty($hashOutput) ? substr($hashOutput[0], 0, 7) : 'unknown';
             $gitBranch = !empty($branchOutput) ? $branchOutput[0] : 'unknown';
         } catch (\Exception $e) {
