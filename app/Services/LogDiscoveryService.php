@@ -7,12 +7,12 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Log Discovery Service
- * 
+ *
  * Auto-discovers web server log files on the system
  */
 class LogDiscoveryService
 {
-    private const LOCK_TIMEOUT_SECONDS = 5;
+private const LOCK_TIMEOUT_SECONDS = 5;
     private const INITIAL_RETRY_DELAY_US = 100000; // 100ms
     private const MAX_RETRY_DELAY_US = 1000000; // 1s
 
@@ -43,7 +43,7 @@ class LogDiscoveryService
         '/var/log/nginx/*-access.log',
         '/var/log/nginx/error.log',
         '/usr/local/nginx/logs/access.log',
-        
+
         // === Linux Apache ===
         '/var/log/apache2/access.log',
         '/var/log/apache2/*/access.log',
@@ -51,7 +51,7 @@ class LogDiscoveryService
         '/var/log/apache2/other_vhosts_access.log',
         '/var/log/httpd/access_log',
         '/var/log/httpd/*/access_log',
-        
+
         // === macOS ===
         '/var/log/apache2/access_log',
         '/var/log/apache2/error_log',
@@ -62,7 +62,7 @@ class LogDiscoveryService
         '/opt/homebrew/var/log/httpd/access_log',
         '/private/var/log/apache2/access_log',
         '/private/var/log/apache2/error_log',
-        
+
         // === Docker / Container ===
         '/var/log/host-nginx/access.log',
         '/var/log/host-nginx/*/access.log',
@@ -72,7 +72,7 @@ class LogDiscoveryService
         '/var/log/host-httpd/access_log',
         '/var/log/custom-logs-*/access.log',
         '/var/log/custom-logs-*/*.log',
-        
+
         // === Common custom paths ===
         '/var/www/*/logs/access.log',
         '/home/*/logs/access.log',
@@ -92,13 +92,13 @@ class LogDiscoveryService
         '/var/log/ufw.log',
         '/var/log/fail2ban.log',
         '/var/log/firewalld',
-        
+
         // === macOS system logs ===
         '/var/log/system.log',
         '/var/log/install.log',
         '/private/var/log/system.log',
         '/private/var/log/asl/*.asl',
-        
+
         // === Application logs ===
         '/var/log/mysql/error.log',
         '/var/log/postgresql/*.log',
@@ -257,7 +257,7 @@ class LogDiscoveryService
         }
 
         $type = $this->detectServerType($path);
-        
+
         return [
             'path' => $path,
             'type' => $type,
@@ -294,7 +294,7 @@ class LogDiscoveryService
 
         // Try to match against known formats
         $sampleLine = end($lines);
-        
+
         foreach (self::LOG_FORMATS as $name => $pattern) {
             if (preg_match($pattern, $sampleLine)) {
                 return $name;
@@ -329,7 +329,7 @@ class LogDiscoveryService
             return false;
         }
 
-        // Validate that path does not contain path traversal vectors
+// Validate that path does not contain path traversal vectors
         $segments = explode('/', str_replace('\\', '/', $path));
         if (in_array('..', $segments, true)) {
             return false;
@@ -386,6 +386,16 @@ class LogDiscoveryService
             $cachedPaths[] = $realPath;
             // Store in cache for persistence
             cache()->forever('ids.custom_log_paths', $cachedPaths);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
+            return false;
+        } finally {
+            if ($lock->isLocked()) {
+                $lock->release();
+            }
+        }
+
+        return true;
         } finally {
             if ($acquired) {
                 $lock->release();
@@ -431,7 +441,7 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        // Handle backward compatibility for old cache key
+// Handle backward compatibility for old cache key
         if (cache()->has('ids_custom_log_paths')) {
             $legacyPaths = cache()->pull('ids_custom_log_paths', []);
 
