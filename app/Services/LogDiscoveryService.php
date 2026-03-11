@@ -12,9 +12,6 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
-    public static bool $migrated = false;
-    private const LOCK_TIMEOUT = 30;
-
     /**
      * Cache key for custom log paths
      */
@@ -319,32 +316,12 @@ class LogDiscoveryService
             return false;
         }
 
-$lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
+        $lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
 
         try {
             // Wait up to 5 seconds for the lock
             if ($lock->block(5)) {
-                $cachedPaths = $this->getCustomPaths();
-                $configPaths = config('ids.custom_log_paths', []);
-
-                $allPaths = array_values(array_unique(array_merge($cachedPaths, $configPaths)));
-
-                if (!in_array($path, $allPaths, true)) {
-                    $cachedPaths[] = $path;
-                    $cachedPaths = array_values(array_unique($cachedPaths));
-                    cache()->forever('ids::custom_log_paths', $cachedPaths);
-                }
-            } else {
-                return false;
-            }
-        } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
-            return false;
-        } finally {
-            if ($lock->isLocked()) {
-                $lock->release();
-            }
-        }
+                $cachedPaths = $this->getPathsWithoutLock();
 
                 if (!in_array($path, $cachedPaths, true)) {
                     $cachedPaths[] = $path;
@@ -358,7 +335,7 @@ $lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
             return false;
         } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
             // Lock acquisition timed out, re-verify the cache state
-            $cachedPaths = $this->getCustomPaths();
+            $cachedPaths = $this->getPathsWithoutLock();
             if (in_array($path, $cachedPaths, true)) {
                 return true;
             }
@@ -374,7 +351,7 @@ $lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
      */
     public function getCustomPaths(): array
     {
-// Check new key first
+        // Check new key first
         $paths = cache()->get(self::CACHE_KEY);
 
         if ($paths !== null) {
@@ -385,25 +362,51 @@ $lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
         $oldPaths = cache()->get(self::LEGACY_CACHE_KEY);
 
         if ($oldPaths !== null) {
-            Log::warning(sprintf('Migrating legacy cache key %s to %s', self::LEGACY_CACHE_KEY, self::CACHE_KEY));
-            
-            // Ensure migration lock is used for consistency with other operations
-            $lock = cache()->lock(self::CACHE_KEY . '_migrate_lock', 5);
-            if ($lock->block(5)) {
-                try {
-                    // Double check after acquiring lock
-                    $currentPaths = cache()->get(self::CACHE_KEY);
-                    if ($currentPaths === null) {
-                        cache()->forever(self::CACHE_KEY, $oldPaths);
-                        cache()->forget(self::LEGACY_CACHE_KEY);
+            $lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
+
+            try {
+                if ($lock->block(5)) {
+                    $latestPaths = cache()->get(self::CACHE_KEY);
+                    if ($latestPaths !== null) {
+                        return $latestPaths;
                     }
-                } finally {
-                    if ($lock->isLocked()) {
-                        $lock->release();
-                    }
+
+                    Log::warning(sprintf('Migrating legacy cache key %s to %s', self::LEGACY_CACHE_KEY, self::CACHE_KEY));
+                    cache()->forever(self::CACHE_KEY, $oldPaths);
+                    cache()->forget(self::LEGACY_CACHE_KEY);
                 }
+            } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+                $latestPaths = cache()->get(self::CACHE_KEY);
+                if ($latestPaths !== null) {
+                    return $latestPaths;
+                }
+            } finally {
+                optional($lock)->release();
             }
-            return is_array($oldPaths) ? $oldPaths : [];
+
+            return $oldPaths;
+        }
+
+        return [];
+    }
+
+    /**
+     * Internal method to get paths without acquiring a new lock.
+     * Used by addCustomPath which already holds the lock.
+     */
+    private function getPathsWithoutLock(): array
+    {
+        $paths = cache()->get(self::CACHE_KEY);
+        if ($paths !== null) {
+            return $paths;
+        }
+
+        $oldPaths = cache()->get(self::LEGACY_CACHE_KEY);
+        if ($oldPaths !== null) {
+            Log::warning(sprintf('Migrating legacy cache key %s to %s', self::LEGACY_CACHE_KEY, self::CACHE_KEY));
+            cache()->forever(self::CACHE_KEY, $oldPaths);
+            cache()->forget(self::LEGACY_CACHE_KEY);
+            return $oldPaths;
         }
 
         return [];
