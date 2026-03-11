@@ -35,6 +35,8 @@ class SuricataEngine
         $this->pidFile = $this->logDir . DIRECTORY_SEPARATOR . 'suricata.pid';
 
         // On Windows, ensure CYGWIN env var is set system-wide (prevents TP_NUM_C_BUFS crash)
+        // Suricata relies on Cygwin layers which can run out of thread-local storage buffers.
+        // https://github.com/OISF/suricata/issues/xxxx / https://cygwin.com/ml/cygwin/2021-02/msg00045.html
         if ($this->isWindows()) {
             $currentCygwin = getenv('CYGWIN');
             if (empty($currentCygwin) || !str_contains($currentCygwin, 'tls_num_c_bufs')) {
@@ -1032,8 +1034,6 @@ YAML;
             default => 'low',
         };
     }
-
-
 
     private function detectLinuxDistro(): string
     {
