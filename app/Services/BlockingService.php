@@ -307,7 +307,7 @@ class BlockingService
         // Using cache expiration as scheduler
         // When cache expires, the block is automatically removed
         // For iptables, we need explicit cleanup job
-        if (config('ids.blocking.mode') === 'iptables' || config('ids.blocking.mode') === 'hybrid') {
+        if (in_array(config('ids.blocking.mode', 'hybrid'), ['iptables', 'hybrid'], true)) {
             // Dispatch UnblockIPJob with delay
             dispatch(new UnblockIPJob($ip))->delay($duration);
         }
