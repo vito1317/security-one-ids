@@ -14,6 +14,7 @@ class LogDiscoveryServiceTest extends TestCase
     {
         parent::setUp();
         cache()->forget(LogDiscoveryService::CACHE_KEY_CUSTOM_PATHS);
+        cache()->forget('ids_custom_log_paths');
         config(['ids.custom_log_paths' => []]);
         $this->service = new LogDiscoveryService();
     }
@@ -21,6 +22,7 @@ class LogDiscoveryServiceTest extends TestCase
     protected function tearDown(): void
     {
         cache()->forget(LogDiscoveryService::CACHE_KEY_CUSTOM_PATHS);
+        cache()->forget('ids_custom_log_paths');
         config(['ids.custom_log_paths' => []]);
 
         foreach ($this->tempFiles as $file) {
@@ -92,8 +94,9 @@ class LogDiscoveryServiceTest extends TestCase
 
         $this->assertTrue($result);
 
-        // Verify cache is not set since it was already in config
-        $this->assertFalse(cache()->has(LogDiscoveryService::CACHE_KEY_CUSTOM_PATHS));
+        // Verify cache is not updated since it was already evaluated as existing
+        $this->assertTrue(cache()->has(LogDiscoveryService::CACHE_KEY_CUSTOM_PATHS));
+        $this->assertEquals([$tempPath], cache()->get(LogDiscoveryService::CACHE_KEY_CUSTOM_PATHS));
     }
 
     public function test_add_custom_path_is_idempotent_when_path_in_both_config_and_cache(): void
