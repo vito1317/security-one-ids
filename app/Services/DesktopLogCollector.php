@@ -26,7 +26,7 @@ class DesktopLogCollector
      */
     private function detectPlatform(): string
     {
-        if (stripos(PHP_OS, 'WIN') === 0) {
+        if ($this->isWindows()) {
             return 'windows';
         } elseif (stripos(PHP_OS, 'Darwin') !== false) {
             return 'macos';

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -9,6 +10,8 @@ use Illuminate\Support\Facades\Artisan;
 
 class WafSyncService
 {
+    use DetectsPlatform;
+
     protected string $wafUrl;
     protected string $agentToken;
     protected string $agentName;
@@ -57,7 +60,7 @@ class WafSyncService
             ]);
         
         // On Windows, configure SSL certificate path at runtime
-        if (PHP_OS_FAMILY === 'Windows') {
+        if ($this->isWindows()) {
             $cacertPath = $this->getCaCertPath();
             if ($cacertPath) {
                 $http = $http->withOptions([
@@ -511,7 +514,7 @@ class WafSyncService
 
             // Windows (Cygwin build): limit rules to prevent TP_NUM_C_BUFS crash
             // The Cygwin runtime can't handle thousands of rules due to TLS buffer limits
-            if (PHP_OS_FAMILY === 'Windows' && $ruleCount > 500) {
+            if ($this->isWindows() && $ruleCount > 500) {
                 $lines = explode("\n", trim($rulesContent));
                 $lines = array_slice($lines, 0, 500);
                 $rulesContent = implode("\n", $lines) . "\n";
@@ -571,7 +574,7 @@ class WafSyncService
             }
 
             // Fix permissions if needed
-            if (!is_readable($alertLogPath) && PHP_OS_FAMILY !== 'Windows') {
+            if (!is_readable($alertLogPath) && !$this->isWindows()) {
                 $logDir = dirname($alertLogPath);
                 Process::run("sudo chmod -R o+rX {$logDir} 2>/dev/null");
                 clearstatcache(true, $alertLogPath);
@@ -1167,7 +1170,7 @@ class WafSyncService
             Log::warning('System reboot initiated by WAF Hub remote command');
             
             // Write to a file log that works even in scheduled task context
-            $logFile = PHP_OS_FAMILY === 'Windows' 
+            $logFile = $this->isWindows()
                 ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\reboot.log'
                 : base_path('storage/logs/reboot.log');
             $timestamp = date('Y-m-d H:i:s');
@@ -1176,7 +1179,7 @@ class WafSyncService
             // Small delay to allow log to be written
             sleep(2);
             
-            if (PHP_OS_FAMILY === 'Windows') {
+            if ($this->isWindows()) {
                 // Windows: Create a one-time scheduled task to reboot
                 // This is more reliable than direct exec() in scheduled task context
                 echo "🔄 Executing Windows restart command...\n";
@@ -1219,7 +1222,7 @@ class WafSyncService
                     file_put_contents($logFile, "[{$timestamp}] PowerShell result: code={$returnCode}\n", FILE_APPEND);
                 }
                 
-            } elseif (PHP_OS_FAMILY === 'Darwin') {
+            } elseif ($this->isMac()) {
                 // macOS: Use shutdown command directly (osascript requires GUI session)
                 echo "🔄 Executing macOS restart command...\n";
                 Log::info('Executing macOS restart command...');
@@ -1273,7 +1276,7 @@ class WafSyncService
             echo "⚠️ LOCK SIGNAL RECEIVED FROM WAF HUB!\n";
             Log::warning('System lock initiated by WAF Hub remote command');
             
-            $logFile = PHP_OS_FAMILY === 'Windows' 
+            $logFile = $this->isWindows()
                 ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\lock.log'
                 : base_path('storage/logs/lock.log');
             $timestamp = date('Y-m-d H:i:s');
@@ -1286,7 +1289,7 @@ class WafSyncService
             
             file_put_contents($logFile, "[{$timestamp}] Lock signal received from WAF Hub\n", FILE_APPEND);
             
-            if (PHP_OS_FAMILY === 'Windows') {
+            if ($this->isWindows()) {
                 // Windows: Lock workstation
                 // Note: LockWorkStation() API doesn't work from Session 0 (service)
                 // We need to run the lock command in the user's interactive session
@@ -1386,7 +1389,7 @@ class WafSyncService
                     file_put_contents($logFile, "[{$timestamp}] SYSTEM scheduled task result: code={$returnCode}\n", FILE_APPEND);
                 }
                 
-            } elseif (PHP_OS_FAMILY === 'Darwin') {
+            } elseif ($this->isMac()) {
                 // macOS: Lock screen properly (not just sleep display)
                 echo "🔒 Executing macOS lock command...\n";
                 Log::info('Executing macOS lock command...');
@@ -1469,7 +1472,7 @@ class WafSyncService
             echo "⚠️ UNLOCK SIGNAL RECEIVED FROM WAF HUB!\n";
             Log::warning('System unlock initiated by WAF Hub remote command');
             
-            $logFile = PHP_OS_FAMILY === 'Windows' 
+            $logFile = $this->isWindows()
                 ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\unlock.log'
                 : base_path('storage/logs/unlock.log');
             $timestamp = date('Y-m-d H:i:s');
@@ -1483,13 +1486,13 @@ class WafSyncService
             
             // Note: Most OS don't allow remote unlock without password for security
             // This will attempt to activate/wake the display
-            if (PHP_OS_FAMILY === 'Windows') {
+            if ($this->isWindows()) {
                 echo "🔓 Attempting Windows unlock (waking display)...\n";
                 // Send key press to wake display
                 exec('powershell -Command "[System.Windows.Forms.SendKeys]::SendWait(\' \')"  2>&1', $output, $returnCode);
                 file_put_contents($logFile, "[{$timestamp}] Windows wake result: code={$returnCode}\n", FILE_APPEND);
                 
-            } elseif (PHP_OS_FAMILY === 'Darwin') {
+            } elseif ($this->isMac()) {
                 echo "🔓 Attempting macOS unlock (waking display)...\n";
                 exec('caffeinate -u -t 1 2>&1', $output, $returnCode);
                 file_put_contents($logFile, "[{$timestamp}] macOS caffeinate result: code={$returnCode}\n", FILE_APPEND);
@@ -1520,7 +1523,7 @@ class WafSyncService
             echo "⚠️ DISABLE LOGIN SIGNAL RECEIVED FROM WAF HUB!\n";
             Log::warning('Disable login initiated by WAF Hub remote command');
             
-            $logFile = PHP_OS_FAMILY === 'Windows' 
+            $logFile = $this->isWindows()
                 ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\login_control.log'
                 : base_path('storage/logs/login_control.log');
             $timestamp = date('Y-m-d H:i:s');
@@ -1532,13 +1535,13 @@ class WafSyncService
             
             file_put_contents($logFile, "[{$timestamp}] Disable login signal received from WAF Hub\n", FILE_APPEND);
             
-            if (PHP_OS_FAMILY === 'Windows') {
+            if ($this->isWindows()) {
                 echo "🚫 Disabling Windows user accounts...\n";
                 // Disable all non-system user accounts
                 exec('powershell -Command "Get-LocalUser | Where-Object {$_.Enabled -eq $true -and $_.Name -ne \'Administrator\'} | Disable-LocalUser" 2>&1', $output, $returnCode);
                 file_put_contents($logFile, "[{$timestamp}] Windows disable users result: code={$returnCode}\n", FILE_APPEND);
                 
-            } elseif (PHP_OS_FAMILY === 'Darwin') {
+            } elseif ($this->isMac()) {
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
@@ -1593,7 +1596,7 @@ class WafSyncService
             echo "⚠️ ENABLE LOGIN SIGNAL RECEIVED FROM WAF HUB!\n";
             Log::warning('Enable login initiated by WAF Hub remote command');
             
-            $logFile = PHP_OS_FAMILY === 'Windows' 
+            $logFile = $this->isWindows()
                 ? 'C:\\ProgramData\\SecurityOneIDS\\logs\\login_control.log'
                 : base_path('storage/logs/login_control.log');
             $timestamp = date('Y-m-d H:i:s');
@@ -1605,13 +1608,13 @@ class WafSyncService
             
             file_put_contents($logFile, "[{$timestamp}] Enable login signal received from WAF Hub\n", FILE_APPEND);
             
-            if (PHP_OS_FAMILY === 'Windows') {
+            if ($this->isWindows()) {
                 echo "✅ Enabling Windows user accounts...\n";
                 // Enable previously disabled users, but exclude system accounts (Guest, Administrator)
                 exec('powershell -Command "Get-LocalUser | Where-Object {$_.Enabled -eq $false -and $_.Name -ne \'Guest\' -and $_.Name -ne \'Administrator\'} | Enable-LocalUser" 2>&1', $output, $returnCode);
                 file_put_contents($logFile, "[{$timestamp}] Windows enable users result: code={$returnCode}\n", FILE_APPEND);
                 
-            } elseif (PHP_OS_FAMILY === 'Darwin') {
+            } elseif ($this->isMac()) {
                 echo "✅ Enabling macOS user login...\n";
                 // Get all regular users and enable them
                 $usersOutput = [];
@@ -1774,13 +1777,13 @@ class WafSyncService
             
             // Get install directory and detect platform
             $installDir = base_path();
-            $isWindows = PHP_OS_FAMILY === 'Windows';
+            $isWindows = $this->isWindows();
             $isDocker = file_exists('/.dockerenv') || getenv('DOCKER_CONTAINER');
             
             // Force update: fetch + reset --hard to avoid conflicts with local changes
-            Log::info('Fetching latest code from git...', ['platform' => $isWindows ? 'windows' : 'unix']);
-            
-            if ($isWindows) {
+            Log::info('Fetching latest code from git...', ['platform' => $this->isWindows() ? 'windows' : 'unix']);
+
+            if ($this->isWindows()) {
                 // Windows: Use cmd.exe for better output capturing
                 $gitResult = Process::path($installDir)
                     ->timeout(300)
@@ -1838,7 +1841,7 @@ class WafSyncService
                     ->env(['COMPOSER_ALLOW_SUPERUSER' => '1'])
                     ->run("powershell -Command \"{$composerCmd} install --no-interaction --no-dev --optimize-autoloader 2>&1\"");
             } else {
-                $homeDir = getenv('HOME') ?: (PHP_OS_FAMILY === 'Darwin' ? '/Users/' . get_current_user() : '/home/' . get_current_user());
+                $homeDir = getenv('HOME') ?: ($this->isMac() ? '/Users/' . get_current_user() : '/home/' . get_current_user());
                 $composerResult = Process::path($installDir)
                     ->timeout(600)
                     ->env([
@@ -1983,9 +1986,9 @@ class WafSyncService
             }
             
             // Use platform-specific scan paths
-            $platform = match (PHP_OS_FAMILY) {
-                'Windows' => 'windows',
-                'Darwin' => 'macos',
+            $platform = match (true) {
+                $this->isWindows() => 'windows',
+                $this->isMac() => 'macos',
                 default => 'linux',
             };
             
@@ -2473,7 +2476,7 @@ class WafSyncService
     {
         $percent = 0;
         
-        if (PHP_OS_FAMILY === 'Windows') {
+        if ($this->isWindows()) {
             // Windows: Use wmic
             $output = [];
             @exec('wmic cpu get loadpercentage 2>&1', $output);
@@ -2484,7 +2487,7 @@ class WafSyncService
                     break;
                 }
             }
-        } elseif (PHP_OS_FAMILY === 'Darwin') {
+        } elseif ($this->isMac()) {
             // macOS: Use top or ps
             $output = @shell_exec("ps -A -o %cpu | awk '{s+=$1} END {print s}'");
             if ($output) {
@@ -2528,7 +2531,7 @@ class WafSyncService
         $used = 0;
         $percent = 0;
         
-        if (PHP_OS_FAMILY === 'Windows') {
+        if ($this->isWindows()) {
             // Windows: Use wmic
             $output = [];
             @exec('wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /value 2>&1', $output);
@@ -2541,7 +2544,7 @@ class WafSyncService
             $total = $values['TotalVisibleMemorySize'] ?? 0;
             $free = $values['FreePhysicalMemory'] ?? 0;
             $used = $total - $free;
-        } elseif (PHP_OS_FAMILY === 'Darwin') {
+        } elseif ($this->isMac()) {
             // macOS: Use vm_stat and sysctl
             $vmstat = @shell_exec('vm_stat 2>/dev/null');
             
@@ -2624,7 +2627,7 @@ class WafSyncService
      */
     protected function getDiskUsage(): array
     {
-        $path = PHP_OS_FAMILY === 'Windows' ? 'C:' : '/';
+        $path = $this->isWindows() ? 'C:' : '/';
         
         $total = @disk_total_space($path) ?: 0;
         $free = @disk_free_space($path) ?: 0;
@@ -2728,7 +2731,7 @@ class WafSyncService
             'php_uname' => php_uname('s'),
         ]);
         
-        if (PHP_OS_FAMILY === 'Windows') {
+        if ($this->isWindows()) {
             // Windows: Use netstat
             $output = [];
             @exec('netstat -e 2>&1', $output);
@@ -2739,7 +2742,7 @@ class WafSyncService
                     break;
                 }
             }
-        } elseif (PHP_OS_FAMILY === 'Darwin') {
+        } elseif ($this->isMac()) {
             // macOS: Try multiple methods to get network bytes
             Log::debug('macOS network stats: starting collection');
             
@@ -3121,7 +3124,7 @@ class WafSyncService
             return 'server';
         }
         
-        if (stripos(PHP_OS, 'WIN') === 0) {
+        if ($this->isWindows()) {
             return 'windows';
         } elseif (stripos(PHP_OS, 'Darwin') !== false) {
             return 'macos';

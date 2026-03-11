@@ -13,4 +13,24 @@ trait DetectsPlatform
     {
         return PHP_OS_FAMILY === 'Windows';
     }
+
+    /**
+     * Determine if the current platform is macOS.
+     *
+     * @return bool
+     */
+    protected function isMac(): bool
+    {
+        return PHP_OS_FAMILY === 'Darwin';
+    }
+
+    /**
+     * Determine if the current platform is Linux.
+     *
+     * @return bool
+     */
+    protected function isLinux(): bool
+    {
+        return PHP_OS_FAMILY === 'Linux';
+    }
 }

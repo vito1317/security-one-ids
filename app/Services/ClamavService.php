@@ -2,12 +2,15 @@
 
 namespace App\Services;
 
+use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Http;
 
 class ClamavService
 {
+    use DetectsPlatform;
+
     protected bool $isInstalled = false;
     protected ?string $version = null;
     protected ?string $definitionsDate = null;
@@ -29,7 +32,7 @@ class ClamavService
             ]);
 
         // On Windows, configure SSL certificate path at runtime
-        if (PHP_OS_FAMILY === 'Windows') {
+        if ($this->isWindows()) {
             $cacertPath = $this->getCaCertPath();
             if ($cacertPath) {
                 $http = $http->withOptions([
@@ -1171,7 +1174,7 @@ class ClamavService
         }
 
         // Windows detection
-        if (stripos(PHP_OS, 'WIN') === 0 || stripos(PHP_OS_FAMILY, 'Windows') !== false) {
+        if ($this->isWindows()) {
             return 'windows';
         }
 
@@ -1231,10 +1234,10 @@ class ClamavService
             }
 
             // Fallback to checking ps for clamscan process
-            if (PHP_OS_FAMILY === 'Windows') {
+            if ($this->isWindows()) {
                 // Windows: Use PowerShell to check for clamscan process
                 $result = Process::run('powershell -Command "Get-Process clamscan -ErrorAction SilentlyContinue | Select-Object -First 1 | Format-List Id,ProcessName"');
-            } elseif (PHP_OS_FAMILY === 'Darwin') {
+            } elseif ($this->isMac()) {
                 $result = Process::run('ps aux | grep -v grep | grep "clamscan -r"');
             } else {
                 $result = Process::run('ps aux | grep -v grep | grep "clamscan"');
@@ -1246,7 +1249,7 @@ class ClamavService
 
                 // Windows: Get-Process doesn't show command line, so we rely on cache file
                 // Just detecting the process is running is enough
-                if (PHP_OS_FAMILY === 'Windows') {
+                if ($this->isWindows()) {
                     // Process is running, use cache file for progress
                     if (file_exists($cacheFile)) {
                         $progress = trim(file_get_contents($cacheFile));

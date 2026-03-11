@@ -331,7 +331,7 @@ class SuricataEngine
 
         // Collect packet stats from OS network interface counters
         $interface = $this->detectDefaultInterface();
-        if (!$this->isWindows() && PHP_OS === 'Darwin') {
+        if (!$this->isWindows() && $this->isMac()) {
             $this->collectMacPacketStats($stats, $interface);
         } elseif (!$this->isWindows()) {
             $this->collectLinuxPacketStats($stats, $interface);
@@ -498,7 +498,7 @@ class SuricataEngine
         try {
             Log::info('Updating Suricata...', ['current_version' => $oldVersion]);
 
-            if (PHP_OS === 'Darwin') {
+            if ($this->isMac()) {
                 $this->updateSuricataMac();
             } elseif ($this->isWindows()) {
                 $this->updateSuricataWindows();
@@ -561,12 +561,12 @@ class SuricataEngine
             // Linux/macOS
             $cmd .= " -i {$interface}";
 
-            if ($mode === 'ips' && PHP_OS !== 'Darwin') {
+            if ($mode === 'ips' && !$this->isMac()) {
                 // IPS inline on Linux via nfqueue
                 $cmd .= " --af-packet -q 0";
             } else {
                 // IDS passive via af-packet (Linux) or pcap (macOS)
-                if (PHP_OS !== 'Darwin') {
+                if (!$this->isMac()) {
                     $cmd .= " --af-packet";
                 }
             }
@@ -841,7 +841,7 @@ YAML;
         }
 
         // macOS
-        if (PHP_OS === 'Darwin') {
+        if ($this->isMac()) {
             try {
                 $result = Process::run("route -n get default 2>/dev/null | grep 'interface:' | awk '{print \$2}'");
                 $iface = trim($result->output());

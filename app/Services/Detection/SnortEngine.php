@@ -743,7 +743,7 @@ LUA;
         try {
             Log::info('Updating Snort...', ['current_version' => $oldVersion, 'platform' => PHP_OS_FAMILY]);
 
-            if (PHP_OS === 'Darwin') {
+            if ($this->isMac()) {
                 $result = $this->updateSnortMac();
             } elseif ($this->isWindows()) {
                 $result = $this->updateSnortWindows();
@@ -1104,7 +1104,7 @@ LUA;
         if ($this->isWindows()) {
             // Windows: use PowerShell Get-NetAdapterStatistics
             $this->collectWindowsPacketStats($stats, $interface);
-        } elseif (PHP_OS === 'Darwin') {
+        } elseif ($this->isMac()) {
             // macOS: use netstat -ib
             $this->collectMacPacketStats($stats, $interface);
         } else {
@@ -1475,7 +1475,7 @@ LUA;
         if ($mode === 'ips') {
             // -Q (inline) requires DAQ support (afpacket/nfq) which only works on Linux
             // macOS only has pcap DAQ (passive/read-only), so skip -Q on macOS
-            if (PHP_OS !== 'Darwin') {
+            if (!$this->isMac()) {
                 $cmd .= " -Q"; // Inline/IPS mode (Linux only)
             } else {
                 Log::debug('Skipping -Q flag on macOS (no inline DAQ support), running in passive IDS mode');
@@ -1590,7 +1590,7 @@ LUA;
     {
         if ($this->isWindows()) {
             $dir = 'C:\\Snort\\log';
-        } elseif (PHP_OS === 'Darwin') {
+        } elseif ($this->isMac()) {
             $dir = '/var/log/snort';
         } else {
             $dir = '/var/log/snort';
@@ -1685,7 +1685,7 @@ LUA;
             return $this->cachedInterface;
         }
 
-        $isMac = PHP_OS === 'Darwin';
+        $isMac = $this->isMac();
 
         // macOS: try route command first
         if ($isMac) {

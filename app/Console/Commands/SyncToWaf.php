@@ -113,7 +113,7 @@ class SyncToWaf extends Command
         $this->info('PHP_OS: ' . PHP_OS);
         $this->info('php_uname: ' . php_uname('s'));
         
-        if (PHP_OS_FAMILY === 'Darwin') {
+        if ($this->isMac()) {
             $this->info('Detected macOS, testing netstat...');
             $output = shell_exec('netstat -I en0 -b 2>&1');
             $this->info("netstat -I en0 -b output:\n" . $output);
@@ -127,7 +127,7 @@ class SyncToWaf extends Command
                     $this->info("Obytes (col 9): " . ($parts[9] ?? 'N/A'));
                 }
             }
-        } elseif (PHP_OS_FAMILY === 'Windows') {
+        } elseif ($this->isWindows()) {
             $this->info('Detected Windows');
         } else {
             $this->info('Detected Linux');

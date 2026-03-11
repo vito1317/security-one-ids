@@ -41,9 +41,9 @@ class RunScan extends Command
             }
             
             // Use platform-specific scan paths based on scan type
-            $platform = match(PHP_OS_FAMILY) {
-                'Darwin' => 'macos',
-                'Windows' => 'windows',
+            $platform = match(true) {
+                $this->isMac() => 'macos',
+                $this->isWindows() => 'windows',
                 default => 'linux',
             };
             
