@@ -1542,8 +1542,8 @@ class WafSyncService
                 
                 $cleanUser = '';
                 // Ensure the string matches standard macOS username constraints before processing.
-                if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_-]*$/', $consoleUser) === 1) {
-                    $cleanUser = escapeshellarg($consoleUser);
+                if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_-]*$/', $safeConsoleUser) === 1) {
+                    $cleanUser = escapeshellarg($safeConsoleUser);
                 }
 
                 if ($cleanUser && $cleanUser !== escapeshellarg('root') && $cleanUser !== escapeshellarg('_mbsetupuser')) {
