@@ -8,8 +8,7 @@ return [
     */
 
     'waf_url' => env('WAF_URL', ''),
-// Default is intentionally an empty string to prevent masking configuration issues. An exception will be thrown at boot
-    // if set in a production console environment without a value.
+// Default is intentionally an empty string to prevent masking configuration issues.
     // AGENT_TOKEN must be explicitly set in production environments.
     'agent_token' => env('AGENT_TOKEN', ''),
 
