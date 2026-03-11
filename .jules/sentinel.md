@@ -6,4 +6,4 @@
 ## 2025-03-10 - [OS Command Injection via Unsanitized User Inputs in Shell Execution]
 **Vulnerability:** Unsanitized system variables (like `$consoleUser` and `$user`) derived from dynamic system states were directly interpolated into string commands passed to `exec()` functions (e.g., `exec("sudo dscl . -delete /Users/{$user} ...")`).
 **Learning:** Any variable that is incorporated into a shell command, even if originating from a seemingly trustworthy system query (such as listing user accounts), poses a command injection risk or syntax error risk if the data contains spaces, quotes, or shell metacharacters.
-**Prevention:** Always use `escapeshellarg()` on any dynamic variable before inserting it into a shell command executed via `exec()`, `shell_exec()`, or `system()`.
+**Prevention:** When modifying shell commands that interpolate variables into continuous file paths or command structures (like `dscl . -delete /Users/{$user}`), prefer strict regex validation (e.g., `preg_match('/^[a-zA-Z0-9._-]+$/', $user)`) over `escapeshellarg()`. Using `escapeshellarg()` adds literal single quotes that can break path syntax.
