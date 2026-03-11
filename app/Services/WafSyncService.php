@@ -46,6 +46,14 @@ class WafSyncService
     }
 
     /**
+     * Sanitize input for safe logging by removing newlines and carriage returns
+     */
+    protected function sanitizeForLog(string $input): string
+    {
+        return preg_replace('/[\r\n]+/', ' ', $input) ?? $input;
+    }
+
+    /**
      * Get HTTP client with SSL configuration for Windows
      */
     protected function getHttpClient(int $timeout = 30): \Illuminate\Http\Client\PendingRequest
@@ -1543,7 +1551,7 @@ class WafSyncService
                 // Get current console user (may be different from running user)
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 // Sanitize consoleUser for log injection prevention by removing newlines
-                $cleanLogConsoleUser = preg_replace('/[\r\n]+/', ' ', $consoleUser);
+                $cleanLogConsoleUser = $this->sanitizeForLog($consoleUser);
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanLogConsoleUser}\n", FILE_APPEND);
                 
                 if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
@@ -1626,7 +1634,7 @@ class WafSyncService
                     if (!$user) continue;
                     
                     $escapedUser = escapeshellarg($user);
-                    $cleanLogUser = preg_replace('/[\r\n]+/', ' ', $user);
+                    $cleanLogUser = $this->sanitizeForLog($user);
 
                     // Remove DisabledUser from AuthenticationAuthority
                     exec("sudo dscl . -delete /Users/{$escapedUser} AuthenticationAuthority 2>&1", $output, $returnCode);
