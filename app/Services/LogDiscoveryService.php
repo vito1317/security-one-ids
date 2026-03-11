@@ -307,9 +307,8 @@ class LogDiscoveryService
         }
 
         $cachedPaths = $this->getCustomPaths();
-        $configPaths = config('ids.custom_log_paths', []);
 
-        if (in_array($path, $cachedPaths, true) || in_array($path, $configPaths, true)) {
+        if (in_array($path, $cachedPaths, true)) {
             return true;
         }
 
