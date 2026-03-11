@@ -30,17 +30,27 @@ class AgentAuth
         // while preserving '0' which is not strictly empty.
         $agentToken = (string) ($agentTokenEnv !== null && $agentTokenEnv !== '' ? $agentTokenEnv : config('ids.agent_token', ''));
 
-        if ($agentToken === '') {
-            return response()->json(['error' => 'Server misconfiguration'], 500);
-        }
-
+        // To prevent information leakage (e.g., revealing via different response times
+        // or codes that the system is misconfigured), we enforce a generic 401 response
+        // for both missing configuration and invalid tokens.
         if (!is_scalar($token)) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
         $token = (string) $token;
+        $configured = $agentToken !== '';
+        $expectedSeed = $configured ? $agentToken : str_repeat("\0", 32);
 
-        if ($token === '' || strlen($token) > 256 || strlen($token) !== strlen($agentToken) || !hash_equals($agentToken, $token)) {
+        $isValid = $configured
+            && $token !== ''
+            && strlen($token) <= 256
+            && strlen($token) === strlen($agentToken)
+            && hash_equals(
+                hash('sha256', $expectedSeed, true),
+                hash('sha256', $token, true)
+            );
+
+        if (!$isValid) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
