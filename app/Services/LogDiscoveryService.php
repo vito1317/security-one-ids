@@ -306,11 +306,19 @@ class LogDiscoveryService
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        $cachedPaths = $this->getCustomPaths();
+
+        if (!in_array($path, $cachedPaths, true)) {
+            // Check config once as a fallback if the path is not in the cache
+            $configPaths = config('ids.custom_log_paths', []);
+
+            if (!in_array($path, $configPaths, true)) {
+                $mergedPaths = array_unique(array_merge($configPaths, $cachedPaths, [$path]));
+                cache()->forever('ids.custom_log_paths', $mergedPaths);
+
+                // Keep config in sync for the current request lifecycle
+                config(['ids.custom_log_paths' => $mergedPaths]);
+            }
         }
 
         return true;
@@ -321,7 +329,9 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        return cache()->get('ids.custom_log_paths', function () {
+            return cache()->get('ids_custom_log_paths', []);
+        });
     }
 
     /**
