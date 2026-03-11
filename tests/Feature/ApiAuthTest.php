@@ -9,19 +9,30 @@ use Illuminate\Support\Facades\Config;
 
 class ApiAuthTest extends TestCase
 {
+    private string|false $originalAgentToken;
+    private mixed $originalConfigToken;
+
     protected function setUp(): void
     {
         parent::setUp();
-        // Set a known token for testing. We rely on Config::set to cleanly reset between tests.
-        // Unset the env variable just in case the testing environment had it populated.
+
+        $this->originalAgentToken = getenv('AGENT_TOKEN');
+        $this->originalConfigToken = Config::get('ids.agent_token');
+
+        // Set a known token for testing.
         putenv('AGENT_TOKEN');
         Config::set('ids.agent_token', 'test-agent-token');
     }
 
     protected function tearDown(): void
     {
-        putenv('AGENT_TOKEN');
-        Config::set('ids.agent_token', null);
+        if ($this->originalAgentToken === false) {
+            putenv('AGENT_TOKEN');
+        } else {
+            putenv('AGENT_TOKEN=' . $this->originalAgentToken);
+        }
+
+        Config::set('ids.agent_token', $this->originalConfigToken);
         parent::tearDown();
     }
 
