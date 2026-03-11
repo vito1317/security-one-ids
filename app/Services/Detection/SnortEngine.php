@@ -9,7 +9,6 @@ use App\Traits\DetectsPlatform;
 
 /**
  * Snort 3 IPS Detection Engine
- *
  * Manages Snort 3 process lifecycle, parses alerts, and provides status information.
  * Supports IDS (passive) and IPS (inline) modes across Linux, macOS, and Windows.
  */
