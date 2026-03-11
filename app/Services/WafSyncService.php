@@ -1543,10 +1543,10 @@ class WafSyncService
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                $cleanUser = preg_replace('/[\r\n]+/', ' ', $user);
-                file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
                 
-                if ($cleanUser && preg_match('/^[a-zA-Z0-9_][a-zA-Z0-9._-]*$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
+                if ($user && preg_match('/^[a-zA-Z0-9_][a-zA-Z0-9._-]*$/', $user) && $user !== 'root' && $user !== 'daemon' && $user !== 'nobody' && $user !== '_mbsetupuser') {
+                    $cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
+                    file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $returnCode1 = null;
@@ -1657,14 +1657,16 @@ class WafSyncService
                     throw new \RuntimeException("Failed to list macOS users for enable login (exit code: {$rc})");
                 }
                 
+                $failedUsers = [];
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
                     if (!$user) continue;
                     
+                    if (!preg_match('/^[a-zA-Z0-9_][a-zA-Z0-9._-]*$/', $user)) continue;
+
                     $cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
 
-                    if (!preg_match('/^[a-zA-Z0-9_][a-zA-Z0-9._-]*$/', $cleanUser)) continue;
-
+                    $hasError = false;
                     // Remove DisabledUser from AuthenticationAuthority
                     try {
                         $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-delete', '/Users/' . $cleanUser, 'AuthenticationAuthority']);
@@ -1675,6 +1677,7 @@ class WafSyncService
                         file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanUser}: code={$returnCode1}\n", FILE_APPEND);
                     } catch (\Exception $e) {
                         file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
+                        $hasError = true;
                     }
                     
                     // Re-enable with pwpolicy  
@@ -1687,8 +1690,18 @@ class WafSyncService
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
                     } catch (\Exception $e) {
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
+                        $hasError = true;
                     }
 
+                    if ($hasError) {
+                        $failedUsers[] = $cleanUser;
+                    }
+                }
+
+                if (!empty($failedUsers)) {
+                    $failedList = implode(', ', array_unique($failedUsers));
+                    file_put_contents($logFile, "[{$timestamp}] Failed to enable the following users due to execution errors: {$failedList}\n", FILE_APPEND);
+                    throw new \RuntimeException("Critical execution errors occurred while enabling the following users: {$failedList}");
                 }
                 
             } else {
