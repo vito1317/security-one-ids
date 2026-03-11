@@ -1551,7 +1551,7 @@ class WafSyncService
                     $method1Success = false;
                     try {
                         $process1 = Process::timeout(60)->run(['sudo', 'dscl', '.', '-create', '/Users/' . $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
-                        $method1Success = $process1->isSuccessful();
+                        $method1Success = $process1->successful();
                         $returnCode1 = $process1->exitCode();
                         $outputStr = trim($process1->output() . ' ' . $process1->errorOutput());
                         file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$returnCode1}, output={$outputStr}\n", FILE_APPEND);
@@ -1566,7 +1566,7 @@ class WafSyncService
                         $method2Success = false;
                         try {
                             $process2 = Process::timeout(60)->run(['sudo', 'pwpolicy', '-u', $cleanUser, 'disableuser']);
-                            $method2Success = $process2->isSuccessful();
+                            $method2Success = $process2->successful();
                             $returnCode2 = $process2->exitCode();
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
                         } catch (\Exception $e) {
@@ -1580,7 +1580,7 @@ class WafSyncService
                             $method3Success = false;
                             try {
                                 $process3 = Process::timeout(60)->run(['sudo', 'chpass', '-e', '0', $cleanUser]);
-                                $method3Success = $process3->isSuccessful();
+                                $method3Success = $process3->successful();
                                 $returnCode3 = $process3->exitCode();
                                 file_put_contents($logFile, "[{$timestamp}] chpass set expire immediately: code={$returnCode3}\n", FILE_APPEND);
                             } catch (\Exception $e) {
@@ -1662,9 +1662,11 @@ class WafSyncService
                     }
 
                     // Remove DisabledUser from AuthenticationAuthority
+                    $method1Success = false;
                     $returnCode1 = null;
                     try {
                         $process1 = Process::timeout(60)->run(['sudo', '-n', 'dscl', '.', '-delete', '/Users/' . $cleanUser, 'AuthenticationAuthority']);
+                        $method1Success = $process1->successful();
                         $returnCode1 = $process1->exitCode();
                         file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanUser}: code={$returnCode1}\n", FILE_APPEND);
                     } catch (\Exception $e) {
@@ -1673,14 +1675,22 @@ class WafSyncService
                     }
                     
                     // Re-enable with pwpolicy  
+                    $method2Success = false;
                     $returnCode2 = null;
                     try {
                         $process2 = Process::timeout(60)->run(['sudo', '-n', 'pwpolicy', '-u', $cleanUser, 'enableuser']);
+                        $method2Success = $process2->successful();
                         $returnCode2 = $process2->exitCode();
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
                     } catch (\Exception $e) {
                         $returnCode2 = 1;
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser} exception: " . $e->getMessage() . "\n", FILE_APPEND);
+                    }
+
+                    if (!$method1Success && !$method2Success) {
+                        Log::error('Failed to enable login for user: ' . $cleanUser);
+                        file_put_contents($logFile, "[{$timestamp}] Failed to enable login for {$cleanUser}: dscl and pwpolicy both failed\n", FILE_APPEND);
+                        continue;
                     }
                 }
                 
