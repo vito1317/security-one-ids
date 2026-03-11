@@ -9,12 +9,12 @@ class VerifyAgentToken
 {
     public function handle(Request $request, Closure $next)
     {
-        $token = $request->input('token');
+        $token = $request->bearerToken();
         if ($token === null || $token === '') {
             $token = $request->header('X-Agent-Token');
         }
         if ($token === null || $token === '') {
-            $token = $request->bearerToken();
+            $token = $request->input('token');
         }
         $agentToken = (string) config('ids.agent_token', env('AGENT_TOKEN'));
 

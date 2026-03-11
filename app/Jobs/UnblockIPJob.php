@@ -30,8 +30,9 @@ class UnblockIPJob implements ShouldQueue
     public function __construct(
         public readonly string $ip
     ) {
-        // Run on the ids-processing queue as per memory guidelines
-        $this->onQueue('ids-processing');
+        // Use IDS queue configurations to prevent env mismatch
+        $this->onConnection(config('ids.queue.connection', 'database'));
+        $this->onQueue(config('ids.queue.name', 'ids-processing'));
     }
 
     /**
