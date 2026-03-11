@@ -5,7 +5,6 @@ namespace Tests\Unit\Providers;
 use Tests\TestCase;
 use App\Providers\AppServiceProvider;
 use Illuminate\Support\Facades\Config;
-use Illuminate\Support\Facades\Log;
 
 class AppServiceProviderTest extends TestCase
 {
@@ -45,7 +44,7 @@ class AppServiceProviderTest extends TestCase
 
         Config::set('ids.agent_token', '');
 
-        Log::shouldReceive('warning')
+        \Illuminate\Support\Facades\Log::shouldReceive('warning')
             ->once()
             ->with('AGENT_TOKEN is empty in production environment during console command. This may lead to an insecure configuration cache.');
 
@@ -61,7 +60,7 @@ class AppServiceProviderTest extends TestCase
 
         Config::set('ids.agent_token', 'valid-token');
 
-        Log::shouldReceive('warning')->never();
+        \Illuminate\Support\Facades\Log::shouldReceive('warning')->never();
 
         $provider = new AppServiceProvider($appMock);
 
@@ -76,7 +75,7 @@ class AppServiceProviderTest extends TestCase
 
         Config::set('ids.agent_token', '');
 
-        Log::shouldReceive('warning')->never();
+        \Illuminate\Support\Facades\Log::shouldReceive('warning')->never();
 
         $provider = new AppServiceProvider($appMock);
 
