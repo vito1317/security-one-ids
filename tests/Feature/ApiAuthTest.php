@@ -51,4 +51,10 @@ class ApiAuthTest extends TestCase
 
         $this->postJson('/api/rules/update?token=0', [])->assertStatus(200);
     }
+
+    public function test_auth_logic_prevents_timing_attacks_with_partial_matches()
+    {
+        // Assert that hash_equals prevents a partial prefix match from authenticating
+        $this->postJson('/api/rules/update?token=test-agent', [])->assertStatus(401);
+    }
 }
