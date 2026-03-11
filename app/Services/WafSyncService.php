@@ -1553,6 +1553,7 @@ class WafSyncService
                     $outputStr = trim($process1->output() . ' ' . $process1->errorOutput());
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$returnCode1}, output={$outputStr}\n", FILE_APPEND);
                     
+                    $returnCode2 = 0;
                     if ($returnCode1 !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
                         $process2 = Process::timeout(60)->run(['sudo', 'pwpolicy', '-u', $cleanUser, 'disableuser']);
@@ -1560,7 +1561,7 @@ class WafSyncService
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
                     }
                     
-                    if (isset($returnCode2) && $returnCode2 !== 0) {
+                    if ($returnCode1 !== 0 && $returnCode2 !== 0) {
                         // Method 3: Set an impossible password hash
                         $process3 = Process::timeout(60)->run(['sudo', 'dscl', '.', '-passwd', '/Users/' . $cleanUser, '*']);
                         $returnCode3 = $process3->exitCode();
