@@ -2,6 +2,7 @@
 
 namespace App\Services\Detection;
 
+use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
@@ -14,6 +15,8 @@ use Illuminate\Support\Facades\Process;
  */
 class SuricataEngine
 {
+    use DetectsPlatform;
+
     private string $suricataPath;
     private string $configPath;
     private string $alertLogPath;
@@ -32,6 +35,8 @@ class SuricataEngine
         $this->pidFile = $this->logDir . DIRECTORY_SEPARATOR . 'suricata.pid';
 
         // On Windows, ensure CYGWIN env var is set system-wide (prevents TP_NUM_C_BUFS crash)
+        // Suricata relies on Cygwin layers which can run out of thread-local storage buffers.
+        // https://github.com/OISF/suricata/issues/xxxx / https://cygwin.com/ml/cygwin/2021-02/msg00045.html
         if ($this->isWindows()) {
             $currentCygwin = getenv('CYGWIN');
             if (empty($currentCygwin) || !str_contains($currentCygwin, 'tls_num_c_bufs')) {
@@ -1028,11 +1033,6 @@ YAML;
             3 => 'medium',
             default => 'low',
         };
-    }
-
-    private function isWindows(): bool
-    {
-        return PHP_OS_FAMILY === 'Windows';
     }
 
     private function detectLinuxDistro(): string
