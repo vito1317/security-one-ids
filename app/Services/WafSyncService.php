@@ -1543,10 +1543,10 @@ class WafSyncService
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                $cleanUser = preg_replace('/[\r\n]+/', ' ', $user);
-                file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
+                file_put_contents($logFile, "[{$timestamp}] Console user: {$user}\n", FILE_APPEND);
                 
-                if ($cleanUser && preg_match('/^[a-zA-Z0-9_]+$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
+                if ($user && preg_match('/^[a-zA-Z0-9._-]+$/', $user) && $user !== 'root' && $user !== 'daemon' && $user !== 'nobody' && $user !== '_mbsetupuser') {
+                    $cleanUser = $user;
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $returnCode1 = -1;
@@ -1560,9 +1560,6 @@ class WafSyncService
                         $outputStr = trim($process1->getOutput() . ' ' . $process1->getErrorOutput());
                         file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$returnCode1}, output={$outputStr}\n", FILE_APPEND);
                     } catch (\Exception $e) {
-                        if (stripos($e->getMessage(), 'Permission denied') !== false) {
-                            throw $e;
-                        }
                         $returnCode1 = 1;
                         file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                     }
@@ -1576,9 +1573,6 @@ class WafSyncService
                             $returnCode2 = $process2->getExitCode() ?? 1;
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
                         } catch (\Exception $e) {
-                            if (stripos($e->getMessage(), 'Permission denied') !== false) {
-                                throw $e;
-                            }
                             $returnCode2 = 1;
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
@@ -1593,9 +1587,6 @@ class WafSyncService
                             $returnCode3 = $process3->getExitCode() ?? 1;
                             file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode3}\n", FILE_APPEND);
                         } catch (\Exception $e) {
-                            if (stripos($e->getMessage(), 'Permission denied') !== false) {
-                                throw $e;
-                            }
                             $returnCode3 = 1;
                             file_put_contents($logFile, "[{$timestamp}] dscl set impossible password error: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
@@ -1665,9 +1656,8 @@ class WafSyncService
                     $user = trim($user);
                     if (!$user) continue;
                     
-                    $cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
-
-                    if (!preg_match('/^[a-zA-Z0-9_]+$/', $cleanUser)) continue;
+                    if (!preg_match('/^[a-zA-Z0-9._-]+$/', $user)) continue;
+                    $cleanUser = $user;
 
                     // Remove DisabledUser from AuthenticationAuthority
                     $returnCode1 = -1;
