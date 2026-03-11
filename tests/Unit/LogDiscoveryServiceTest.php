@@ -14,6 +14,8 @@ class LogDiscoveryServiceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // Use the array driver to isolate cache state per test
+        config(['cache.default' => 'array']);
         $this->service = app(LogDiscoveryService::class);
     }
 
@@ -38,15 +40,27 @@ class LogDiscoveryServiceTest extends TestCase
     {
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        $this->assertNotEmpty($tempPath);
+        $this->assertIsString($tempPath);
         $this->assertFileExists($tempPath);
 
         $originalCustomPaths = config('ids.custom_log_paths', []);
         Config::set('ids.custom_log_paths', []);
 
+        $lockMock = \Mockery::mock(\Illuminate\Contracts\Cache\Lock::class);
+        $lockMock->shouldReceive('get')->andReturn(true);
+        $lockMock->shouldReceive('release');
+
+        Cache::shouldReceive('lock')
+            ->with('lock::ids::custom_log_paths_add', 30)
+            ->andReturn($lockMock);
+
+        Cache::shouldReceive('get')
+            ->with('ids::custom_log_paths', [])
+            ->andReturn([]);
+
         Cache::shouldReceive('forever')
             ->once()
-            ->with('ids_custom_log_paths', [$tempPath]);
+            ->with('ids::custom_log_paths', [$tempPath]);
 
         try {
             file_put_contents($tempPath, 'test log content');
@@ -55,7 +69,7 @@ class LogDiscoveryServiceTest extends TestCase
 
             $this->assertTrue($result);
         } finally {
-            if (is_file($tempPath)) {
+            if (isset($tempPath) && is_file($tempPath)) {
                 unlink($tempPath);
             }
 
@@ -67,8 +81,20 @@ class LogDiscoveryServiceTest extends TestCase
     {
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
-        $this->assertNotEmpty($tempPath);
+        $this->assertIsString($tempPath);
         $this->assertFileExists($tempPath);
+
+        $lockMock = \Mockery::mock(\Illuminate\Contracts\Cache\Lock::class);
+        $lockMock->shouldReceive('get')->andReturn(true);
+        $lockMock->shouldReceive('release');
+
+        Cache::shouldReceive('lock')
+            ->with('lock::ids::custom_log_paths_add', 30)
+            ->andReturn($lockMock);
+
+        Cache::shouldReceive('get')
+            ->with('ids::custom_log_paths', [])
+            ->andReturn([]);
 
         Cache::shouldReceive('forever')->never();
 
@@ -84,7 +110,7 @@ class LogDiscoveryServiceTest extends TestCase
 
             $this->assertTrue($result);
         } finally {
-            if (is_file($tempPath)) {
+            if (isset($tempPath) && is_file($tempPath)) {
                 unlink($tempPath);
             }
 
