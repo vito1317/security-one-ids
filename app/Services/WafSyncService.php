@@ -182,6 +182,7 @@ class WafSyncService
         throw new \RuntimeException('CA certificate bundle missing: ' . $bundledPath);
 
 --- Resolution #7 ---
+        throw new \RuntimeException('CA certificate bundle missing: ' . $bundledPath);
         }
 
         return $http;
@@ -1660,10 +1661,10 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $consoleUser)) ?? '';
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$safeConsoleUser}\n", FILE_APPEND);
-<<<<<<< /tmp/merge_ours_melrkiso13u56iLJCUD
+<<<<<<< /tmp/merge_ours_meou9hr9tnjk0DT6Xcf
 
 =======
-<<<<<<< /tmp/merge_ours_2rfhauq58r1rdkfm2r9
+<<<<<<< /tmp/merge_ours_njjnk8lisi9s895zIIg
 
 =======
 <<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
@@ -1671,18 +1672,18 @@ class WafSyncService
 =======
 
 >>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
->>>>>>> /tmp/merge_theirs_f0ci788q1a2b1sJCyoe
->>>>>>> /tmp/merge_theirs_sg4vbeftvqu70xuJhr1
+>>>>>>> /tmp/merge_theirs_k46rghqqv4clflgb6v8
+>>>>>>> /tmp/merge_theirs_5edgbt186gbj9D5OdOH
                 if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
                     exec("sudo dscl . -create /Users/{$safeConsoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$safeConsoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
-<<<<<<< /tmp/merge_ours_melrkiso13u56iLJCUD
+<<<<<<< /tmp/merge_ours_meou9hr9tnjk0DT6Xcf
 
 =======
-<<<<<<< /tmp/merge_ours_2rfhauq58r1rdkfm2r9
+<<<<<<< /tmp/merge_ours_njjnk8lisi9s895zIIg
 
 =======
 <<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
@@ -1690,8 +1691,8 @@ class WafSyncService
 =======
 
 >>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
->>>>>>> /tmp/merge_theirs_f0ci788q1a2b1sJCyoe
->>>>>>> /tmp/merge_theirs_sg4vbeftvqu70xuJhr1
+>>>>>>> /tmp/merge_theirs_k46rghqqv4clflgb6v8
+>>>>>>> /tmp/merge_theirs_5edgbt186gbj9D5OdOH
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
                         exec("sudo pwpolicy -u {$safeConsoleUser} disableuser 2>&1", $output, $returnCode);
@@ -1705,9 +1706,9 @@ class WafSyncService
                     $method2Failed = $method1Failed && (!$pwpolicyDisableExecuted || $pwpolicyDisableResult !== 0);
                     if ($method2Failed) {
                         // Method 3: Set an impossible password hash
-<<<<<<< /tmp/merge_ours_melrkiso13u56iLJCUD
+<<<<<<< /tmp/merge_ours_meou9hr9tnjk0DT6Xcf
 =======
-<<<<<<< /tmp/merge_ours_2rfhauq58r1rdkfm2r9
+<<<<<<< /tmp/merge_ours_njjnk8lisi9s895zIIg
 =======
 <<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
 =======
@@ -1716,8 +1717,8 @@ class WafSyncService
 <<<<<<< /tmp/merge_ours_u81iq7qpqo38aDXt7RH
 >>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
 >>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
->>>>>>> /tmp/merge_theirs_f0ci788q1a2b1sJCyoe
->>>>>>> /tmp/merge_theirs_sg4vbeftvqu70xuJhr1
+>>>>>>> /tmp/merge_theirs_k46rghqqv4clflgb6v8
+>>>>>>> /tmp/merge_theirs_5edgbt186gbj9D5OdOH
                         exec("sudo dscl . -passwd /Users/{$safeConsoleUser} '*' 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
 =======
@@ -1795,7 +1796,7 @@ class WafSyncService
                 $failedUsers = [];
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-<<<<<<< /tmp/merge_ours_melrkiso13u56iLJCUD
+<<<<<<< /tmp/merge_ours_meou9hr9tnjk0DT6Xcf
                     if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
 
                     $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
@@ -1810,7 +1811,7 @@ class WafSyncService
                 }
 
 =======
-<<<<<<< /tmp/merge_ours_2rfhauq58r1rdkfm2r9
+<<<<<<< /tmp/merge_ours_njjnk8lisi9s895zIIg
                     if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
 
                     $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
@@ -1920,8 +1921,8 @@ class WafSyncService
 >>>>>>> /tmp/merge_theirs_6q4i18nt4r4r9x7qzdc
 >>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
 >>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
->>>>>>> /tmp/merge_theirs_f0ci788q1a2b1sJCyoe
->>>>>>> /tmp/merge_theirs_sg4vbeftvqu70xuJhr1
+>>>>>>> /tmp/merge_theirs_k46rghqqv4clflgb6v8
+>>>>>>> /tmp/merge_theirs_5edgbt186gbj9D5OdOH
             } else {
                 echo "✅ Enabling Linux user login...\n";
                 exec('for user in $(awk -F: \'$3 >= 1000 && $3 < 65534 {print $1}\' /etc/passwd); do passwd -u "$user" 2>/dev/null; done', $output, $returnCode);
@@ -3199,10 +3200,10 @@ class WafSyncService
                 return $path;
             }
         }
-<<<<<<< /tmp/merge_ours_melrkiso13u56iLJCUD
+<<<<<<< /tmp/merge_ours_meou9hr9tnjk0DT6Xcf
 
 =======
-<<<<<<< /tmp/merge_ours_2rfhauq58r1rdkfm2r9
+<<<<<<< /tmp/merge_ours_njjnk8lisi9s895zIIg
 
 =======
 <<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
@@ -3218,8 +3219,8 @@ class WafSyncService
 >>>>>>> /tmp/merge_theirs_6q4i18nt4r4r9x7qzdc
 >>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
 >>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
->>>>>>> /tmp/merge_theirs_f0ci788q1a2b1sJCyoe
->>>>>>> /tmp/merge_theirs_sg4vbeftvqu70xuJhr1
+>>>>>>> /tmp/merge_theirs_k46rghqqv4clflgb6v8
+>>>>>>> /tmp/merge_theirs_5edgbt186gbj9D5OdOH
         // If not found, use bundled certificate
         $bundledPath = base_path('resources/certs/cacert.pem');
         if (file_exists($bundledPath)) {
@@ -3228,10 +3229,10 @@ class WafSyncService
         }
 
         Log::error('CA certificate bundle missing: ' . $bundledPath);
-<<<<<<< /tmp/merge_ours_melrkiso13u56iLJCUD
+<<<<<<< /tmp/merge_ours_meou9hr9tnjk0DT6Xcf
         throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
 =======
-<<<<<<< /tmp/merge_ours_2rfhauq58r1rdkfm2r9
+<<<<<<< /tmp/merge_ours_njjnk8lisi9s895zIIg
         throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
 =======
 <<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
@@ -3247,8 +3248,8 @@ class WafSyncService
 >>>>>>> /tmp/merge_theirs_6q4i18nt4r4r9x7qzdc
 >>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
 >>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
->>>>>>> /tmp/merge_theirs_f0ci788q1a2b1sJCyoe
->>>>>>> /tmp/merge_theirs_sg4vbeftvqu70xuJhr1
+>>>>>>> /tmp/merge_theirs_k46rghqqv4clflgb6v8
+>>>>>>> /tmp/merge_theirs_5edgbt186gbj9D5OdOH
     }
 
     /**
