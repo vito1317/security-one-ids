@@ -298,9 +298,17 @@ class LogDiscoveryService
     }
 
     /**
-     * Add a custom log path to monitor
+     * Common cache lock key to prevent concurrent operations overriding each other
      */
-    public function addCustomPath(string $path): bool
+    private const CUSTOM_PATHS_LOCK_KEY = 'custom_log_paths_lock';
+
+    /**
+     * Add a custom log path to monitor
+     *
+     * @param string $path
+     * @return bool|string True on success, false if unreadable, 'LOCK_FAILED' if lock acquisition failed
+     */
+    public function addCustomPath(string $path)
     {
         if (!is_readable($path)) {
             return false;
@@ -311,7 +319,7 @@ class LogDiscoveryService
         $lock = null;
 
         try {
-            $lock = cache()->lock('add_custom_log_path', 10);
+            $lock = cache()->lock(self::CUSTOM_PATHS_LOCK_KEY, 10);
             for ($i = 0; $i < 10; $i++) {
                 if ($lock->get()) {
                     $acquired = true;
@@ -321,12 +329,12 @@ class LogDiscoveryService
                 $delayMicroseconds *= 2;
             }
         } catch (\Exception $e) {
-            // Log warning or proceed, handled by fallback
             Log::warning("Cache lock failed during addCustomPath: " . $e->getMessage());
         }
 
         if (!$acquired) {
-            return false;
+            Log::warning('addCustomPath lock contention, failing gracefully', ['path' => $path]);
+            return 'LOCK_FAILED';
         }
 
         try {
@@ -362,7 +370,7 @@ class LogDiscoveryService
             $lock = null;
 
             try {
-                $lock = cache()->lock('migrate_custom_log_paths', 10);
+                $lock = cache()->lock(self::CUSTOM_PATHS_LOCK_KEY, 10);
                 for ($i = 0; $i < 10; $i++) {
                     if ($lock->get()) {
                         $acquired = true;
