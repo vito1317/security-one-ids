@@ -13,6 +13,10 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
+    private const LOCK_TIMEOUT = 5;
+    private const LOCK_BLOCK_SECONDS = 3;
+    private const MAX_RETRIES = 3;
+
     /**
      * Common web server log file locations to scan
      */
@@ -307,26 +311,43 @@ class LogDiscoveryService
             return false;
         }
 
-        try {
-            return Cache::lock('add_custom_path_lock', 10)->block(5, function () use ($path) {
-                $cachedPaths = $this->getCustomPaths();
+        $attempts = 0;
 
-                if (!in_array($path, $cachedPaths, true)) {
-                    $cachedPaths[] = $path;
-                    // Store in cache for persistence
-                    cache()->forever('ids.custom_log_paths', $cachedPaths);
+        while ($attempts < self::MAX_RETRIES) {
+            try {
+                return Cache::lock('add_custom_path_lock', self::LOCK_TIMEOUT)->block(self::LOCK_BLOCK_SECONDS, function () use ($path) {
+                    $cachedPaths = $this->getCustomPaths();
+
+                    if (!in_array($path, $cachedPaths, true)) {
+                        $cachedPaths[] = $path;
+                        // Store in cache for persistence
+                        cache()->forever('ids.custom_log_paths', $cachedPaths);
+                    }
+
+                    return true;
+                });
+            } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+                $attempts++;
+                if ($attempts >= self::MAX_RETRIES) {
+                    Log::warning('Failed to acquire lock when adding custom log path after retries', [
+                        'path' => $path,
+                        'error' => $e->getMessage(),
+                    ]);
+                    return false;
                 }
 
-                return true;
-            });
-        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-            Log::warning('Failed to acquire lock when adding custom log path', [
-                'path' => $path,
-                'error' => $e->getMessage(),
-            ]);
-
-            return false;
+                // Exponential backoff
+                usleep((2 ** $attempts) * 100000); // 200ms, 400ms...
+            } catch (\Exception $e) {
+                Log::warning('Unexpected cache error when adding custom log path', [
+                    'path' => $path,
+                    'error' => $e->getMessage(),
+                ]);
+                return false;
+            }
         }
+
+        return false;
     }
 
     /**
