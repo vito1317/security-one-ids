@@ -6,7 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Log;
 
-class SystemUpdateController extends Controller
+class SystemUpdateController extends \App\Http\Controllers\Controller
 {
     /**
      * Trigger system update (git pull + rebuild)
