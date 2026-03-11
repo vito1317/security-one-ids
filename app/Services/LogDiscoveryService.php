@@ -361,7 +361,7 @@ $lock = null;
             } else {
                 return false;
             }
-} catch (\Throwable $e) {
+} catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
             return false;
         } finally {
@@ -456,7 +456,6 @@ $configPaths = config('ids.custom_log_paths', []);
                 }
             } else {
                 self::$migrated = true; // No legacy keys exist
-            }
         }
 
         return cache()->get($newKey, []);
