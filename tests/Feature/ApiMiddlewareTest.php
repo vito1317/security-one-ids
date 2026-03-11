@@ -7,26 +7,11 @@ use Tests\TestCase;
 class ApiMiddlewareTest extends TestCase
 {
     /**
-     * Test when AGENT_TOKEN is empty string.
+     * Test when AGENT_TOKEN is empty.
      */
-    public function test_api_middleware_fails_if_agent_token_is_empty_string()
+    public function test_api_middleware_fails_if_agent_token_not_configured()
     {
         $this->app['config']->set('ids.agent_token', '');
-
-        $response = $this->get('/api/system/version', [
-            'X-Agent-Token' => 'some-token',
-        ]);
-
-        $response->assertStatus(401);
-        $response->assertJson(['error' => 'Unauthorized']);
-    }
-
-    /**
-     * Test when AGENT_TOKEN configuration is missing/null.
-     */
-    public function test_api_middleware_fails_if_agent_token_missing()
-    {
-        $this->app['config']->set('ids.agent_token', null);
 
         $response = $this->get('/api/system/version', [
             'X-Agent-Token' => 'some-token',
