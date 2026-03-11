@@ -20,7 +20,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        $this->ensureAgentTokenConfigured();
+$this->ensureAgentTokenConfigured();
     }
 
     /**
@@ -35,6 +35,8 @@ class AppServiceProvider extends ServiceProvider
             }
 
             \Illuminate\Support\Facades\Log::warning('AGENT_TOKEN is empty in production environment during console command. This may lead to an insecure configuration cache.');
+        }
+    }
         }
     }
 }
