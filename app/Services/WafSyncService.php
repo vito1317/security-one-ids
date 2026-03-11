@@ -182,7 +182,6 @@ class WafSyncService
         throw new \RuntimeException('CA certificate bundle missing: ' . $bundledPath);
 
 --- Resolution #7 ---
-        throw new \RuntimeException('CA certificate bundle missing: ' . $bundledPath);
         }
 
         return $http;
@@ -1657,79 +1656,46 @@ class WafSyncService
             } elseif (PHP_OS_FAMILY === 'Darwin') {
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
-<<<<<<< /tmp/merge_ours_c3ln9nqfnu6q5bRafDt
+<<<<<<< /tmp/merge_ours_4jb8t6bsc9eu0ybtshr
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $consoleUser)) ?? '';
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$safeConsoleUser}\n", FILE_APPEND);
-<<<<<<< /tmp/merge_ours_v5isauecfhjoelXyYyP
+<<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
 
 =======
 
->>>>>>> /tmp/merge_theirs_akoi421f8ppa7RIS0jR
+>>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
                 if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
                     exec("sudo dscl . -create /Users/{$safeConsoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$safeConsoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
-<<<<<<< /tmp/merge_ours_v5isauecfhjoelXyYyP
+<<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
 
 =======
 
->>>>>>> /tmp/merge_theirs_akoi421f8ppa7RIS0jR
+>>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
                         exec("sudo pwpolicy -u {$safeConsoleUser} disableuser 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
 =======
-                $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                $cleanUser = preg_replace('/[\r\n]+/', ' ', $user);
-                file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
-
-                if ($cleanUser && preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
-                    $dsclDisableExecuted = false;
-                    $dsclDisableResult = null;
-                    $pwpolicyDisableExecuted = false;
-                    $pwpolicyDisableResult = null;
-                    $dsclPasswdResult = null;
-
-                    // Method 1: Use dscl to disable user account
-                    // The correct way is to set AuthenticationAuthority to DisabledUser
-                    try {
-                        $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-create', '/Users/' . $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
-                        $process1->setTimeout(60);
-                        $process1->run();
-                        $dsclDisableExecuted = true;
-                        $dsclDisableResult = $process1->getExitCode() ?? 1;
-                        $outputStr = trim($process1->getOutput() . ' ' . $process1->getErrorOutput());
-                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$dsclDisableResult}, output={$outputStr}\n", FILE_APPEND);
-                    } catch (\Exception $e) {
-                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
-                    }
-
-                    $method1Failed = !$dsclDisableExecuted || $dsclDisableResult !== 0;
-                    if ($method1Failed) {
-                        // Method 2: Lock the user's password (they won't be able to login)
-                        try {
-                            $process2 = new SymfonyProcess(['sudo', 'pwpolicy', '-u', $cleanUser, 'disableuser']);
-                            $process2->setTimeout(60);
-                            $process2->run();
-                            $pwpolicyDisableExecuted = true;
-                            $pwpolicyDisableResult = $process2->getExitCode() ?? 1;
-                            file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser}: code={$pwpolicyDisableResult}\n", FILE_APPEND);
-                        } catch (\Exception $e) {
-                            file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
-                        }
->>>>>>> /tmp/merge_theirs_1qrolpo4teuu7GTdwcG
+--- Resolution #6 ---
+        throw new \RuntimeException('CA certificate bundle missing: ' . $bundledPath);
+>>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
                     }
 
                     $method2Failed = $method1Failed && (!$pwpolicyDisableExecuted || $pwpolicyDisableResult !== 0);
                     if ($method2Failed) {
                         // Method 3: Set an impossible password hash
-<<<<<<< /tmp/merge_ours_v5isauecfhjoelXyYyP
+<<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
 =======
-<<<<<<< /tmp/merge_ours_c3ln9nqfnu6q5bRafDt
->>>>>>> /tmp/merge_theirs_akoi421f8ppa7RIS0jR
+<<<<<<< /tmp/merge_ours_4jb8t6bsc9eu0ybtshr
+=======
+<<<<<<< /tmp/merge_ours_u81iq7qpqo38aDXt7RH
+>>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
+>>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
                         exec("sudo dscl . -passwd /Users/{$safeConsoleUser} '*' 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
 =======
@@ -1747,7 +1713,7 @@ class WafSyncService
                     $method3Failed = $method2Failed && $dsclPasswdResult !== 0;
                     if ($method3Failed) {
                         Log::error("Critical failure: Could not disable user {$cleanUser} via any method.");
->>>>>>> /tmp/merge_theirs_1qrolpo4teuu7GTdwcG
+>>>>>>> /tmp/merge_theirs_6q4i18nt4r4r9x7qzdc
                     }
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
@@ -1807,7 +1773,7 @@ class WafSyncService
                 $failedUsers = [];
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-<<<<<<< /tmp/merge_ours_v5isauecfhjoelXyYyP
+<<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
                     if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
 
                     $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
@@ -1822,7 +1788,22 @@ class WafSyncService
                 }
 
 =======
-<<<<<<< /tmp/merge_ours_c3ln9nqfnu6q5bRafDt
+<<<<<<< /tmp/merge_ours_4jb8t6bsc9eu0ybtshr
+                    if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
+
+                    $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
+
+                    // Remove DisabledUser from AuthenticationAuthority
+                    exec("sudo dscl . -delete /Users/{$safeUser} AuthenticationAuthority 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$safeUser}: code={$returnCode}\n", FILE_APPEND);
+
+                    // Re-enable with pwpolicy
+                    exec("sudo pwpolicy -u {$safeUser} enableuser 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$safeUser}: code={$returnCode}\n", FILE_APPEND);
+                }
+
+=======
+<<<<<<< /tmp/merge_ours_u81iq7qpqo38aDXt7RH
                     if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
 
                     $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
@@ -1884,8 +1865,9 @@ class WafSyncService
                     Log::error("Critical failure: Could not enable the following users: " . implode(', ', $failedUsers));
                 }
 
->>>>>>> /tmp/merge_theirs_1qrolpo4teuu7GTdwcG
->>>>>>> /tmp/merge_theirs_akoi421f8ppa7RIS0jR
+>>>>>>> /tmp/merge_theirs_6q4i18nt4r4r9x7qzdc
+>>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
+>>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
             } else {
                 echo "✅ Enabling Linux user login...\n";
                 exec('for user in $(awk -F: \'$3 >= 1000 && $3 < 65534 {print $1}\' /etc/passwd); do passwd -u "$user" 2>/dev/null; done', $output, $returnCode);
@@ -3163,15 +3145,19 @@ class WafSyncService
                 return $path;
             }
         }
-<<<<<<< /tmp/merge_ours_v5isauecfhjoelXyYyP
+<<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
 
 =======
-<<<<<<< /tmp/merge_ours_c3ln9nqfnu6q5bRafDt
+<<<<<<< /tmp/merge_ours_4jb8t6bsc9eu0ybtshr
+
+=======
+<<<<<<< /tmp/merge_ours_u81iq7qpqo38aDXt7RH
 
 =======
 
->>>>>>> /tmp/merge_theirs_1qrolpo4teuu7GTdwcG
->>>>>>> /tmp/merge_theirs_akoi421f8ppa7RIS0jR
+>>>>>>> /tmp/merge_theirs_6q4i18nt4r4r9x7qzdc
+>>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
+>>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
         // If not found, use bundled certificate
         $bundledPath = base_path('resources/certs/cacert.pem');
         if (file_exists($bundledPath)) {
@@ -3180,15 +3166,19 @@ class WafSyncService
         }
 
         Log::error('CA certificate bundle missing: ' . $bundledPath);
-<<<<<<< /tmp/merge_ours_v5isauecfhjoelXyYyP
+<<<<<<< /tmp/merge_ours_n49vr5ofbf429AQPTlD
         throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
 =======
-<<<<<<< /tmp/merge_ours_c3ln9nqfnu6q5bRafDt
+<<<<<<< /tmp/merge_ours_4jb8t6bsc9eu0ybtshr
+        throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
+=======
+<<<<<<< /tmp/merge_ours_u81iq7qpqo38aDXt7RH
         throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
 =======
         throw new \RuntimeException('CA certificate bundle missing: ' . $bundledPath);
->>>>>>> /tmp/merge_theirs_1qrolpo4teuu7GTdwcG
->>>>>>> /tmp/merge_theirs_akoi421f8ppa7RIS0jR
+>>>>>>> /tmp/merge_theirs_6q4i18nt4r4r9x7qzdc
+>>>>>>> /tmp/merge_theirs_m67ese14579b7L0iQ7v
+>>>>>>> /tmp/merge_theirs_aoffehleid9sfDTy1He
     }
 
     /**
