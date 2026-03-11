@@ -12,9 +12,6 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
-    public static bool $migrated = false;
-    private const LOCK_TIMEOUT = 30;
-
     /**
      * Common web server log file locations to scan
      */
@@ -309,40 +306,15 @@ class LogDiscoveryService
             return false;
         }
 
-$lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
-        $acquired = false;
-        $delayMicroseconds = 10000;
+        $configPaths = config('ids.custom_log_paths', []);
+        $cachedPaths = $this->getCustomPaths();
 
-        try {
-            for ($i = 0; $i < 10; $i++) {
-                if ($acquired = $lock->get()) {
-                    break;
-                }
-                usleep($delayMicroseconds);
-                $delayMicroseconds = min($delayMicroseconds * 2, 100000);
-            }
+        $unifiedList = array_values(array_unique(array_merge($configPaths, $cachedPaths)));
 
-            if ($acquired) {
-                $cachedPaths = $this->getCustomPaths();
-                $configPaths = config('ids.custom_log_paths', []);
-
-                $unifiedList = array_values(array_unique(array_merge($cachedPaths, $configPaths)));
-
-                if (!in_array($path, $unifiedList, true)) {
-                    $cachedPaths[] = $path;
-                    // Store only dynamically added items in the cache
-                    cache()->forever('ids::custom_log_paths', array_values(array_unique($cachedPaths)));
-                }
-            } else {
-                return false;
-            }
-        } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
-            return false;
-        } finally {
-            if ($acquired) {
-                $lock->release();
-            }
+        if (!in_array($path, $unifiedList, true)) {
+            $cachedPaths[] = $path;
+            // Store only dynamically added items in the cache
+            cache()->forever('ids::custom_log_paths', array_values(array_unique($cachedPaths)));
         }
 
         return true;
@@ -353,7 +325,7 @@ $lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
      */
     public function getCustomPaths(): array
     {
-$hasLegacy1 = cache()->has('ids_custom_log_paths');
+        $hasLegacy1 = cache()->has('ids_custom_log_paths');
         $hasLegacy2 = cache()->has('ids.custom_log_paths');
 
         if ($hasLegacy1 || $hasLegacy2) {
