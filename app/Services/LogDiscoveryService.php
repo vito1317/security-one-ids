@@ -318,9 +318,6 @@ class LogDiscoveryService
         // Store in cache for persistence
         cache()->forever('ids_custom_log_paths', $cachedPaths);
 
-        $configPaths[] = $path;
-        config(['ids.custom_log_paths' => $configPaths]);
-
         return true;
     }
 
