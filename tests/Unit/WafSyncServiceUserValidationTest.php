@@ -2,7 +2,7 @@
 
 namespace Tests\Unit;
 
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 class WafSyncServiceUserValidationTest extends TestCase
 {
@@ -11,10 +11,14 @@ class WafSyncServiceUserValidationTest extends TestCase
      */
     public function testValidMacOsUsernames()
     {
-        $this->assertTrue((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'john.doe'));
-        $this->assertTrue((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'user_123'));
-        $this->assertTrue((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin-user'));
-        $this->assertTrue((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'johndoe'));
+        // Use reflection to bypass constructor which reads .env
+        $reflection = new \ReflectionClass(\App\Services\WafSyncService::class);
+        $service = $reflection->newInstanceWithoutConstructor();
+
+        $this->assertTrue($service->isValidMacOsUsername('john.doe'));
+        $this->assertTrue($service->isValidMacOsUsername('user_123'));
+        $this->assertTrue($service->isValidMacOsUsername('admin-user'));
+        $this->assertTrue($service->isValidMacOsUsername('johndoe'));
     }
 
     /**
@@ -23,17 +27,20 @@ class WafSyncServiceUserValidationTest extends TestCase
      */
     public function testInvalidMacOsUsernames()
     {
+        $reflection = new \ReflectionClass(\App\Services\WafSyncService::class);
+        $service = $reflection->newInstanceWithoutConstructor();
+
         // Reject spaces
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'john doe'));
+        $this->assertFalse($service->isValidMacOsUsername('john doe'));
 
         // Reject quotes and shell metacharacters
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'user"name'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', "user'name"));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin;ls'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin|ls'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin&ls'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin$user'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin`ls`'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin>file'));
+        $this->assertFalse($service->isValidMacOsUsername('user"name'));
+        $this->assertFalse($service->isValidMacOsUsername("user'name"));
+        $this->assertFalse($service->isValidMacOsUsername('admin;ls'));
+        $this->assertFalse($service->isValidMacOsUsername('admin|ls'));
+        $this->assertFalse($service->isValidMacOsUsername('admin&ls'));
+        $this->assertFalse($service->isValidMacOsUsername('admin$user'));
+        $this->assertFalse($service->isValidMacOsUsername('admin`ls`'));
+        $this->assertFalse($service->isValidMacOsUsername('admin>file'));
     }
 }

@@ -9,6 +9,14 @@ use Illuminate\Support\Facades\Artisan;
 
 class WafSyncService
 {
+    /**
+     * Validate macOS username against a strict regex to prevent shell injection
+     */
+    public function isValidMacOsUsername(string $username): bool
+    {
+        return (bool) preg_match('/^[a-zA-Z0-9_.-]+$/', $username);
+    }
+
     protected string $wafUrl;
     protected string $agentToken;
     protected string $agentName;
@@ -1540,7 +1548,7 @@ class WafSyncService
                 $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $consoleUser)) ?? '';
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$safeConsoleUser}\n", FILE_APPEND);
 
-                if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                if ($consoleUser && $this->isValidMacOsUsername($consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
@@ -1615,7 +1623,7 @@ class WafSyncService
 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
+                    if (!$user || !$this->isValidMacOsUsername($user)) continue;
 
                     $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
 
