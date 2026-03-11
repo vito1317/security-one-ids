@@ -1545,21 +1545,16 @@ class WafSyncService
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
                 if (!$consoleUser || $consoleUser === 'root' || $consoleUser === '_mbsetupuser') {
-                    file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
-                    
-                    echo "✅ Login disabled\n";
-                    Log::info('Login disabled');
-                    file_put_contents($logFile, "[{$timestamp}] Login disabled successfully\n", FILE_APPEND);
+                    echo "⚠️ No valid console user found; action skipped\n";
+                    Log::warning('No valid console user found; action skipped');
+                    file_put_contents($logFile, "[{$timestamp}] No valid console user found; action skipped\n", FILE_APPEND);
                     return;
                 }
 
                 if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser)) {
+                    echo "⚠️ No valid console user found; action skipped\n";
                     Log::warning("Skipping macOS user disable: invalid username format '{$consoleUser}'");
                     file_put_contents($logFile, "[{$timestamp}] Invalid username format for {$consoleUser}, skipping\n", FILE_APPEND);
-                    
-                    echo "✅ Login disabled\n";
-                    Log::info('Login disabled');
-                    file_put_contents($logFile, "[{$timestamp}] Login disabled successfully\n", FILE_APPEND);
                     return;
                 }
 
