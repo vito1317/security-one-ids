@@ -24,11 +24,7 @@ class AgentAuth
             $token = $request->input('token');
         }
 
-        $agentTokenEnv = env('AGENT_TOKEN');
-        // If env('AGENT_TOKEN') is explicitly set to an empty string, it won't be strictly null,
-        // so we need to fallback to config if it's strictly empty or null,
-        // while preserving '0' which is not strictly empty.
-        $agentToken = (string) ($agentTokenEnv !== null && $agentTokenEnv !== '' ? $agentTokenEnv : config('ids.agent_token', ''));
+        $agentToken = (string) config('ids.agent_token', '');
 
         // To prevent information leakage (e.g., revealing via different response times
         // or codes that the system is misconfigured), we enforce a generic 401 response

@@ -354,12 +354,11 @@ class LogDiscoveryService
     public function getCustomPaths(): array
     {
         $newKey = 'ids::custom_log_paths';
+        $legacyKeys = ['ids_custom_log_paths', 'ids.custom_log_paths'];
 
-        if (self::$migrated) {
+        if (self::$migrated && !cache()->has('ids_custom_log_paths') && !cache()->has('ids.custom_log_paths')) {
             return cache()->get($newKey, []);
         }
-
-        $legacyKeys = ['ids_custom_log_paths', 'ids.custom_log_paths'];
 
         $needsMigration = false;
         foreach ($legacyKeys as $legacyKey) {
