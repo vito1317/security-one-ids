@@ -327,15 +327,25 @@ $configPaths = config('ids.custom_log_paths', []);
      */
     public function getCustomPaths(): array
     {
-$newKey = 'ids::custom_log_paths';
+$paths = cache()->get('ids.custom_log_paths', []);
+
+        // Legacy keys to migrate from previous versions:
+        // 'ids_custom_log_paths' was the original key structure.
+        // 'ids::custom_log_paths' was briefly used before standardizing on dot notation.
+        $legacyKeys = ['ids_custom_log_paths', 'ids::custom_log_paths'];
+        $needsMigration = false;
 
         if (self::$migrated) {
-            return cache()->get($newKey, []);
+            return $paths;
         }
 
-        $legacyKeys = ['ids_custom_log_paths', 'ids.custom_log_paths'];
-
-        $needsMigration = false;
+        // Check for legacy keys to trigger migration logic below
+        foreach ($legacyKeys as $legacyKey) {
+            if (cache()->has($legacyKey)) {
+                $needsMigration = true;
+                break;
+            }
+        }
         foreach ($legacyKeys as $legacyKey) {
             if (cache()->has($legacyKey)) {
                 $needsMigration = true;
@@ -345,39 +355,40 @@ $newKey = 'ids::custom_log_paths';
 
         if ($needsMigration) {
 try {
-                $lock = cache()->lock('ids.custom_log_paths_migration_lock', 5);
-                $acquired = $lock->get();
+            $lock = cache()->lock('ids.custom_log_paths_migration_lock', 5);
+            $acquired = $lock->get();
 
-                if ($acquired) {
-                    try {
-                        // Always fetch latest paths inside lock
-                        $paths = cache()->get('ids.custom_log_paths', []);
-                        $migrated = false;
-
-                        foreach ($legacyKeys as $legacyKey) {
-                            if (cache()->has($legacyKey)) {
-                                $legacyPaths = cache()->get($legacyKey, []);
-                                $paths = array_values(array_unique(array_merge($paths, $legacyPaths)));
-                                cache()->forget($legacyKey);
-                                $migrated = true;
-                            }
-                        }
-
-                        if ($migrated) {
-                            cache()->forever('ids.custom_log_paths', $paths);
-                        }
-                    } finally {
-                        $lock->release();
-                    }
-                } else {
-                    // Re-fetch in case another process migrated it while we were waiting
+            if ($acquired) {
+                try {
+                    // Always fetch latest paths inside lock
                     $paths = cache()->get('ids.custom_log_paths', []);
+                    $migrated = false;
+
+                    foreach ($legacyKeys as $legacyKey) {
+                        if (cache()->has($legacyKey)) {
+                            $legacyPaths = cache()->get($legacyKey, []);
+                            $paths = array_values(array_unique(array_merge($paths, $legacyPaths)));
+                            cache()->forget($legacyKey);
+                            $migrated = true;
+                        }
+                    }
+
+                    if ($migrated) {
+                        cache()->forever('ids.custom_log_paths', $paths);
+                    }
+                } finally {
+                    $lock->release();
                 }
-            } catch (\Exception $e) {
-                // Handle cache infrastructure failures gracefully
-                Log::warning('Failed to acquire cache lock or migrate legacy custom log paths: ' . $e->getMessage());
+            } else {
+                // Re-fetch in case another process migrated it while we were waiting
+                $paths = cache()->get('ids.custom_log_paths', []);
             }
+        } catch (\Exception $e) {
+            // Handle cache infrastructure failures gracefully
+            \Illuminate\Support\Facades\Log::warning('Failed to acquire cache lock or migrate legacy custom log paths: ' . $e->getMessage());
         }
+
+        self::$migrated = true;
 
         return $paths;
     }
