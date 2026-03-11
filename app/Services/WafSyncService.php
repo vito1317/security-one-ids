@@ -1548,19 +1548,22 @@ class WafSyncService
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
+                    $returnCode1 = 0;
+                    $returnCode2 = 0;
+                    $returnCode3 = 0;
                     $escapedUser = escapeshellarg($consoleUser);
-                    exec("sudo dscl . -create /Users/{$escapedUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode1);
+                    exec('sudo dscl . -create /Users/' . $escapedUser . ' AuthenticationAuthority \';DisabledUser;\' 2>&1', $output, $returnCode1);
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode1}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
                     
                     if ($returnCode1 !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
-                        exec("sudo pwpolicy -u {$escapedUser} disableuser 2>&1", $output, $returnCode2);
+                        exec('sudo pwpolicy -u ' . $escapedUser . ' disableuser 2>&1', $output, $returnCode2);
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode2}\n", FILE_APPEND);
                     }
                     
-                    if (($returnCode1 !== 0) && (!isset($returnCode2) || $returnCode2 !== 0)) {
+                    if ($returnCode1 !== 0 && $returnCode2 !== 0) {
                         // Method 3: Set an impossible password hash
-                        exec("sudo dscl . -passwd /Users/{$escapedUser} '*' 2>&1", $output, $returnCode3);
+                        exec('sudo dscl . -passwd /Users/' . $escapedUser . ' \'*\' 2>&1', $output, $returnCode3);
                         file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode3}\n", FILE_APPEND);
                     }
                 } else {
