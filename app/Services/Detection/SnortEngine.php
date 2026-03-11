@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Process;
  */
 class SnortEngine
 {
-    use App\Traits\DetectsPlatform;
+    use \App\Traits\DetectsPlatform;
 
     private string $snortPath;
     private string $configPath;

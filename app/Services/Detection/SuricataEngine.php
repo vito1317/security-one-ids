@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Process;
  */
 class SuricataEngine
 {
-    use App\Traits\DetectsPlatform;
+    use \App\Traits\DetectsPlatform;
 
     private string $suricataPath;
     private string $configPath;
