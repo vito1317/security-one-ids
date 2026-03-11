@@ -350,8 +350,13 @@ class LogDiscoveryService
         }
 
         // Fallback: check if another process succeeded while we failed to get the lock or if an exception occurred
-        $cachedPaths = $this->getCustomPaths();
-        if (!in_array($path, $cachedPaths, true)) {
+        try {
+            $cachedPaths = $this->getCustomPaths();
+            if (!in_array($path, $cachedPaths, true)) {
+                return false;
+            }
+        } catch (\Exception $e) {
+            Log::warning('Cache exception in addCustomPath fallback: ' . $e->getMessage());
             return false;
         }
 
