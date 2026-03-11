@@ -2,15 +2,9 @@
 
 namespace App\Services\Detection;
 
-<<<<<<< HEAD
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Process;
-=======
 use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
-use App\Traits\DetectsPlatform;
->>>>>>> origin/main
 
 /**
  * Snort 3 IPS Detection Engine
@@ -1748,13 +1742,6 @@ LUA;
         return null;
     }
 
-<<<<<<< HEAD
-    private function isWindows(): bool
-    {
-        return PHP_OS_FAMILY === 'Windows';
-    }
-
-=======
 >>>>>>> origin/main
     /**
      * Fix log directory permissions so non-root PHP agent can read alert files.

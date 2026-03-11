@@ -2,15 +2,9 @@
 
 namespace App\Services\Detection;
 
-<<<<<<< HEAD
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Process;
-=======
 use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
-use App\Traits\DetectsPlatform;
->>>>>>> origin/main
 
 /**
  * Suricata IDS/IPS Detection Engine
@@ -1042,13 +1036,6 @@ YAML;
         };
     }
 
-<<<<<<< HEAD
-    private function isWindows(): bool
-    {
-        return PHP_OS_FAMILY === 'Windows';
-    }
-
-=======
 >>>>>>> origin/main
     private function detectLinuxDistro(): string
     {
