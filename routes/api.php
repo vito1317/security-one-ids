@@ -13,13 +13,6 @@ Route::middleware(\App\Http\Middleware\VerifyAgentToken::class)->group(function 
     Route::post('/rules/update', function (\Illuminate\Http\Request $request) {
         $globalRules = $request->input('global_rules', []);
         $agentRules = $request->input('agent_rules', []);
---- Resolution #1 ---
-
---- Resolution #2 ---
-
---- Resolution #3 ---
-
---- Resolution #4 ---
         // Save rules to local storage
         $rulesPath = storage_path('app/ids_rules.json');
         file_put_contents($rulesPath, json_encode([
@@ -27,18 +20,10 @@ Route::middleware(\App\Http\Middleware\VerifyAgentToken::class)->group(function 
             'agent_rules' => $agentRules,
             'updated_at' => now()->toIso8601String(),
         ], JSON_PRETTY_PRINT));
-<<<<<<< /tmp/merge_ours_30e8s3qe65bsbilwLR7
-
-=======
->>>>>>> /tmp/merge_theirs_lb3sjqe5guvu6PwOk1n
         \Illuminate\Support\Facades\Log::info('Rules updated via API', [
             'global_count' => count($globalRules),
             'agent_count' => count($agentRules),
         ]);
-<<<<<<< /tmp/merge_ours_30e8s3qe65bsbilwLR7
-
-=======
->>>>>>> /tmp/merge_theirs_lb3sjqe5guvu6PwOk1n
         return response()->json(['success' => true, 'message' => 'Rules updated']);
     });
 
@@ -66,10 +51,6 @@ Route::middleware(\App\Http\Middleware\VerifyAgentToken::class)->group(function 
         if (isset($settings['ai_detection_enabled'])) {
             putenv('AI_DETECTION_ENABLED=' . ($settings['ai_detection_enabled'] ? 'true' : 'false'));
         }
-<<<<<<< /tmp/merge_ours_30e8s3qe65bsbilwLR7
-
-=======
->>>>>>> /tmp/merge_theirs_lb3sjqe5guvu6PwOk1n
         return response()->json([
             'success' => true,
             'message' => 'Settings synced',
