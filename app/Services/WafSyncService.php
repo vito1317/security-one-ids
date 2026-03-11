@@ -1548,19 +1548,58 @@ class WafSyncService
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
-                    exec("sudo dscl . -create /Users/{$consoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
-                    
+                    $returnCode = 0;
+                    $escapedUser = escapeshellarg($consoleUser);
+                    exec("sudo dscl . -create /Users/{$escapedUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    $outputStr = preg_replace('/[\r\n]+/', ' ', implode(" ", $output));
                     if ($returnCode !== 0) {
-                        // Method 2: Lock the user's password (they won't be able to login)
-                        exec("sudo pwpolicy -u {$consoleUser} disableuser 2>&1", $output, $returnCode);
-                        file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
+                        if (stripos($outputStr, 'already disabled') !== false || stripos($outputStr, 'is disabled') !== false) {
+                            file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: user already disabled\n", FILE_APPEND);
+                            $returnCode = 0;
+                        } else {
+                            file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser} command failed: code={$returnCode}, output={$outputStr}\n", FILE_APPEND);
+                        }
+                    } else {
+                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output={$outputStr}\n", FILE_APPEND);
                     }
                     
                     if ($returnCode !== 0) {
-                        // Method 3: Set an impossible password hash
-                        exec("sudo dscl . -passwd /Users/{$consoleUser} '*' 2>&1", $output, $returnCode);
-                        file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
+                        // Method 2: Lock the user's password (they won't be able to login)
+                        $output2 = [];
+                        $returnCode2 = 0;
+                        $escapedUser2 = escapeshellarg($consoleUser);
+                        exec("sudo pwpolicy -u {$escapedUser2} disableuser 2>&1", $output2, $returnCode2);
+                        $outputStr2 = preg_replace('/[\r\n]+/', ' ', implode(" ", $output2));
+                        if ($returnCode2 !== 0) {
+                            if (stripos($outputStr2, 'already disabled') !== false || stripos($outputStr2, 'is disabled') !== false) {
+                                file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$consoleUser}: user already disabled\n", FILE_APPEND);
+                                $returnCode2 = 0;
+                            } else {
+                                file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$consoleUser} command failed: code={$returnCode2}, output={$outputStr2}\n", FILE_APPEND);
+                            }
+                        } else {
+                            file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode2}\n", FILE_APPEND);
+                        }
+                        $returnCode = $returnCode2;
+                    }
+                    
+                    if ($returnCode !== 0) {
+                        // Method 3: Lock the account via PrimaryGroupID
+                        $output3 = [];
+                        $returnCode3 = 0;
+                        $escapedUser3 = escapeshellarg($consoleUser);
+                        exec("sudo dscl . -change /Users/{$escapedUser3} PrimaryGroupID 20 999 2>&1", $output3, $returnCode3);
+                        $outputStr3 = preg_replace('/[\r\n]+/', ' ', implode(" ", $output3));
+                        if ($returnCode3 !== 0) {
+                            if (stripos($outputStr3, 'already disabled') !== false || stripos($outputStr3, 'is disabled') !== false) {
+                                file_put_contents($logFile, "[{$timestamp}] dscl lock user {$consoleUser}: user already disabled\n", FILE_APPEND);
+                                $returnCode3 = 0;
+                            } else {
+                                file_put_contents($logFile, "[{$timestamp}] dscl lock user {$consoleUser} command failed: code={$returnCode3}, output={$outputStr3}\n", FILE_APPEND);
+                            }
+                        } else {
+                            file_put_contents($logFile, "[{$timestamp}] dscl lock account via PrimaryGroupID: code={$returnCode3}\n", FILE_APPEND);
+                        }
                     }
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
@@ -1628,6 +1667,14 @@ class WafSyncService
                     // Re-enable with pwpolicy  
                     exec("sudo pwpolicy -u {$user} enableuser 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$user}: code={$returnCode}\n", FILE_APPEND);
+
+                    // Unlock the account via PrimaryGroupID
+                    $output3 = [];
+                    $returnCode3 = 0;
+                    $escapedUser = escapeshellarg($user);
+                    exec("sudo dscl . -change /Users/{$escapedUser} PrimaryGroupID 999 20 2>&1", $output3, $returnCode3);
+                    $outputStr3 = preg_replace('/[\r\n]+/', ' ', implode(" ", $output3));
+                    file_put_contents($logFile, "[{$timestamp}] dscl unlock user {$user}: code={$returnCode3}, output={$outputStr3}\n", FILE_APPEND);
                 }
                 
             } else {
