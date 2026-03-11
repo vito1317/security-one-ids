@@ -1543,22 +1543,43 @@ class WafSyncService
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                $cleanUser = preg_replace('/[\r\n]+/', ' ', $user);
-                file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
                 
-                if ($cleanUser && preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
-                    $dsclDisableSuccess = false;
-                    $dsclDisableResult = null;
+                if ($user && preg_match('/^[a-zA-Z0-9._-]+$/', $user)) {
+                    $cleanUser = preg_replace('/[\r\n]+/', ' ', $user);
+                    file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
+
+                    if ($cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
+                        $dsclDisableSuccess = false;
+                        $dsclDisableResult = null;
                     $pwpolicyDisableSuccess = false;
                     $pwpolicyDisableResult = null;
                     $dsclPasswdSuccess = false;
                     $dsclPasswdResult = null;
 
+                    // Check if already disabled
+                    $authAuthority = [];
+                    exec("dscl . -read /Users/{$cleanUser} AuthenticationAuthority 2>/dev/null", $authAuthority);
+                    $isAlreadyDisabled = false;
+                    foreach ($authAuthority as $line) {
+                        if (strpos($line, 'DisabledUser') !== false) {
+                            $isAlreadyDisabled = true;
+                            break;
+                        }
+                    }
+
+                    if ($isAlreadyDisabled) {
+                        file_put_contents($logFile, "[{$timestamp}] User {$cleanUser} is already disabled, skipping dscl/pwpolicy\n", FILE_APPEND);
+                        $dsclDisableSuccess = true;
+                        $pwpolicyDisableSuccess = true;
+                        $dsclPasswdSuccess = true;
+                    }
+
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
-                    try {
-                        $process1 = new SymfonyProcess(['sudo', '-n', 'dscl', '.', '-create', '/Users/' . $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
-                        $process1->setTimeout(60);
+                    if (!$dsclDisableSuccess) {
+                        try {
+                            $process1 = new SymfonyProcess(['sudo', '-n', 'dscl', '.', '-create', '/Users/' . $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
+                            $process1->setTimeout(60);
                         $process1->run();
                         $dsclDisableSuccess = $process1->isSuccessful();
                         $dsclDisableResult = $process1->getExitCode() ?? 1;
@@ -1572,8 +1593,9 @@ class WafSyncService
                         $dsclDisableSuccess = false;
                         $dsclDisableResult = 1;
                         file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
-                        if (stripos($e->getMessage(), 'password') !== false || stripos($e->getMessage(), 'authentication') !== false) {
-                            Log::error("Sudo authentication failure while disabling user {$cleanUser} via dscl: " . $e->getMessage());
+                            if (stripos($e->getMessage(), 'password') !== false || stripos($e->getMessage(), 'authentication') !== false) {
+                                Log::error("Sudo authentication failure while disabling user {$cleanUser} via dscl: " . $e->getMessage());
+                            }
                         }
                     }
                     
@@ -1625,9 +1647,10 @@ class WafSyncService
                         }
                     }
 
-                    if (!$dsclDisableSuccess && !$pwpolicyDisableSuccess && !$dsclPasswdSuccess) {
-                        Log::error("Critical failure: Could not disable user {$cleanUser} via any available method.");
-                        throw new \Exception("Failed to completely disable macOS user login for {$cleanUser}.");
+                        if (!$dsclDisableSuccess && !$pwpolicyDisableSuccess && !$dsclPasswdSuccess) {
+                            Log::error("Critical failure: Could not disable user {$cleanUser} via any available method.");
+                            throw new \Exception("Failed to completely disable macOS user login for {$cleanUser}.");
+                        }
                     }
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
@@ -1684,15 +1707,15 @@ class WafSyncService
                 $usersOutput = [];
                 exec("dscl . -list /Users | grep -v '^_' | grep -v 'daemon' | grep -v 'nobody' | grep -v 'root' 2>/dev/null", $usersOutput, $rc);
                 
+                $failedUsers = [];
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user) continue;
+                    if (!$user || !preg_match('/^[a-zA-Z0-9._-]+$/', $user)) continue;
                     
                     $cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
 
-                    if (!preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser)) continue;
-
-                    $dsclClearExecuted = false;
+                    try {
+                        $dsclClearExecuted = false;
                     $dsclClearResult = null;
                     $pwpolicyEnableExecuted = false;
                     $pwpolicyEnableResult = null;
@@ -1721,11 +1744,20 @@ class WafSyncService
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                     }
 
-                    $success = ($dsclClearExecuted && $dsclClearResult === 0) || ($pwpolicyEnableExecuted && $pwpolicyEnableResult === 0);
-                    if (!$success) {
-                        Log::error("Critical failure: Could not enable user {$cleanUser} via dscl or pwpolicy.");
-                        throw new \Exception("Failed to completely enable macOS user login for {$cleanUser}.");
+                        $success = ($dsclClearExecuted && $dsclClearResult === 0) || ($pwpolicyEnableExecuted && $pwpolicyEnableResult === 0);
+                        if (!$success) {
+                            Log::error("Critical failure: Could not enable user {$cleanUser} via dscl or pwpolicy.");
+                            $failedUsers[] = $cleanUser;
+                        }
+                    } catch (\Exception $e) {
+                        Log::error("Exception while enabling user {$cleanUser}: " . $e->getMessage());
+                        $failedUsers[] = $cleanUser;
                     }
+                }
+
+                if (!empty($failedUsers)) {
+                    $failedUsersStr = implode(', ', $failedUsers);
+                    throw new \Exception("Failed to completely enable macOS user login for the following users: {$failedUsersStr}.");
                 }
                 
             } else {
