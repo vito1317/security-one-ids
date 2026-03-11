@@ -1546,7 +1546,7 @@ class WafSyncService
                 $cleanUser = preg_replace('/[^a-zA-Z0-9._-]/', '', $user);
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
                 
-                if ($cleanUser && preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
+                if (!empty($cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
                     $returnCode1 = 0;
                     $returnCode2 = 0;
 
@@ -1652,7 +1652,7 @@ class WafSyncService
                     
                     $cleanUser = (string) preg_replace('/[^a-zA-Z0-9._-]/', '', $user);
 
-                    if (!preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser)) continue;
+                    if (empty($cleanUser)) continue;
 
                     // Remove DisabledUser from AuthenticationAuthority
                     try {
