@@ -6,7 +6,6 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Artisan;
-use Symfony\Component\Process\Process as SymfonyProcess;
 
 class WafSyncService
 {
