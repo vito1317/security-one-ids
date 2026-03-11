@@ -1544,7 +1544,7 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
-                if ($consoleUser && preg_match('/^[a-zA-Z0-9._][a-zA-Z0-9._-]*$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                if ($consoleUser && preg_match('/^[a-zA-Z0-9._\s][a-zA-Z0-9._\s-]*$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
@@ -1621,13 +1621,15 @@ class WafSyncService
                 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user || !preg_match('/^[a-zA-Z0-9._][a-zA-Z0-9._-]*$/', $user)) continue;
+                    if (!$user || !preg_match('/^[a-zA-Z0-9._\s][a-zA-Z0-9._\s-]*$/', $user)) continue;
                     
                     // Remove DisabledUser from AuthenticationAuthority
+                    $output = [];
                     exec("sudo dscl . -delete /Users/" . escapeshellarg($user) . " AuthenticationAuthority 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$user}: code={$returnCode}\n", FILE_APPEND);
                     
                     // Re-enable with pwpolicy  
+                    $output = [];
                     exec("sudo pwpolicy -u " . escapeshellarg($user) . " enableuser 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$user}: code={$returnCode}\n", FILE_APPEND);
                 }
