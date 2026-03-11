@@ -302,25 +302,29 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        if (!is_readable($path) || !is_file($path)) {
+        if (!is_readable($path)) {
             return false;
         }
 
-        return \Illuminate\Support\Facades\Cache::lock('add_custom_path_lock')->block(5, function () use ($path) {
-            $cachedPaths = $this->getCustomPaths();
-            $configPaths = config('ids.custom_log_paths', []);
+        try {
+            return \Illuminate\Support\Facades\Cache::lock('log_discovery_custom_paths_array_lock', 10)->block(2, function () use ($path) {
+                $cachedPaths = $this->getCustomPaths();
+                $configPaths = config('ids.custom_log_paths', []);
 
-            if (in_array($path, $cachedPaths, true) || in_array($path, $configPaths, true)) {
+                if (in_array($path, $cachedPaths, true) || in_array($path, $configPaths, true)) {
+                    return true;
+                }
+
+                $cachedPaths[] = $path;
+
+                // Store in cache for persistence
+                \Illuminate\Support\Facades\Cache::forever('ids.custom_log_paths', $cachedPaths);
+
                 return true;
-            }
-
-            $cachedPaths[] = $path;
-
-            // Store in cache for persistence
-            \Illuminate\Support\Facades\Cache::forever('ids.custom_log_paths', $cachedPaths);
-
-            return true;
-        });
+            });
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+            return false;
+        }
     }
 
     /**
