@@ -327,6 +327,8 @@ $lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
 
                 if (!in_array($path, $cachedPaths, true)) {
                     $cachedPaths[] = $path;
+
+                    // Store in cache for persistence
                     cache()->forever('ids.custom_log_paths', $cachedPaths);
                 }
             } else {
@@ -352,19 +354,62 @@ $lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
 $newKey = 'ids.custom_log_paths';
         $oldKey = 'ids_custom_log_paths';
 
+        // Check if already migrated to avoid redundant checks
+        if (self::$migrated) {
+            return cache()->get($newKey, []);
+        }
+
         $paths = cache()->get($newKey);
         if (is_array($paths)) {
+            self::$migrated = true;
             return $paths;
         }
 
+        // Migrate legacy key if it exists
         $legacyPaths = cache()->get($oldKey, []);
         if (!empty($legacyPaths)) {
             cache()->forever($newKey, $legacyPaths);
             cache()->forget($oldKey);
+            self::$migrated = true;
             return $legacyPaths;
         }
 
-        return [];
+        // Attempt to acquire lock for migration in case of race condition
+        if (cache()->has($oldKey)) {
+            $lock = cache()->lock('lock::ids::custom_log_paths_migrate', self::LOCK_TIMEOUT);
+            $acquired = false;
+            $delayMicroseconds = 10000;
+
+            try {
+                for ($i = 0; $i < 10; $i++) {
+                    if ($acquired = $lock->get()) {
+                        break;
+                    }
+                    usleep($delayMicroseconds);
+                    $delayMicroseconds = min($delayMicroseconds * 2, 100000);
+                }
+
+                if ($acquired) {
+                    // Double check after acquiring lock
+                    $legacyPaths = cache()->get($oldKey, []);
+                    if (!empty($legacyPaths)) {
+                        cache()->forever($newKey, $legacyPaths);
+                        cache()->forget($oldKey);
+                    }
+                    self::$migrated = true;
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning("Failed to migrate custom paths: " . $e->getMessage());
+            } finally {
+                if ($acquired) {
+                    $lock->release();
+                }
+            }
+        } else {
+            self::$migrated = true;
+        }
+
+        return cache()->get($newKey, []);
     }
 
     /**
