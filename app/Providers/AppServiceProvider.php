@@ -23,7 +23,8 @@ class AppServiceProvider extends ServiceProvider
         // E.g., block queue worker or schedule worker if misconfigured.
         if ($this->app->environment('production') && $this->app->runningInConsole() && trim(config('ids.agent_token', '')) === '') {
             if (!$this->app->isDownForMaintenance()) {
-                if ($this->app->runningConsoleCommand('queue:work') || $this->app->runningConsoleCommand('schedule:run') || $this->app->runningConsoleCommand('schedule:work')) {
+                $command = $_SERVER['argv'][1] ?? '';
+                if (in_array($command, ['queue:work', 'schedule:run', 'schedule:work'], true)) {
                     throw new \RuntimeException('AGENT_TOKEN must be set in production environment for background processes.');
                 }
             }
