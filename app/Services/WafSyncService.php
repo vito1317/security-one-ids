@@ -1577,13 +1577,21 @@ class WafSyncService
 
                         if (!$method2Success) {
                             // Method 3: Set account expiration date to epoch (Jan 1, 1970)
+                            $method3Success = false;
                             try {
                                 $process3 = Process::timeout(60)->run(['sudo', 'chpass', '-e', '0', $cleanUser]);
+                                $method3Success = $process3->successful();
                                 $returnCode3 = $process3->exitCode();
                                 file_put_contents($logFile, "[{$timestamp}] chpass set expire immediately: code={$returnCode3}\n", FILE_APPEND);
                             } catch (\Exception $e) {
+                                $method3Success = false;
                                 $returnCode3 = 1;
                                 file_put_contents($logFile, "[{$timestamp}] chpass set expire immediately exception: " . $e->getMessage() . "\n", FILE_APPEND);
+                            }
+
+                            if (!$method3Success) {
+                                Log::warning("All methods failed to disable user {$cleanUser}");
+                                file_put_contents($logFile, "[{$timestamp}] Warning: All methods failed to disable user {$cleanUser}\n", FILE_APPEND);
                             }
                         }
                     }
