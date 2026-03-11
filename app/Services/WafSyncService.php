@@ -1705,11 +1705,15 @@ class WafSyncService
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                     }
 
-                    $success = ($dsclClearExecuted && $dsclClearResult === 0) && ($pwpolicyEnableExecuted && $pwpolicyEnableResult === 0);
+                    $success = ($pwpolicyEnableExecuted && $pwpolicyEnableResult === 0);
                     if (!$success) {
-                        Log::error("Critical failure: Could not completely enable user {$cleanUser} via both dscl and pwpolicy.");
+                        Log::error("Critical failure: Could not enable user {$cleanUser} via pwpolicy.");
                         $failedUsers[] = $cleanUser;
                         continue;
+                    }
+
+                    if (!$dsclClearExecuted || $dsclClearResult !== 0) {
+                        Log::warning("Partial enable for {$cleanUser}: failed to clear AuthenticationAuthority (code={$dsclClearResult}).");
                     }
                 }
 
