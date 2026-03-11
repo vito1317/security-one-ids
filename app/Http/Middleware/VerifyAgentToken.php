@@ -16,7 +16,7 @@ class VerifyAgentToken
         if ($token === null || $token === '') {
             $token = $request->input('token');
         }
-        $agentToken = (string) config('ids.agent_token', env('AGENT_TOKEN'));
+        $agentToken = (string) config('ids.agent_token', '');
 
         // To prevent information leakage (e.g., revealing via different response times
         // or codes that the system is misconfigured), we enforce a generic 401 response

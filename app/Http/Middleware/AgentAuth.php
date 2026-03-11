@@ -31,7 +31,9 @@ class AgentAuth
         $agentToken = (string) ($agentTokenEnv !== null && $agentTokenEnv !== '' ? $agentTokenEnv : config('ids.agent_token', ''));
 
         if ($agentToken === '') {
-            return response()->json(['error' => 'Server misconfiguration'], 500);
+            // To prevent information leakage regarding configuration state,
+            // we return a generic 401 response for both invalid and missing tokens.
+            return response()->json(['error' => 'Unauthorized'], 401);
         }
 
         if (!is_scalar($token)) {
