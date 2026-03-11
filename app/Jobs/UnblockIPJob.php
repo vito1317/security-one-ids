@@ -44,8 +44,7 @@ class UnblockIPJob implements ShouldQueue
 
         $unblocked = $blockingService->unblockIP($this->ip);
         if (!$unblocked) {
-            Log::error('UnblockIPJob failed to unblock IP', ['ip' => $this->ip]);
-            throw new \RuntimeException("Failed to unblock IP: {$this->ip}");
+            Log::warning('UnblockIPJob unblock returned false, skipping retry for idempotency', ['ip' => $this->ip]);
         }
     }
 }
