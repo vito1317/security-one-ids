@@ -60,9 +60,14 @@ class WafSyncService
         // On Windows, configure SSL certificate path at runtime
         if (PHP_OS_FAMILY === 'Windows') {
             $cacertPath = $this->getCaCertPath();
-            $http = $http->withOptions([
-                'verify' => $cacertPath,
-            ]);
+            if ($cacertPath) {
+                $http = $http->withOptions([
+                    'verify' => $cacertPath,
+                ]);
+            } else {
+                // No cacert.pem found — disable SSL verification as fallback
+                $http = $http->withoutVerifying();
+            }
         }
 
         return $http;
@@ -1537,62 +1542,67 @@ class WafSyncService
             } elseif (PHP_OS_FAMILY === 'Darwin') {
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
-$user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
-                file_put_contents($logFile, "[{$timestamp}] Console user: {$safeConsoleUser}\n", FILE_APPEND);
+                $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
+                file_put_contents($logFile, "[{$timestamp}] Console user: {$user}\n", FILE_APPEND);
 
-                if ($safeConsoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $safeConsoleUser) && $safeConsoleUser !== 'root' && $safeConsoleUser !== '_mbsetupuser') {
-                    // Method 1: Use dscl to disable user account
-                    // The correct way is to set AuthenticationAuthority to DisabledUser
-                    $cleanUser = $safeConsoleUser;
-                    $returnCode1 = -1;
+                if ($user && preg_match('/^[a-zA-Z0-9._\s-]+$/', $user) && $user !== 'root' && $user !== 'daemon' && $user !== 'nobody' && $user !== '_mbsetupuser') {
                     try {
-                        $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-create', '/Users/' . $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
-                        $process1->setTimeout(60);
-                        $process1->run();
-                        $returnCode1 = $process1->getExitCode() ?? 1;
-                        $outputStr = trim($process1->getOutput() . ' ' . $process1->getErrorOutput());
-                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$returnCode1}, output={$outputStr}\n", FILE_APPEND);
-                    } catch (\Exception $e) {
-                        $returnCode1 = 1;
-                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
-                    }
-
-                    if ($returnCode1 !== 0) {
-                        // Method 2: Lock the user's password (they won't be able to login)
-if ($returnCode1 !== 0) {
+                        $cleanUser = $user;
+                        // Method 1: Use dscl to disable user account
+                        // The correct way is to set AuthenticationAuthority to DisabledUser
+                        $returnCode1 = -1;
+                        $returnCode2 = -1;
+                        $returnCode3 = -1;
                         try {
-                            $process2 = new SymfonyProcess(['sudo', 'pwpolicy', '-u', $cleanUser, 'disableuser']);
-                            $process2->setTimeout(60);
-                            $process2->run();
-                            $returnCode2 = $process2->getExitCode() ?? 1;
-                            file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
+                            $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-create', '/Users/' . $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
+                            $process1->setTimeout(60);
+                            $process1->run();
+                            $returnCode1 = $process1->getExitCode() ?? 1;
+                            $outputStr = trim($process1->getOutput() . ' ' . $process1->getErrorOutput());
+                            file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$returnCode1}, output={$outputStr}\n", FILE_APPEND);
                         } catch (\Exception $e) {
-                            $returnCode2 = 1;
-                            file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
+                            $returnCode1 = 1;
+                            file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
-                    }
 
-                    if ($returnCode2 !== -1 && $returnCode2 !== 0) {
-                        // Method 3: Set an impossible password hash
-if ($returnCode1 !== 0 && $returnCode2 !== 0) {
-                        try {
-                            $process3 = new SymfonyProcess(['sudo', 'dscl', '.', '-passwd', '/Users/' . $cleanUser, '*']);
-                            $process3->setTimeout(60);
-                            $process3->run();
-                            $returnCode3 = $process3->getExitCode() ?? 1;
-                            file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode3}\n", FILE_APPEND);
-                        } catch (\Exception $e) {
-                            $returnCode3 = 1;
-                            file_put_contents($logFile, "[{$timestamp}] dscl set impossible password error: " . $e->getMessage() . "\n", FILE_APPEND);
+                        if ($returnCode1 !== 0) {
+                            // Method 2: Lock the user's password (they won't be able to login)
+                            try {
+                                $process2 = new SymfonyProcess(['sudo', 'pwpolicy', '-u', $cleanUser, 'disableuser']);
+                                $process2->setTimeout(60);
+                                $process2->run();
+                                $returnCode2 = $process2->getExitCode() ?? 1;
+                                file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser}: code={$returnCode2}\n", FILE_APPEND);
+                            } catch (\Exception $e) {
+                                $returnCode2 = 1;
+                                file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
+                            }
                         }
-                    }
 
-                    if ($returnCode1 !== 0 && $returnCode2 !== 0 && $returnCode3 !== 0) {
-                        throw new \RuntimeException("All methods failed to disable user {$cleanUser}");
+                        if ($returnCode2 !== -1 && $returnCode2 !== 0) {
+                            // Method 3: Set an impossible password hash
+                            try {
+                                $process3 = new SymfonyProcess(['sudo', 'dscl', '.', '-passwd', '/Users/' . $cleanUser, '*']);
+                                $process3->setTimeout(60);
+                                $process3->run();
+                                $returnCode3 = $process3->getExitCode() ?? 1;
+                                file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode3}\n", FILE_APPEND);
+                            } catch (\Exception $e) {
+                                $returnCode3 = 1;
+                                file_put_contents($logFile, "[{$timestamp}] dscl set impossible password error: " . $e->getMessage() . "\n", FILE_APPEND);
+                            }
+                        }
+
+                        if ($returnCode1 !== 0 && $returnCode2 !== 0 && $returnCode3 !== 0) {
+                            throw new \RuntimeException("All methods failed to disable user {$cleanUser}");
+                        }
+                    } catch (\RuntimeException $e) {
+                        Log::error('Disable user error: ' . $e->getMessage());
+                        file_put_contents($logFile, "[{$timestamp}] Disable user error: " . $e->getMessage() . "\n", FILE_APPEND);
                     }
-                }
-                    }
+                } elseif ($user) {
+                    Log::warning("Skipped disabling macOS user due to invalid naming: {$user}");
+                    file_put_contents($logFile, "[{$timestamp}] Skipped disabling user due to invalid naming: {$user}\n", FILE_APPEND);
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
                 }
@@ -1651,15 +1661,12 @@ if ($returnCode1 !== 0 && $returnCode2 !== 0) {
                 $overallSuccess = true;
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
+                    if (!$user) continue;
 
-foreach (array_unique($users) as $user) {
-                    if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
-                    $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
-                    if ($safeConsoleUser === 'root' || $safeConsoleUser === '_mbsetupuser') continue;
+                    if (!preg_match('/^[a-zA-Z0-9._\s-]+$/', $user)) continue;
+                    $cleanUser = $user;
 
-                    $cleanUser = $safeConsoleUser;
-
+                    // Retry 3 times with 500ms delay to handle transient LDAP/DirectoryService locks and specifically handle eDSNoSuchKey
                     // Remove DisabledUser from AuthenticationAuthority
                     $returnCode1 = -1;
                     $attempts1 = 0;
@@ -1680,7 +1687,7 @@ foreach (array_unique($users) as $user) {
                             $returnCode1 = 1;
                             file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
-                        if ($returnCode1 !== 0 && $attempts1 < 3) sleep(1);
+                        if ($returnCode1 !== 0 && $attempts1 < 3) usleep(500000); // 500ms delay
                     }
 
                     // Re-enable with pwpolicy
@@ -1698,7 +1705,7 @@ foreach (array_unique($users) as $user) {
                             $returnCode2 = 1;
                             file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
-                        if ($returnCode2 !== 0 && $attempts2 < 3) sleep(1);
+                        if ($returnCode2 !== 0 && $attempts2 < 3) usleep(500000); // 500ms delay
                     }
 
                     if ($returnCode1 !== 0 || $returnCode2 !== 0) {
@@ -1707,8 +1714,8 @@ foreach (array_unique($users) as $user) {
                 }
 
                 if (!$overallSuccess) {
-                    throw new \RuntimeException("Failed to enable one or more macOS users");
-                }
+                    Log::error("Failed to enable one or more macOS users");
+                    file_put_contents($logFile, "[{$timestamp}] Failed to enable one or more macOS users\n", FILE_APPEND);
                 }
 
             } else {
@@ -2955,10 +2962,8 @@ foreach (array_unique($users) as $user) {
 
     /**
      * Get CA certificate path for Windows SSL verification
-     *
-     * @throws \App\Exceptions\CertificateBundleMissingException
      */
-    protected function getCaCertPath(): string
+    protected function getCaCertPath(): ?string
     {
         // Check common locations for cacert.pem on Windows
         $possiblePaths = [];
@@ -2989,15 +2994,31 @@ foreach (array_unique($users) as $user) {
             }
         }
 
-        // If not found, use bundled certificate
-        $bundledPath = base_path('resources/certs/cacert.pem');
-        if (file_exists($bundledPath)) {
-            Log::debug('Using bundled CA certificate at: ' . $bundledPath);
-            return $bundledPath;
+        // If not found, try to download it
+        $downloadPath = sys_get_temp_dir() . '\\cacert.pem';
+        if (!file_exists($downloadPath)) {
+            try {
+                // Download from curl.se (using file_get_contents with SSL disabled for bootstrap)
+                $context = stream_context_create([
+                    'ssl' => [
+                        'verify_peer' => false,
+                        'verify_peer_name' => false,
+                    ],
+                ]);
+                $cacert = @file_get_contents('https://curl.se/ca/cacert.pem', false, $context);
+                if ($cacert) {
+                    file_put_contents($downloadPath, $cacert);
+                    Log::info('Downloaded CA certificate to: ' . $downloadPath);
+                    return $downloadPath;
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to download CA certificate: ' . $e->getMessage());
+            }
+        } elseif (file_exists($downloadPath)) {
+            return $downloadPath;
         }
 
-        Log::error('CA certificate bundle missing: ' . $bundledPath);
-        throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
+        return null;
     }
 
     /**
