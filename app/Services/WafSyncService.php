@@ -1625,11 +1625,11 @@ class WafSyncService
                     $safeUser = escapeshellarg($user);
                     // Remove DisabledUser from AuthenticationAuthority
                     exec("sudo dscl . -delete /Users/{$safeUser} AuthenticationAuthority 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$user}: code={$returnCode}\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$safeUser}: code={$returnCode}\n", FILE_APPEND);
                     
                     // Re-enable with pwpolicy  
                     exec("sudo pwpolicy -u {$safeUser} enableuser 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$user}: code={$returnCode}\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$safeUser}: code={$returnCode}\n", FILE_APPEND);
                 }
                 
             } else {
