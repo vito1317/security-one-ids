@@ -15,7 +15,7 @@ use App\Traits\DetectsPlatform;
  */
 class SnortEngine
 {
-    use DetectsPlatform;
+use \App\Traits\DetectsPlatform;
 
     private string $snortPath;
     private string $configPath;
