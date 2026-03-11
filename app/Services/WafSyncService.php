@@ -1544,7 +1544,7 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
-                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser' && preg_match('/^[a-zA-Z0-9_\-\.]+$/', $consoleUser)) {
                     $escapedUsername = escapeshellarg($consoleUser);
 
                     // Method 1: Use dscl to disable user account
@@ -1619,19 +1619,19 @@ class WafSyncService
                 $usersOutput = [];
                 exec("dscl . -list /Users | grep -v '^_' | grep -v 'daemon' | grep -v 'nobody' | grep -v 'root' 2>/dev/null", $usersOutput, $rc);
                 
-                foreach ($usersOutput as $user) {
-                    $user = trim($user);
-                    if (!$user) continue;
-                    
-                    $escapedUsername = escapeshellarg($user);
+                foreach ($usersOutput as $username) {
+                    $username = trim($username);
+                    if (!$username || !preg_match('/^[a-zA-Z0-9_\-\.]+$/', $username)) continue;
+
+                    $escapedUsername = escapeshellarg($username);
 
                     // Remove DisabledUser from AuthenticationAuthority
                     exec("sudo dscl . -delete /Users/{$escapedUsername} AuthenticationAuthority 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$user}: code={$returnCode}\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$username}: code={$returnCode}\n", FILE_APPEND);
                     
                     // Re-enable with pwpolicy  
                     exec("sudo pwpolicy -u {$escapedUsername} enableuser 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$user}: code={$returnCode}\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$username}: code={$returnCode}\n", FILE_APPEND);
                 }
                 
             } else {
