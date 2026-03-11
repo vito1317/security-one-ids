@@ -62,9 +62,7 @@ class AppServiceProviderTest extends TestCase
         $app = \Mockery::mock($this->app)->makePartial();
         $app->shouldReceive('runningInConsole')->andReturn(true);
         $app->shouldReceive('isDownForMaintenance')->andReturn(false);
-        $app->shouldReceive('runningConsoleCommand')->with('queue:work')->andReturn(false);
-        $app->shouldReceive('runningConsoleCommand')->with('schedule:run')->andReturn(false);
-        $app->shouldReceive('runningConsoleCommand')->with('schedule:work')->andReturn(false);
+        $app->shouldReceive('runningConsoleCommand')->andReturn(false);
 
         Config::set('ids.agent_token', '');
         $app['env'] = 'production';
