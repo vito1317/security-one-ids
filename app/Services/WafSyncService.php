@@ -1554,7 +1554,7 @@ class WafSyncService
                     $returnCode3 = -1;
 
                     try {
-                        $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-create', '/Users/' . $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
+                        $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-create', '/Users/', $cleanUser, 'AuthenticationAuthority', ';DisabledUser;']);
                         $process1->setTimeout(60);
                         $process1->run();
                         $returnCode1 = $process1->getExitCode() ?? 1;
@@ -1591,7 +1591,7 @@ class WafSyncService
                     if ($returnCode2 !== -1 && $returnCode2 !== 0) {
                         // Method 3: Set an impossible password hash
                         try {
-                            $process3 = new SymfonyProcess(['sudo', 'dscl', '.', '-passwd', '/Users/' . $cleanUser, '*']);
+                            $process3 = new SymfonyProcess(['sudo', 'dscl', '.', '-passwd', '/Users/', $cleanUser, '*']);
                             $process3->setTimeout(60);
                             $process3->run();
                             $returnCode3 = $process3->getExitCode() ?? 1;
@@ -1674,7 +1674,7 @@ class WafSyncService
                     while ($returnCode1 !== 0 && $attempts1 < 3) {
                         $attempts1++;
                         try {
-                            $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-delete', '/Users/' . $cleanUser, 'AuthenticationAuthority']);
+                            $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-delete', '/Users/', $cleanUser, 'AuthenticationAuthority']);
                             $process1->setTimeout(60);
                             $process1->run();
                             $returnCode1 = $process1->getExitCode() ?? 1;
