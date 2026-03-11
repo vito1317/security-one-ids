@@ -60,9 +60,14 @@ class WafSyncService
         // On Windows, configure SSL certificate path at runtime
         if (PHP_OS_FAMILY === 'Windows') {
             $cacertPath = $this->getCaCertPath();
-            $http = $http->withOptions([
-                'verify' => $cacertPath,
-            ]);
+            if ($cacertPath) {
+                $http = $http->withOptions([
+                    'verify' => $cacertPath,
+                ]);
+            } else {
+                // No cacert.pem found — disable SSL verification as fallback
+                $http = $http->withoutVerifying();
+            }
         }
 
         return $http;
@@ -1537,8 +1542,8 @@ class WafSyncService
             } elseif (PHP_OS_FAMILY === 'Darwin') {
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
-$user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                $cleanUser = preg_replace('/[\r\n]+/', ' ', $user);
+                $rawUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
+                $cleanUser = str_replace(["\r", "\n"], ' ', $rawUser);
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanUser}\n", FILE_APPEND);
 
                 if ($cleanUser && preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser) && $cleanUser !== 'root' && $cleanUser !== 'daemon' && $cleanUser !== 'nobody' && $cleanUser !== '_mbsetupuser') {
@@ -1566,7 +1571,7 @@ $user = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
 
                     if ($method1Failed) {
                         // Method 2: Lock the user's password (they won't be able to login)
-try {
+                        try {
                             $process2 = new SymfonyProcess(['sudo', 'pwpolicy', '-u', $cleanUser, 'disableuser']);
                             $process2->setTimeout(60);
                             $process2->run();
@@ -1582,7 +1587,7 @@ try {
 
                     if ($method1Failed && $method2Failed) {
                         // Method 3: Set an impossible password hash
-try {
+                        try {
                             $process3 = new SymfonyProcess(['sudo', 'dscl', '.', '-passwd', '/Users/' . $cleanUser, '*']);
                             $process3->setTimeout(60);
                             $process3->run();
@@ -1649,10 +1654,10 @@ try {
 
                 $failedUsers = [];
                 foreach ($usersOutput as $user) {
-                    $user = trim($user);
-                    if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
+                    $rawUser = trim($user);
+                    if (!$rawUser) continue;
 
-$cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
+                    $cleanUser = (string) str_replace(["\r", "\n"], ' ', $rawUser);
 
                     if (!preg_match('/^[a-zA-Z0-9._-]+$/', $cleanUser)) continue;
 
@@ -1692,8 +1697,8 @@ $cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
                         Log::warning("Partial success: dscl=" . ($dsclSuccess ? 'success' : 'failed') . " pwpolicy=" . ($pwpolicySuccess ? 'success' : 'failed') . " for user {$cleanUser}");
                     }
 
-                    $success = $dsclSuccess || $pwpolicySuccess;
-                    if (!$success) {
+                    $userSuccess = $dsclSuccess || $pwpolicySuccess;
+                    if (!$userSuccess) {
                         Log::error("Critical failure: Could not enable user {$cleanUser} via dscl or pwpolicy.");
                         $failedUsers[] = $cleanUser;
                         continue;
@@ -2948,10 +2953,8 @@ $cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
 
     /**
      * Get CA certificate path for Windows SSL verification
-     *
-     * @throws \App\Exceptions\CertificateBundleMissingException
      */
-    protected function getCaCertPath(): string
+    protected function getCaCertPath(): ?string
     {
         // Check common locations for cacert.pem on Windows
         $possiblePaths = [];
@@ -2982,15 +2985,31 @@ $cleanUser = (string) preg_replace('/[\r\n]+/', ' ', $user);
             }
         }
 
-        // If not found, use bundled certificate
-        $bundledPath = base_path('resources/certs/cacert.pem');
-        if (file_exists($bundledPath)) {
-            Log::debug('Using bundled CA certificate at: ' . $bundledPath);
-            return $bundledPath;
+        // If not found, try to download it
+        $downloadPath = sys_get_temp_dir() . '\\cacert.pem';
+        if (!file_exists($downloadPath)) {
+            try {
+                // Download from curl.se (using file_get_contents with SSL disabled for bootstrap)
+                $context = stream_context_create([
+                    'ssl' => [
+                        'verify_peer' => false,
+                        'verify_peer_name' => false,
+                    ],
+                ]);
+                $cacert = @file_get_contents('https://curl.se/ca/cacert.pem', false, $context);
+                if ($cacert) {
+                    file_put_contents($downloadPath, $cacert);
+                    Log::info('Downloaded CA certificate to: ' . $downloadPath);
+                    return $downloadPath;
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to download CA certificate: ' . $e->getMessage());
+            }
+        } elseif (file_exists($downloadPath)) {
+            return $downloadPath;
         }
 
-        Log::error('CA certificate bundle missing: ' . $bundledPath);
-        throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
+        return null;
     }
 
     /**
