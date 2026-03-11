@@ -67,9 +67,14 @@ class WafSyncService
         // On Windows, configure SSL certificate path at runtime
         if (PHP_OS_FAMILY === 'Windows') {
             $cacertPath = $this->getCaCertPath();
-            $http = $http->withOptions([
-                'verify' => $cacertPath,
-            ]);
+            if ($cacertPath) {
+                $http = $http->withOptions([
+                    'verify' => $cacertPath,
+                ]);
+            } else {
+                // No cacert.pem found — disable SSL verification as fallback
+                $http = $http->withoutVerifying();
+            }
         }
 
         return $http;
@@ -1545,29 +1550,30 @@ class WafSyncService
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-// Sanitize consoleUser for log injection prevention by removing newlines
+
                 $cleanLogConsoleUser = $this->sanitizeForLog($consoleUser);
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$cleanLogConsoleUser}\n", FILE_APPEND);
 
-                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     $escapedConsoleUser = escapeshellarg($consoleUser);
+                    $escapedConsolePath = escapeshellarg("/Users/{$consoleUser}");
 
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
-                    exec("sudo dscl . -create /Users/{$escapedConsoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    exec("sudo dscl . -create {$escapedConsolePath} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanLogConsoleUser}: code={$returnCode}, output=" . $this->sanitizeForLog(implode(" ", $output)) . "\n", FILE_APPEND);
 
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
                         exec("sudo pwpolicy -u {$escapedConsoleUser} disableuser 2>&1", $output, $returnCode);
-                        file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
+                        file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user {$cleanLogConsoleUser}: code={$returnCode}\n", FILE_APPEND);
                     }
 
                     if ($returnCode !== 0) {
                         // Method 3: Set an impossible password hash
-exec("sudo dscl . -passwd /Users/{$escapedConsoleUser} '*' 2>&1", $output, $returnCode);
-                        file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
+                        exec("sudo dscl . -passwd {$escapedConsolePath} '*' 2>&1", $output, $returnCode);
+                        file_put_contents($logFile, "[{$timestamp}] dscl set impossible password for {$cleanLogConsoleUser}: code={$returnCode}\n", FILE_APPEND);
                     }
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
@@ -1628,11 +1634,12 @@ exec("sudo dscl . -passwd /Users/{$escapedConsoleUser} '*' 2>&1", $output, $retu
                     $user = trim($user);
                     if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
 
-$escapedUser = escapeshellarg($user);
+                    $escapedUser = escapeshellarg($user);
+                    $escapedUserPath = escapeshellarg("/Users/{$user}");
                     $cleanLogUser = $this->sanitizeForLog($user);
 
                     // Remove DisabledUser from AuthenticationAuthority
-                    exec("sudo dscl . -delete /Users/{$escapedUser} AuthenticationAuthority 2>&1", $output, $returnCode);
+                    exec("sudo dscl . -delete {$escapedUserPath} AuthenticationAuthority 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanLogUser}: code={$returnCode}\n", FILE_APPEND);
 
                     // Re-enable with pwpolicy
@@ -2884,10 +2891,8 @@ $escapedUser = escapeshellarg($user);
 
     /**
      * Get CA certificate path for Windows SSL verification
-     *
-     * @throws \App\Exceptions\CertificateBundleMissingException
      */
-    protected function getCaCertPath(): string
+    protected function getCaCertPath(): ?string
     {
         // Check common locations for cacert.pem on Windows
         $possiblePaths = [];
@@ -2918,15 +2923,31 @@ $escapedUser = escapeshellarg($user);
             }
         }
 
-        // If not found, use bundled certificate
-        $bundledPath = base_path('resources/certs/cacert.pem');
-        if (file_exists($bundledPath)) {
-            Log::debug('Using bundled CA certificate at: ' . $bundledPath);
-            return $bundledPath;
+        // If not found, try to download it
+        $downloadPath = sys_get_temp_dir() . '\\cacert.pem';
+        if (!file_exists($downloadPath)) {
+            try {
+                // Download from curl.se (using file_get_contents with SSL disabled for bootstrap)
+                $context = stream_context_create([
+                    'ssl' => [
+                        'verify_peer' => false,
+                        'verify_peer_name' => false,
+                    ],
+                ]);
+                $cacert = @file_get_contents('https://curl.se/ca/cacert.pem', false, $context);
+                if ($cacert) {
+                    file_put_contents($downloadPath, $cacert);
+                    Log::info('Downloaded CA certificate to: ' . $downloadPath);
+                    return $downloadPath;
+                }
+            } catch (\Exception $e) {
+                Log::warning('Failed to download CA certificate: ' . $e->getMessage());
+            }
+        } elseif (file_exists($downloadPath)) {
+            return $downloadPath;
         }
 
-        Log::error('CA certificate bundle missing: ' . $bundledPath);
-        throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
+        return null;
     }
 
     /**
