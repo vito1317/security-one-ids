@@ -1595,6 +1595,11 @@ class WafSyncService
                             file_put_contents($logFile, "[{$timestamp}] dscl set impossible password error: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
                     }
+
+                    $method3Failed = $method2Failed && $dsclPasswdResult !== 0;
+                    if ($method3Failed) {
+                        Log::error("Critical failure: Could not disable user {$cleanUser} via any method.");
+                    }
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
                 }
