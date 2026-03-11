@@ -312,13 +312,11 @@ class LogDiscoveryService
             // Check config once as a fallback if the path is not in the cache
             $configPaths = config('ids.custom_log_paths', []);
 
-            if (!in_array($path, $configPaths, true)) {
-                $mergedPaths = array_unique(array_merge($configPaths, $cachedPaths, [$path]));
-                cache()->forever('ids.custom_log_paths', $mergedPaths);
+            $mergedPaths = array_values(array_unique(array_merge($configPaths, $cachedPaths, [$path])));
+            cache()->forever('ids.custom_log_paths', $mergedPaths);
 
-                // Keep config in sync for the current request lifecycle
-                config(['ids.custom_log_paths' => $mergedPaths]);
-            }
+            // Keep config in sync for the current request lifecycle
+            config(['ids.custom_log_paths' => $mergedPaths]);
         }
 
         return true;

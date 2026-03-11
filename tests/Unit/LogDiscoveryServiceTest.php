@@ -92,4 +92,30 @@ class LogDiscoveryServiceTest extends TestCase
         // Verify cache is still set and hasn't duplicated
         $this->assertEquals([$tempPath], cache()->get('ids.custom_log_paths'));
     }
+
+    public function test_add_custom_path_backfills_cache_when_path_already_in_config(): void
+    {
+        if (!is_writable(sys_get_temp_dir())) {
+            $this->markTestSkipped('Temp directory is not writable');
+        }
+
+        // Create a temporary readable file
+        $tempPath = tempnam(sys_get_temp_dir(), uniqid('test_log_', true));
+        $this->tempFiles[] = $tempPath;
+        file_put_contents($tempPath, 'test log content');
+
+        // Path is in config but missing from cache
+        config(['ids.custom_log_paths' => [$tempPath]]);
+        cache()->forget('ids.custom_log_paths');
+        cache()->forget('ids_custom_log_paths');
+
+        $result = $this->service->addCustomPath($tempPath);
+
+        $this->assertTrue($result);
+
+        // Verify the cache has been backfilled correctly
+        $this->assertEquals([$tempPath], cache()->get('ids.custom_log_paths'));
+        // Verify config is also correct
+        $this->assertEquals([$tempPath], config('ids.custom_log_paths'));
+    }
 }
