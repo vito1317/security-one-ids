@@ -306,29 +306,15 @@ class LogDiscoveryService
             return false;
         }
 
-        $configPaths = config('ids.custom_log_paths', []);
+        $customPaths = array_values(array_unique(array_merge(
+            config('ids.custom_log_paths', []),
+            $this->getCustomPaths()
+        )));
 
-        if (in_array($path, $configPaths, true)) {
-            return true;
-        }
-
-        $configPaths[] = $path;
-        config(['ids.custom_log_paths' => $configPaths]);
-
-        // Use a lock to prevent race conditions during concurrent additions
-        $lock = cache()->lock('ids_custom_log_paths_lock', 10);
-
-        if ($lock->get()) {
-            try {
-                $cachedPaths = $this->getCustomPaths();
-
-                if (!in_array($path, $cachedPaths, true)) {
-                    $cachedPaths[] = $path;
-                    cache()->forever('ids_custom_log_paths', $cachedPaths);
-                }
-            } finally {
-                $lock->release();
-            }
+        if (!in_array($path, $customPaths, true)) {
+            $customPaths[] = $path;
+            // Store in cache for persistence
+            cache()->forever('ids.custom_log_paths', $customPaths);
         }
 
         return true;
@@ -339,7 +325,7 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        return cache()->get('ids.custom_log_paths', cache()->get('ids_custom_log_paths', []));
     }
 
     /**
