@@ -306,11 +306,26 @@ class LogDiscoveryService
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        // Use a lock to prevent race conditions during concurrent additions
+        $lock = cache()->lock('ids.custom_log_paths_lock', 10);
+
+        try {
+            $lock->block(5);
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+            Log::warning("Lock timeout while trying to add custom path", ['path' => $path, 'error' => $e->getMessage()]);
+            return false;
+        }
+
+        try {
+            $cachedPaths = $this->getCustomPaths();
+
+            if (!in_array($path, $cachedPaths, true)) {
+                $cachedPaths[] = $path;
+            }
+            // Always set cache even if previously in config (because config paths aren't necessarily in cache)
+            cache()->forever('ids.custom_log_paths', $cachedPaths);
+        } finally {
+            $lock->release();
         }
 
         return true;
@@ -321,7 +336,35 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids_custom_log_paths', []);
+        if (cache()->has('ids_custom_log_paths')) {
+            $lock = cache()->lock('ids.custom_log_paths_migrate_lock', 10);
+            try {
+                $lock->block(5);
+            } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+                Log::warning("Lock timeout while trying to migrate custom log paths cache key", ['error' => $e->getMessage()]);
+                $fallback = cache()->get('ids.custom_log_paths', cache()->get('ids_custom_log_paths', config('ids.custom_log_paths', [])));
+                return is_array($fallback) ? $fallback : [];
+            }
+
+            try {
+                $legacyPaths = cache()->get('ids_custom_log_paths', []);
+                $currentPaths = cache()->get('ids.custom_log_paths', config('ids.custom_log_paths', []));
+
+                $merged = array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
+                cache()->forever('ids.custom_log_paths', $merged);
+                cache()->forget('ids_custom_log_paths');
+            } finally {
+                $lock->release();
+            }
+        }
+
+        if (cache()->has('ids.custom_log_paths')) {
+            $paths = cache()->get('ids.custom_log_paths', []);
+            return is_array($paths) ? $paths : [];
+        }
+
+        $paths = config('ids.custom_log_paths', []);
+        return is_array($paths) ? $paths : [];
     }
 
     /**
