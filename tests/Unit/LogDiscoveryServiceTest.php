@@ -8,34 +8,29 @@ use Tests\TestCase;
 class LogDiscoveryServiceTest extends TestCase
 {
     private LogDiscoveryService $service;
-    private array $tempFiles = [];
 
     protected function setUp(): void
     {
         parent::setUp();
+        cache()->forget('ids.custom_log_paths');
+        cache()->forget('ids_custom_log_paths');
         $this->service = new LogDiscoveryService();
     }
 
     protected function tearDown(): void
     {
         cache()->forget('ids.custom_log_paths');
-        config(['ids.custom_log_paths' => []]);
-
-        foreach ($this->tempFiles as $tempFile) {
-            if (file_exists($tempFile)) {
-                unlink($tempFile);
-            }
-        }
-
+        cache()->forget('ids_custom_log_paths');
         parent::tearDown();
     }
 
     public function test_add_custom_path_fails_when_path_not_readable(): void
     {
-        $path = '/path/to/non/existent/file.log';
+        $path = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'missing_' . uniqid();
 
         // ensure the file actually does not exist
         $this->assertFalse(is_readable($path));
+        $this->assertFalse(file_exists($path));
 
         $result = $this->service->addCustomPath($path);
 
@@ -51,12 +46,11 @@ class LogDiscoveryServiceTest extends TestCase
 
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), uniqid('test_log_', true));
-        $this->tempFiles[] = $tempPath;
         file_put_contents($tempPath, 'test log content');
 
         try {
             // Setup config with empty paths initially
-            config(['ids.custom_log_paths' => []]);
+            $this->app['config']->set('ids.custom_log_paths', []);
 
             $result = $this->service->addCustomPath($tempPath);
 
@@ -72,7 +66,7 @@ class LogDiscoveryServiceTest extends TestCase
         }
     }
 
-    public function test_add_custom_path_caches_path_even_when_path_already_in_config(): void
+    public function test_add_custom_path_returns_true_without_caching_when_path_already_in_config(): void
     {
         if (!is_writable(sys_get_temp_dir())) {
             $this->markTestSkipped('Temp directory is not writable');
@@ -80,12 +74,11 @@ class LogDiscoveryServiceTest extends TestCase
 
         // Create a temporary readable file
         $tempPath = tempnam(sys_get_temp_dir(), uniqid('test_log_', true));
-        $this->tempFiles[] = $tempPath;
         file_put_contents($tempPath, 'test log content');
 
         try {
             // Setup config with the path already in it
-            config(['ids.custom_log_paths' => [$tempPath]]);
+            $this->app['config']->set('ids.custom_log_paths', [$tempPath]);
 
             // Clear cache to ensure it's not set
             cache()->forget('ids.custom_log_paths');
@@ -94,13 +87,48 @@ class LogDiscoveryServiceTest extends TestCase
 
             $this->assertTrue($result);
 
-            // Verify the path is cached and accessible via getCustomPaths()
-            $this->assertEquals([$tempPath], $this->service->getCustomPaths());
+            // Verify cache is not set since it was already in config
+            $this->assertFalse(cache()->has('ids.custom_log_paths'));
         } finally {
             // Clean up
             if (file_exists($tempPath)) {
                 unlink($tempPath);
             }
+        }
+    }
+
+    public function test_get_custom_paths_migrates_legacy_cache_key(): void
+    {
+        if (!is_writable(sys_get_temp_dir())) {
+            $this->markTestSkipped('Temp directory is not writable');
+        }
+
+        $tempPath1 = tempnam(sys_get_temp_dir(), uniqid('legacy_log1_', true));
+        $tempPath2 = tempnam(sys_get_temp_dir(), uniqid('legacy_log2_', true));
+        file_put_contents($tempPath1, 'log 1');
+        file_put_contents($tempPath2, 'log 2');
+
+        try {
+            $legacyPaths = [$tempPath1, $tempPath2];
+            cache()->forever('ids_custom_log_paths', $legacyPaths);
+
+            // Ensure new key is empty
+            $this->assertFalse(cache()->has('ids.custom_log_paths'));
+
+            $paths = $this->service->getCustomPaths();
+
+            // Depending on system, tempnam paths might already be realpaths or might need resolving
+            $resolvedPaths = array_map('realpath', $legacyPaths);
+
+            $this->assertEqualsCanonicalizing($resolvedPaths, $paths);
+
+            // Verify migration
+            $this->assertTrue(cache()->has('ids.custom_log_paths'));
+            $this->assertEqualsCanonicalizing($resolvedPaths, cache()->get('ids.custom_log_paths'));
+            $this->assertFalse(cache()->has('ids_custom_log_paths'));
+        } finally {
+            if (file_exists($tempPath1)) unlink($tempPath1);
+            if (file_exists($tempPath2)) unlink($tempPath2);
         }
     }
 }
