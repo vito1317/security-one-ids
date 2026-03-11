@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
+use RuntimeException;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -30,7 +31,7 @@ class AppServiceProvider extends ServiceProvider
     {
         if ($this->app->environment('production') && trim((string) config('ids.agent_token', '')) === '') {
             if (!$this->app->runningInConsole()) {
-                throw new \RuntimeException('AGENT_TOKEN must be set in production environment.');
+                throw new RuntimeException('AGENT_TOKEN must be set in production environment.');
             }
 
             \Illuminate\Support\Facades\Log::warning('AGENT_TOKEN is empty in production environment during console command. This may lead to an insecure configuration cache.');

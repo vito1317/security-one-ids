@@ -12,8 +12,6 @@ class AppServiceProviderTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        // Ensure clean state
-        Config::set('ids.agent_token', 'token');
     }
 
     public function test_it_throws_exception_in_production_without_token_in_web_request()
