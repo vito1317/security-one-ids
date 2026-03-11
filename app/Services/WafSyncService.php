@@ -1578,12 +1578,12 @@ class WafSyncService
                         if (!$method2Success) {
                             // Method 3: Set an impossible password hash
                             try {
-                                $process3 = Process::timeout(60)->run(['sudo', 'chpass', '-e', '0', $cleanUser]);
+                                $process3 = Process::timeout(60)->run(['sudo', 'dscl', '.', '-passwd', '/Users/' . $cleanUser, '*']);
                                 $returnCode3 = $process3->exitCode();
-                                file_put_contents($logFile, "[{$timestamp}] chpass set expire immediately: code={$returnCode3}\n", FILE_APPEND);
+                                file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode3}\n", FILE_APPEND);
                             } catch (\Exception $e) {
                                 $returnCode3 = 1;
-                                file_put_contents($logFile, "[{$timestamp}] chpass set expire immediately exception: " . $e->getMessage() . "\n", FILE_APPEND);
+                                file_put_contents($logFile, "[{$timestamp}] dscl set impossible password exception: " . $e->getMessage() . "\n", FILE_APPEND);
                             }
                         }
                     }
