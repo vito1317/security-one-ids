@@ -1650,6 +1650,9 @@ class WafSyncService
                 // Get all regular users and enable them
                 $usersOutput = [];
                 exec("dscl . -list /Users | grep -v '^_' | grep -v 'daemon' | grep -v 'nobody' | grep -v 'root' 2>/dev/null", $usersOutput, $rc);
+                if ($rc !== 0 && $rc !== 1) { // grep returns 1 if no lines match, which means 0 regular users found, not an error
+                    throw new \RuntimeException("Failed to list macOS users for enable login (exit code: {$rc})");
+                }
                 
                 $overallSuccess = true;
                 foreach ($usersOutput as $user) {
