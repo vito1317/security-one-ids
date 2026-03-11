@@ -1560,6 +1560,12 @@ class WafSyncService
                         // Method 2: Lock the user's password (they won't be able to login)
                         exec("sudo pwpolicy -u {$consoleUser} disableuser 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
+
+                        if ($returnCode !== 0) {
+                            // Method 3: Set an impossible password hash as final fallback
+                            exec("sudo dscl . -passwd /Users/{$consoleUser} '*' 2>&1", $output, $returnCode);
+                            file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
+                        }
                     }
                 }
                 
