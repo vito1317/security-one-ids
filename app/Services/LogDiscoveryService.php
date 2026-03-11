@@ -362,9 +362,19 @@ class LogDiscoveryService
                 }
             } else {
                 if (!in_array($path, $unifiedList, true)) {
-                    $currentPaths = is_array($currentPaths) ? $currentPaths : [];
-                    $currentPaths[] = $path;
-                    cache()->forever('ids::custom_log_paths', array_values(array_unique($currentPaths)));
+                    // Fresh read to minimize TOCTOU window during best-effort fallback
+                    $latestLegacy1 = cache()->get('ids_custom_log_paths', []);
+                    $latestLegacy2 = cache()->get('ids.custom_log_paths', []);
+                    $latestCurrent = cache()->get('ids::custom_log_paths', []);
+
+                    $bestEffortPaths = array_values(array_unique(array_merge(
+                        is_array($latestCurrent) ? $latestCurrent : [],
+                        is_array($latestLegacy1) ? $latestLegacy1 : [],
+                        is_array($latestLegacy2) ? $latestLegacy2 : [],
+                        [$path]
+                    )));
+
+                    cache()->forever('ids::custom_log_paths', $bestEffortPaths);
                 }
             }
         } finally {
