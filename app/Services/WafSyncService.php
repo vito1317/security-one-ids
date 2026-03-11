@@ -1544,7 +1544,7 @@ class WafSyncService
                 $username = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$username}\n", FILE_APPEND);
                 
-                if ($username && preg_match('/^[a-zA-Z0-9._@+-][a-zA-Z0-9._@+-]*$/', $username) && $username !== 'root' && $username !== '_mbsetupuser') {
+                if ($username && preg_match('/^[a-zA-Z0-9._@+\-][a-zA-Z0-9._@+\-]*$/', $username) && $username !== 'root' && $username !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
@@ -1619,9 +1619,9 @@ class WafSyncService
                 $usersOutput = [];
                 exec("dscl . -list /Users | grep -v '^_' | grep -v 'daemon' | grep -v 'nobody' | grep -v 'root' 2>/dev/null", $usersOutput, $rc);
                 
-                foreach ($usersOutput as $username) {
-                    $username = trim($username);
-                    if (!$username || !preg_match('/^[a-zA-Z0-9._@+-][a-zA-Z0-9._@+-]*$/', $username)) continue;
+                foreach ($usersOutput as $rawUser) {
+                    $username = trim($rawUser);
+                    if (!$username || !preg_match('/^[a-zA-Z0-9._@+\-][a-zA-Z0-9._@+\-]*$/', $username)) continue;
                     
                     $safeUser = escapeshellarg($username);
                     // Remove DisabledUser from AuthenticationAuthority
