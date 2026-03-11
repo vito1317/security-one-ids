@@ -309,11 +309,11 @@ class LogDiscoveryService
             return false;
         }
 
-        $lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
         $acquired = false;
         $delayMicroseconds = 10000;
 
         try {
+            $lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
             for ($i = 0; $i < 10; $i++) {
                 if ($acquired = $lock->get()) {
                     break;
@@ -372,11 +372,11 @@ class LogDiscoveryService
         }
 
         if ($needsMigration) {
-            $lock = cache()->lock('lock::ids::custom_log_paths_migrate', self::LOCK_TIMEOUT);
             $acquired = false;
             $delayMicroseconds = 10000;
 
             try {
+                $lock = cache()->lock('lock::ids::custom_log_paths_migrate', self::LOCK_TIMEOUT);
                 for ($i = 0; $i < 10; $i++) {
                     if ($acquired = $lock->get()) {
                         break;
