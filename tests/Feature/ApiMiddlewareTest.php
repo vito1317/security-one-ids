@@ -18,7 +18,7 @@ class ApiMiddlewareTest extends TestCase
         ]);
 
         $response->assertStatus(401);
-        $response->assertJson(['error' => 'Agent token not configured']);
+        $response->assertJson(['error' => 'Unauthorized']);
     }
 
     /**
