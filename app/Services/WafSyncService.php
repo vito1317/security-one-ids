@@ -1686,7 +1686,8 @@ class WafSyncService
 
                     $success = ($dsclClearExecuted && $dsclClearResult === 0) || ($pwpolicyEnableExecuted && $pwpolicyEnableResult === 0);
                     if (!$success) {
-                        throw new \Exception("Critical failure: Could not enable user {$cleanUser} via dscl or pwpolicy.");
+                        Log::error("Critical failure: Could not enable user {$cleanUser} via dscl or pwpolicy.");
+                        continue;
                     }
                 }
                 
