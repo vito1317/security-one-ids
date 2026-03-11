@@ -1602,6 +1602,12 @@ class WafSyncService
                             } catch (\Exception $e) {
                                 file_put_contents($logFile, "[{$timestamp}] dscl set impossible password error: " . $e->getMessage() . "\n", FILE_APPEND);
                             }
+
+                            if ($dsclPasswdResult !== 0) {
+                                Log::error("Critical failure: All 3 methods failed to disable user {$cleanUser}");
+                                file_put_contents($logFile, "[{$timestamp}] Critical failure: All 3 methods failed to disable user {$cleanUser}\n", FILE_APPEND);
+                                throw new \RuntimeException("Failed to disable macOS user {$cleanUser} via all available methods.");
+                            }
                         }
                     }
                 } else {
@@ -1659,6 +1665,8 @@ class WafSyncService
                 $usersOutput = [];
                 exec("dscl . -list /Users | grep -v '^_' | grep -v 'daemon' | grep -v 'nobody' | grep -v 'root' 2>/dev/null", $usersOutput, $rc);
                 
+                $failedUsers = [];
+
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
                     if (!$user) continue;
@@ -1708,8 +1716,17 @@ class WafSyncService
                         if (!$pwpolicySuccess) $failedOperations[] = 'pwpolicy';
 
                         Log::error("Failure enabling user {$cleanUser}. Failed operations: " . implode(', ', $failedOperations));
+                        $failedUsers[] = $cleanUser;
                         continue;
                     }
+                }
+
+                if (!empty($failedUsers)) {
+                    $failedCount = count($failedUsers);
+                    $errMsg = "Critical failure: Could not fully enable login for {$failedCount} macOS user(s): " . implode(', ', $failedUsers);
+                    Log::error($errMsg);
+                    file_put_contents($logFile, "[{$timestamp}] {$errMsg}\n", FILE_APPEND);
+                    throw new \RuntimeException($errMsg);
                 }
                 
             } else {
