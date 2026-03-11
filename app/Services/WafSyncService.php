@@ -1674,7 +1674,6 @@ class WafSyncService
                     $attempts1 = 0;
                     while ($returnCode1 !== 0 && $attempts1 < 3) {
                         $attempts1++;
-                        $hasException = false;
                         try {
                             $process1 = new SymfonyProcess(['sudo', 'dscl', '.', '-delete', '/Users/' . $cleanUser, 'AuthenticationAuthority']);
                             $process1->setTimeout(60);
@@ -1688,7 +1687,6 @@ class WafSyncService
                             if (stripos($e->getMessage(), 'Permission denied') !== false) {
                                 throw $e;
                             }
-                            $hasException = true;
                             $returnCode1 = 1;
                             file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$cleanUser} error: " . $e->getMessage() . "\n", FILE_APPEND);
                         }
