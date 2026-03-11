@@ -4,11 +4,11 @@ namespace App\Services;
 
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
-<<<<<<< /tmp/merge_ours_vftgpk46kaq1cYQvJFk
+<<<<<<< /tmp/merge_ours_m66mnk7o9mr2cy4oyyX
 use App\Jobs\UnblockIPJob;
 =======
 use App\Jobs\UnblockIPJob;
->>>>>>> /tmp/merge_theirs_2cpheakcv5207jjFag2
+>>>>>>> /tmp/merge_theirs_qmltco5q2buv9czZmCs
 
 /**
  * Blocking Service
@@ -312,13 +312,13 @@ class BlockingService
         // When cache expires, the block is automatically removed
         // For iptables, we need explicit cleanup job
         if (config('ids.blocking.mode') === 'iptables' || config('ids.blocking.mode') === 'hybrid') {
-<<<<<<< /tmp/merge_ours_vftgpk46kaq1cYQvJFk
+<<<<<<< /tmp/merge_ours_m66mnk7o9mr2cy4oyyX
             // Dispatch UnblockIPJob with delay
             dispatch(new UnblockIPJob($ip))->delay($duration);
 =======
 // Dispatch UnblockIPJob with delay
-dispatch(new UnblockIPJob($ip))->delay($duration);
->>>>>>> /tmp/merge_theirs_2cpheakcv5207jjFag2
+            dispatch(new UnblockIPJob($ip))->delay($duration);
+>>>>>>> /tmp/merge_theirs_qmltco5q2buv9czZmCs
         }
     }
 
