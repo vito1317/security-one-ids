@@ -305,9 +305,12 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        if (!is_readable($path)) {
+        $realPath = realpath($path);
+        if ($realPath === false || !is_file($realPath) || !is_readable($realPath)) {
             return false;
         }
+
+        $path = $realPath;
 
         $lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
         $acquired = false;
