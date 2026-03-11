@@ -12,9 +12,6 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
-    public static bool $migrated = false;
-    private const LOCK_TIMEOUT = 30;
-
     /**
      * Allowed base directories for custom log paths
      */
@@ -328,7 +325,7 @@ class LogDiscoveryService
             return false;
         }
 
-// Validate that path does not contain path traversal vectors
+        // Validate that path does not contain path traversal vectors
         $segments = explode('/', str_replace('\\', '/', $path));
         if (in_array('..', $segments, true)) {
             return false;
@@ -377,10 +374,6 @@ class LogDiscoveryService
             $cachedPaths[] = $realPath;
             $merged = array_values(array_unique($cachedPaths));
             cache()->forever('ids.custom_log_paths', $merged);
-        } catch (\Throwable $e) {
-            Log::warning("Failed to add custom path: " . $e->getMessage());
-            return false;
-        }
         } finally {
             if ($acquired) {
                 $lock->release();
@@ -428,7 +421,7 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-// Handle backward compatibility for old cache key
+        // Handle backward compatibility for old cache key
         if (cache()->has('ids_custom_log_paths')) {
             $lock = cache()->lock('ids.custom_log_paths_lock', 5);
             if ($lock->get()) {
