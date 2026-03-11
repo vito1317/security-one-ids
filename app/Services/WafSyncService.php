@@ -1544,8 +1544,7 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
-                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
-                    if (!preg_match('/^[a-zA-Z0-9_-]+$/', $consoleUser)) { throw new \Exception('Invalid username'); }
+                if ($consoleUser && preg_match('/^[a-zA-Z0-9_-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $process = Process::run(['sudo', 'dscl', '.', '-create', '/Users/' . $consoleUser, 'AuthenticationAuthority', ';DisabledUser;']);
@@ -1623,8 +1622,7 @@ class WafSyncService
                 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user) continue;
-                    if (!preg_match('/^[a-zA-Z0-9_-]+$/', $user)) { continue; }
+                    if (!$user || !preg_match('/^[a-zA-Z0-9_-]+$/', $user)) continue;
                     
                     // Remove DisabledUser from AuthenticationAuthority
                     $process = Process::run(['sudo', 'dscl', '.', '-delete', '/Users/' . $user, 'AuthenticationAuthority']);
