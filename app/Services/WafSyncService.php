@@ -1556,7 +1556,7 @@ class WafSyncService
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
                         $output = [];
-                        exec("sudo pwpolicy -u {$escapedUser} disableuser 2>&1", $output, $returnCode);
+                        exec("sudo pwpolicy -u {$consoleUser} disableuser 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
                     }
                     
@@ -1634,8 +1634,8 @@ class WafSyncService
                     
                     // Re-enable with pwpolicy  
                     $output = [];
-                    exec("sudo pwpolicy -u {$escapedUser} enableuser 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$escapedUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+                    exec("sudo pwpolicy -u {$user} enableuser 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$user}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
                 }
                 
             } else {
