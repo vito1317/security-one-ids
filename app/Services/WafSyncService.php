@@ -1545,30 +1545,25 @@ class WafSyncService
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
                 if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
-                    if (!preg_match('/^[a-zA-Z0-9._-]+$/', $consoleUser)) {
-                        Log::warning('Invalid console username format detected: ' . $consoleUser);
-                        file_put_contents($logFile, "[{$timestamp}] Invalid console username format detected: {$consoleUser}\n", FILE_APPEND);
-                    } else {
-                        $escapedUser = escapeshellarg($consoleUser);
+                    $escapedUser = escapeshellarg($consoleUser);
 
-                        // Method 1: Use dscl to disable user account
-                        // The correct way is to set AuthenticationAuthority to DisabledUser
-                        $output = [];
-                        exec("sudo dscl . -create /Users/{$escapedUser} AuthenticationAuthority " . escapeshellarg(';DisabledUser;') . " 2>&1", $output, $returnCode);
-                        // Log the original unescaped username for clarity and better readability in logs
-                        file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+                    // Method 1: Use dscl to disable user account
+                    // The correct way is to set AuthenticationAuthority to DisabledUser
+                    $output = [];
+                    exec("sudo dscl . -create /Users/{$escapedUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    // Log the original unescaped username for clarity and better readability in logs
+                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
 
-                        if ($returnCode !== 0) {
-                            // Method 2: Lock the user's password (they won't be able to login)
-                            exec("sudo pwpolicy -u {$escapedUser} disableuser 2>&1", $output, $returnCode);
-                            file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
-                        }
+                    if ($returnCode !== 0) {
+                        // Method 2: Lock the user's password (they won't be able to login)
+                        exec("sudo pwpolicy -u {$escapedUser} disableuser 2>&1", $output, $returnCode);
+                        file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
+                    }
 
-                        if ($returnCode !== 0) {
-                            // Method 3: Set an impossible password hash
-                            exec("sudo dscl . -passwd /Users/{$escapedUser} " . escapeshellarg('*') . " 2>&1", $output, $returnCode);
-                            file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
-                        }
+                    if ($returnCode !== 0) {
+                        // Method 3: Set an impossible password hash
+                        exec("sudo dscl . -passwd /Users/{$escapedUser} '*' 2>&1", $output, $returnCode);
+                        file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
                     }
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
@@ -1629,13 +1624,7 @@ class WafSyncService
                     $user = trim($user);
                     if (!$user) continue;
                     
-                    if (!preg_match('/^[a-zA-Z0-9._-]+$/', $user)) {
-                        Log::warning('Invalid username format detected: ' . $user);
-                        file_put_contents($logFile, "[{$timestamp}] Invalid username format detected: {$user}\n", FILE_APPEND);
-                        continue;
-                    }
-
-                    // Verify the user actually exists using POSIX functions if available, otherwise just use the sanitized user
+                    // Verify the user actually exists using POSIX functions if available
                     if (function_exists('posix_getpwnam') && !posix_getpwnam($user)) {
                          Log::warning('User does not exist: ' . $user);
                          file_put_contents($logFile, "[{$timestamp}] User does not exist: {$user}\n", FILE_APPEND);
