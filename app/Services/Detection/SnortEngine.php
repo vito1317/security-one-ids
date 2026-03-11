@@ -2,6 +2,7 @@
 
 namespace App\Services\Detection;
 
+use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
@@ -11,8 +12,9 @@ use Illuminate\Support\Facades\Process;
  * Manages Snort 3 process lifecycle, parses alerts, and provides status information.
  * Supports IDS (passive) and IPS (inline) modes across Linux, macOS, and Windows.
  */
-class SnortEngine
-{
+class SnortEngine {
+    use DetectsPlatform;
+
     private string $snortPath;
     private string $configPath;
     private string $alertLogPath;
@@ -1734,11 +1736,6 @@ LUA;
         }
 
         return null;
-    }
-
-    private function isWindows(): bool
-    {
-        return PHP_OS_FAMILY === 'Windows';
     }
 
     /**

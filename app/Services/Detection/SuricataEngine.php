@@ -2,6 +2,7 @@
 
 namespace App\Services\Detection;
 
+use App\Traits\DetectsPlatform;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
@@ -12,8 +13,9 @@ use Illuminate\Support\Facades\Process;
  * Supports IDS (passive) and IPS (inline) modes across Linux, macOS, and Windows.
  * On Windows, uses WinDivert (EV code-signed) instead of Npcap.
  */
-class SuricataEngine
-{
+class SuricataEngine {
+    use DetectsPlatform;
+
     private string $suricataPath;
     private string $configPath;
     private string $alertLogPath;
@@ -1028,11 +1030,6 @@ YAML;
             3 => 'medium',
             default => 'low',
         };
-    }
-
-    private function isWindows(): bool
-    {
-        return PHP_OS_FAMILY === 'Windows';
     }
 
     private function detectLinuxDistro(): string
