@@ -41,6 +41,9 @@ class LogDiscoveryServiceTest extends TestCase
         $this->assertNotEmpty($tempPath);
         $this->assertFileExists($tempPath);
 
+        $originalCustomPaths = config('ids.custom_log_paths', []);
+        Config::set('ids.custom_log_paths', []);
+
         Cache::shouldReceive('forever')
             ->once()
             ->with('ids_custom_log_paths', [$tempPath]);
@@ -55,6 +58,8 @@ class LogDiscoveryServiceTest extends TestCase
             if (is_file($tempPath)) {
                 unlink($tempPath);
             }
+
+            Config::set('ids.custom_log_paths', $originalCustomPaths);
         }
     }
 
@@ -66,6 +71,8 @@ class LogDiscoveryServiceTest extends TestCase
         $this->assertFileExists($tempPath);
 
         Cache::shouldReceive('forever')->never();
+
+        $originalCustomPaths = config('ids.custom_log_paths', []);
 
         try {
             file_put_contents($tempPath, 'test log content');
@@ -81,8 +88,8 @@ class LogDiscoveryServiceTest extends TestCase
                 unlink($tempPath);
             }
 
-            // Explicitly reset the config to prevent global state mutation leaking to other tests
-            Config::set('ids.custom_log_paths', []);
+            // Restore original config to avoid leaking global state
+            Config::set('ids.custom_log_paths', $originalCustomPaths);
         }
     }
 }
