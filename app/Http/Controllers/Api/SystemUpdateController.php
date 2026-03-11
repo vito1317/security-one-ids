@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Log;
+use App\Http\Controllers\Controller;
 
 class SystemUpdateController extends Controller
 {
@@ -26,6 +27,17 @@ class SystemUpdateController extends Controller
                 // Clear caches
                 Artisan::call('config:clear');
                 Artisan::call('cache:clear');
+public function checkForUpdates(): array
+    {
+        $latestVersion = SystemUpdateService::getLatestVersion();
+        $currentVersion = config('app.version');
+
+        return [
+            'has_update' => version_compare($latestVersion, $currentVersion, '>'),
+            'version' => $latestVersion,
+            'message' => $latestVersion > $currentVersion ? 'Update available' : 'Up to date',
+        ];
+    }
                 Log::info('System update completed', [
                     'output' => implode("\n", $output),
                 ]);
@@ -73,6 +85,24 @@ class SystemUpdateController extends Controller
             // Get git info
             exec('git rev-parse HEAD 2>/dev/null', $hashOutput);
             exec('git rev-parse --abbrev-ref HEAD 2>/dev/null', $branchOutput);
+public function triggerUpdate(Request $request): Response
+    {
+        try {
+            SystemUpdateService::performUpdate();
+            
+            return response()->json([
+                'status' => 'success',
+                'message' => 'System update initiated successfully',
+            ], 200);
+        } catch (\Exception $e) {
+            Log::error('System update failed: ' . $e->getMessage());
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to initiate system update',
+            ], 500);
+        }
+    }
             $gitHash = !empty($hashOutput) ? substr($hashOutput[0], 0, 7) : 'unknown';
             $gitBranch = !empty($branchOutput) ? $branchOutput[0] : 'unknown';
         } catch (\Exception $e) {
