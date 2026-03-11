@@ -41,10 +41,6 @@ class LogDiscoveryServiceTest extends TestCase
         $this->assertNotEmpty($tempPath);
         $this->assertFileExists($tempPath);
 
-        Cache::shouldReceive('get')
-            ->with('ids_custom_log_paths', [])
-            ->andReturn([]);
-
         Cache::shouldReceive('forever')
             ->once()
             ->with('ids_custom_log_paths', [$tempPath]);
@@ -68,10 +64,6 @@ class LogDiscoveryServiceTest extends TestCase
         $tempPath = tempnam(sys_get_temp_dir(), 'test_log');
         $this->assertNotEmpty($tempPath);
         $this->assertFileExists($tempPath);
-
-        Cache::shouldReceive('get')
-            ->with('ids_custom_log_paths', [])
-            ->andReturn([]);
 
         Cache::shouldReceive('forever')->never();
 
