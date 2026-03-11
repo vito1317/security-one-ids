@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\Artisan;
 
 class WafSyncService
 {
+    public const USERNAME_PATTERN = '/^[a-zA-Z0-9_.-]+$/';
+
     protected string $wafUrl;
     protected string $agentToken;
     protected string $agentName;
@@ -1545,7 +1547,7 @@ class WafSyncService
                 $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $consoleUser)) ?? '';
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$safeConsoleUser}\n", FILE_APPEND);
 
-                if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                if ($consoleUser && preg_match(self::USERNAME_PATTERN, $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $result = Process::run(['sudo', 'dscl', '.', '-create', "/Users/{$consoleUser}", 'AuthenticationAuthority', ';DisabledUser;']);
@@ -1622,7 +1624,7 @@ class WafSyncService
 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
+                    if (!$user || !preg_match(self::USERNAME_PATTERN, $user)) continue;
 
                     $safeUser = escapeshellarg($user);
 
