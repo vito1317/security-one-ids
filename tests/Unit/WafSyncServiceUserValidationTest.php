@@ -11,10 +11,11 @@ class WafSyncServiceUserValidationTest extends TestCase
      */
     public function testValidMacOsUsernames()
     {
-        $this->assertTrue((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'john.doe'));
-        $this->assertTrue((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'user_123'));
-        $this->assertTrue((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin-user'));
-        $this->assertTrue((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'johndoe'));
+        $pattern = \App\Services\WafSyncService::MACOS_USERNAME_REGEX;
+        $this->assertTrue((bool) preg_match($pattern, 'john.doe'));
+        $this->assertTrue((bool) preg_match($pattern, 'user_123'));
+        $this->assertTrue((bool) preg_match($pattern, 'admin-user'));
+        $this->assertTrue((bool) preg_match($pattern, 'johndoe'));
     }
 
     /**
@@ -23,17 +24,18 @@ class WafSyncServiceUserValidationTest extends TestCase
      */
     public function testInvalidMacOsUsernames()
     {
+        $pattern = \App\Services\WafSyncService::MACOS_USERNAME_REGEX;
         // Reject spaces
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'john doe'));
+        $this->assertFalse((bool) preg_match($pattern, 'john doe'));
 
         // Reject quotes and shell metacharacters
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'user"name'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', "user'name"));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin;ls'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin|ls'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin&ls'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin$user'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin`ls`'));
-        $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin>file'));
+        $this->assertFalse((bool) preg_match($pattern, 'user"name'));
+        $this->assertFalse((bool) preg_match($pattern, "user'name"));
+        $this->assertFalse((bool) preg_match($pattern, 'admin;ls'));
+        $this->assertFalse((bool) preg_match($pattern, 'admin|ls'));
+        $this->assertFalse((bool) preg_match($pattern, 'admin&ls'));
+        $this->assertFalse((bool) preg_match($pattern, 'admin$user'));
+        $this->assertFalse((bool) preg_match($pattern, 'admin`ls`'));
+        $this->assertFalse((bool) preg_match($pattern, 'admin>file'));
     }
 }

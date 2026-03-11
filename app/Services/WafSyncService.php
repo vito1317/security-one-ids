@@ -1540,7 +1540,7 @@ class WafSyncService
                 $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $consoleUser)) ?? '';
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$safeConsoleUser}\n", FILE_APPEND);
                 
-                if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                if ($consoleUser && preg_match(self::MACOS_USERNAME_REGEX, $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
@@ -1615,7 +1615,7 @@ class WafSyncService
                 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
+                    if (!$user || !preg_match(self::MACOS_USERNAME_REGEX, $user)) continue;
                     
                     $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
 
@@ -2973,6 +2973,11 @@ class WafSyncService
         // Or from cache (set during registration)
         return cache('ids_agent_id');
     }
+
+    /**
+     * Strict regex to validate macOS usernames (allows standard letters, numbers, underscores, dots, hyphens)
+     */
+    public const MACOS_USERNAME_REGEX = '/^[a-zA-Z0-9_.-]+$/';
 
     /**
      * Check if WAF sync is properly configured
