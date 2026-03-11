@@ -1544,23 +1544,42 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
                 
-                if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
-                    // Method 1: Use dscl to disable user account
-                    // The correct way is to set AuthenticationAuthority to DisabledUser
-                    $output = [];
-                    exec("sudo dscl . -create /Users/{$consoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+                $cleanUser = preg_replace('/[^a-zA-Z0-9._-]/', '', $consoleUser);
+
+                if ($cleanUser && $cleanUser !== 'root' && $cleanUser !== '_mbsetupuser') {
+                    $sudoCheckCode = -1;
+                    exec('sudo -n true 2>/dev/null', $sudoOutput, $sudoCheckCode);
                     
-                    if ($returnCode !== 0) {
-                        // Method 2: Lock the user's password (they won't be able to login)
-                        exec("sudo pwpolicy -u {$consoleUser} disableuser 2>&1", $output, $returnCode);
-                        file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
-                    }
-                    
-                    if ($returnCode !== 0) {
-                        // Method 3: Set an impossible password hash
-                        exec("sudo dscl . -passwd /Users/{$consoleUser} '*' 2>&1", $output, $returnCode);
-                        file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
+                    if ($sudoCheckCode !== 0) {
+                        file_put_contents($logFile, "[{$timestamp}] Sudo access required to disable user\n", FILE_APPEND);
+                    } else {
+                        // Method 1: Use dscl to disable user account
+                        // The correct way is to set AuthenticationAuthority to DisabledUser
+                        $output = [];
+                        $returnCode = -1;
+                        exec("sudo -n dscl . -create /Users/{$cleanUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+
+                        if ($returnCode !== 0) {
+                            file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser} error: [operation failed]\n", FILE_APPEND);
+                        } else {
+                            file_put_contents($logFile, "[{$timestamp}] dscl disable user {$cleanUser}: code={$returnCode}\n", FILE_APPEND);
+                        }
+
+                        if ($returnCode !== 0) {
+                            // Method 2: Lock the user's password (they won't be able to login)
+                            $output = [];
+                            $returnCode = -1;
+                            exec("sudo -n pwpolicy -u {$cleanUser} disableuser 2>&1", $output, $returnCode);
+                            file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
+                        }
+
+                        if ($returnCode !== 0) {
+                            // Method 3: Set an impossible password hash
+                            $output = [];
+                            $returnCode = -1;
+                            exec("sudo -n dscl . -passwd /Users/{$cleanUser} '*' 2>&1", $output, $returnCode);
+                            file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
+                        }
                     }
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
