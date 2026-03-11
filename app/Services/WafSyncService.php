@@ -1551,7 +1551,7 @@ class WafSyncService
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
                     exec("sudo dscl . -create /Users/{$escapedUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$escapedUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
                     
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
@@ -1630,12 +1630,12 @@ class WafSyncService
                     // Remove DisabledUser from AuthenticationAuthority
                     $output = [];
                     exec("sudo dscl . -delete /Users/{$escapedUser} AuthenticationAuthority 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$user}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$escapedUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
                     
                     // Re-enable with pwpolicy  
                     $output = [];
                     exec("sudo pwpolicy -u {$escapedUser} enableuser 2>&1", $output, $returnCode);
-                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$user}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+                    file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$escapedUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
                 }
                 
             } else {
