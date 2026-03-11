@@ -36,4 +36,18 @@ class WafSyncServiceUserValidationTest extends TestCase
         $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin`ls`'));
         $this->assertFalse((bool) preg_match('/^[a-zA-Z0-9_.-]+$/', 'admin>file'));
     }
+
+    /**
+     * Test safe execution string format to verify proper shell escaping behavior
+     */
+    public function testEscapeshellargBehaviorOnValidUsers()
+    {
+        $user = 'user_123';
+        $safeUser = escapeshellarg($user);
+
+        $this->assertEquals("'user_123'", $safeUser);
+
+        $command = "sudo dscl . -create /Users/{$safeUser} AuthenticationAuthority ';DisabledUser;' 2>&1";
+        $this->assertEquals("sudo dscl . -create /Users/'user_123' AuthenticationAuthority ';DisabledUser;' 2>&1", $command);
+    }
 }
