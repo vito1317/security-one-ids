@@ -361,7 +361,7 @@ $lock = null;
             } else {
                 return false;
             }
-} catch (\Exception $e) {
+} catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
             return false;
         } finally {
