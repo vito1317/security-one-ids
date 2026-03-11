@@ -302,16 +302,21 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        if (!is_readable($path)) {
+        if (!is_readable($path) || !is_file($path)) {
             return false;
         }
 
-        $customPaths = config('ids.custom_log_paths', []);
-        if (!in_array($path, $customPaths)) {
-            $customPaths[] = $path;
-            // Store in cache for persistence
-            cache()->forever('ids_custom_log_paths', $customPaths);
+        $cachedPaths = $this->getCustomPaths();
+        $configPaths = config('ids.custom_log_paths', []);
+
+        if (in_array($path, $cachedPaths, true) || in_array($path, $configPaths, true)) {
+            return true;
         }
+
+        $cachedPaths[] = $path;
+
+        // Store in cache for persistence
+        cache()->forever('ids_custom_log_paths', $cachedPaths);
 
         return true;
     }
