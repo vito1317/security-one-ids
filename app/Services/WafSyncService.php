@@ -1539,11 +1539,9 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $consoleUser)) ?? '';
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$safeConsoleUser}\n", FILE_APPEND);
+--- Resolution #1 ---
 
-                if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
-                    // Method 1: Use dscl to disable user account
-                    // The correct way is to set AuthenticationAuthority to DisabledUser
-                    $output = [];
+--- Resolution #2 ---
                     $escapedUser = escapeshellarg($safeConsoleUser);
                     exec("sudo dscl . -create /Users/" . $escapedUser . " AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$safeConsoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
@@ -1551,12 +1549,52 @@ class WafSyncService
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
                         exec("sudo pwpolicy -u " . $escapedUser . " disableuser 2>&1", $output, $returnCode);
+
+--- Resolution #3 ---
+                        exec("sudo dscl . -passwd /Users/" . $escapedUser . " '*' 2>&1", $output, $returnCode);
+
+--- Resolution #4 ---
+                    $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
+                    $escapedUser = escapeshellarg($safeUser);
+
+                    // Remove DisabledUser from AuthenticationAuthority
+                    exec("sudo dscl . -delete /Users/" . $escapedUser . " AuthenticationAuthority 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$safeUser}: code={$returnCode}\n", FILE_APPEND);
+
+                    // Re-enable with pwpolicy
+                    exec("sudo pwpolicy -u " . $escapedUser . " enableuser 2>&1", $output, $returnCode);
+
+--- Resolution #5 ---
+                if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                    // Method 1: Use dscl to disable user account
+                    // The correct way is to set AuthenticationAuthority to DisabledUser
+                    $output = [];
+<<<<<<< /tmp/merge_ours_nf43ptah348pfciv7nV
+                    exec("sudo dscl . -create /Users/{$safeConsoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$safeConsoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+
+                    if ($returnCode !== 0) {
+                        // Method 2: Lock the user's password (they won't be able to login)
+                        exec("sudo pwpolicy -u {$safeConsoleUser} disableuser 2>&1", $output, $returnCode);
+=======
+                    $escapedUser = escapeshellarg($safeConsoleUser);
+                    exec("sudo dscl . -create /Users/" . $escapedUser . " AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$safeConsoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+
+                    if ($returnCode !== 0) {
+                        // Method 2: Lock the user's password (they won't be able to login)
+                        exec("sudo pwpolicy -u " . $escapedUser . " disableuser 2>&1", $output, $returnCode);
+>>>>>>> /tmp/merge_theirs_cqpa3jhelje0a8ARIeh
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
                     }
 
                     if ($returnCode !== 0) {
                         // Method 3: Set an impossible password hash
+<<<<<<< /tmp/merge_ours_nf43ptah348pfciv7nV
+                        exec("sudo dscl . -passwd /Users/{$safeConsoleUser} '*' 2>&1", $output, $returnCode);
+=======
                         exec("sudo dscl . -passwd /Users/" . $escapedUser . " '*' 2>&1", $output, $returnCode);
+>>>>>>> /tmp/merge_theirs_cqpa3jhelje0a8ARIeh
                         file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
                     }
                 } else {
@@ -1617,6 +1655,17 @@ class WafSyncService
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
                     if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
+<<<<<<< /tmp/merge_ours_nf43ptah348pfciv7nV
+
+                    $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
+
+                    // Remove DisabledUser from AuthenticationAuthority
+                    exec("sudo dscl . -delete /Users/{$safeUser} AuthenticationAuthority 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$safeUser}: code={$returnCode}\n", FILE_APPEND);
+
+                    // Re-enable with pwpolicy
+                    exec("sudo pwpolicy -u {$safeUser} enableuser 2>&1", $output, $returnCode);
+=======
 
                     $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
                     $escapedUser = escapeshellarg($safeUser);
@@ -1627,6 +1676,7 @@ class WafSyncService
 
                     // Re-enable with pwpolicy
                     exec("sudo pwpolicy -u " . $escapedUser . " enableuser 2>&1", $output, $returnCode);
+>>>>>>> /tmp/merge_theirs_cqpa3jhelje0a8ARIeh
                     file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$safeUser}: code={$returnCode}\n", FILE_APPEND);
                 }
 
@@ -2907,7 +2957,11 @@ class WafSyncService
                 return $path;
             }
         }
+<<<<<<< /tmp/merge_ours_nf43ptah348pfciv7nV
 
+=======
+
+>>>>>>> /tmp/merge_theirs_cqpa3jhelje0a8ARIeh
         // If not found, use bundled certificate
         $bundledPath = base_path('resources/certs/cacert.pem');
         if (file_exists($bundledPath)) {
