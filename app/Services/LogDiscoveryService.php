@@ -310,34 +310,26 @@ class LogDiscoveryService
         }
 
         $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
-        $acquired = false;
-        $delayMicroseconds = 10000;
 
         try {
-            for ($i = 0; $i < 10; $i++) {
-                if ($acquired = $lock->get()) {
-                    break;
-                }
-                usleep($delayMicroseconds);
-                $delayMicroseconds = min($delayMicroseconds * 2, 100000);
+            $acquired = $lock->block(self::LOCK_TIMEOUT);
+
+            if (!$acquired) {
+                return false;
             }
 
-            if ($acquired) {
-                // Ensure migration is done first while holding the lock
-                $this->migrateCustomPaths();
+            // Ensure migration is done first while holding the lock
+            $this->migrateCustomPaths();
 
-                $cachedPaths = cache()->get('ids::custom_log_paths', []);
-                $configPaths = config('ids.custom_log_paths', []);
+            $cachedPaths = cache()->get('ids::custom_log_paths', []);
+            $configPaths = config('ids.custom_log_paths', []);
 
-                $allPaths = array_values(array_unique(array_merge($cachedPaths, $configPaths)));
+            $allPaths = array_values(array_unique(array_merge($cachedPaths, $configPaths)));
 
-                if (!in_array($path, $allPaths, true)) {
-                    $cachedPaths[] = $path;
-                    $cachedPaths = array_values(array_unique($cachedPaths));
-                    cache()->forever('ids::custom_log_paths', $cachedPaths);
-                }
-            } else {
-                return false;
+            if (!in_array($path, $allPaths, true)) {
+                $cachedPaths[] = $path;
+                $cachedPaths = array_values(array_unique($cachedPaths));
+                cache()->forever('ids::custom_log_paths', $cachedPaths);
             }
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
@@ -386,17 +378,9 @@ class LogDiscoveryService
 
         if ($needsMigration) {
             $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
-            $acquired = false;
-            $delayMicroseconds = 10000;
 
             try {
-                for ($i = 0; $i < 10; $i++) {
-                    if ($acquired = $lock->get()) {
-                        break;
-                    }
-                    usleep($delayMicroseconds);
-                    $delayMicroseconds = min($delayMicroseconds * 2, 100000);
-                }
+                $acquired = $lock->block(self::LOCK_TIMEOUT);
 
                 if ($acquired) {
                     $this->migrateCustomPaths();

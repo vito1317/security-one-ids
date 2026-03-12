@@ -10,8 +10,14 @@ class VerifyAgentToken
     public function handle(Request $request, Closure $next)
     {
         $token = $request->input('token');
+        if (!is_scalar($token) && $token !== null) {
+            $token = null;
+        }
         if ($token === null || $token === '') {
             $token = $request->header('X-Agent-Token');
+        }
+        if (!is_scalar($token) && $token !== null) {
+            $token = null;
         }
         if ($token === null || $token === '') {
             $token = $request->bearerToken();

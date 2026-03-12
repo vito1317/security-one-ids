@@ -3123,7 +3123,7 @@ class WafSyncService
      */
     public function isValidUsername(string $username): bool
     {
-        return (bool) preg_match('/^[a-zA-Z0-9_.-]+$/', $username);
+        return (bool) preg_match('/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/', $username);
     }
 
     /**
