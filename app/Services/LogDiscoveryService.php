@@ -12,6 +12,9 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
+    public static bool $migrated = false;
+    private const LOCK_TIMEOUT = 30;
+
     /**
      * Allowed base directories for custom log paths
      */
@@ -320,7 +323,7 @@ class LogDiscoveryService
             return false;
         }
 
-        $allowedBaseDirs = config('ids.allowed_custom_log_base_dirs', self::ALLOWED_BASE_DIRS);
+$allowedBaseDirs = config('ids.allowed_custom_log_base_dirs', self::ALLOWED_BASE_DIRS);
         if (!is_array($allowedBaseDirs) || empty($allowedBaseDirs)) {
             $allowedBaseDirs = self::ALLOWED_BASE_DIRS;
         }
@@ -358,9 +361,14 @@ class LogDiscoveryService
                 } finally {
                     $lock->release();
                 }
+            } else {
+                \Illuminate\Support\Facades\Log::warning("Failed to acquire lock to add custom path: " . $path);
+                return false;
             }
-        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-            // Fall-through to concurrent check below
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
+            return false;
+        }
         }
 
         // Only after blocking for 5 seconds and failing, check if it was added concurrently
@@ -401,7 +409,7 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        // Handle backward compatibility for old cache key
+// Handle backward compatibility for old cache key
         $legacyPaths = cache()->pull('ids_custom_log_paths');
 
         if ($legacyPaths !== null) {
