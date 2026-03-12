@@ -12,9 +12,6 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
-    public static bool $migrated = false;
-    private const LOCK_TIMEOUT = 30;
-
     /**
      * Cache key for custom log paths
      */
@@ -319,7 +316,7 @@ class LogDiscoveryService
             return false;
         }
 
-$lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
+        $lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
 
         try {
             // Wait up to 5 seconds for the lock
@@ -342,21 +339,6 @@ $lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
             $legacyPaths = cache()->get(self::LEGACY_CACHE_KEY, []);
             $mergedPaths = array_values(array_unique(array_merge($cachedPaths, $legacyPaths)));
 
-            if (!in_array($path, $mergedPaths, true)) {
-                $mergedPaths[] = $path;
-                cache()->forever(self::CACHE_KEY, $mergedPaths);
-            }
-
-            return false;
-        } catch (\Throwable $e) {
-            \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
-            return false;
-        } finally {
-            if (isset($lock)) {
-                optional($lock)->release();
-            }
-        }
-
             return in_array($path, $mergedPaths, true);
         } finally {
             optional($lock)->release();
@@ -368,7 +350,7 @@ $lock = cache()->lock(self::CACHE_KEY . '_lock', 5);
      */
     public function getCustomPaths(): array
     {
-$paths = cache()->get(self::CACHE_KEY, []);
+        $paths = cache()->get(self::CACHE_KEY, []);
         $oldPaths = cache()->get(self::LEGACY_CACHE_KEY);
 
         if ($oldPaths === null) {
