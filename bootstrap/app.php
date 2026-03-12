@@ -12,9 +12,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->alias([
-            'agent_auth' => \App\Http\Middleware\AgentAuth::class,
-        ]);
+        // We use \App\Http\Middleware\VerifyAgentToken::class directly in routes/api.php
+        // so no alias is strictly required here for the core functionality.
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

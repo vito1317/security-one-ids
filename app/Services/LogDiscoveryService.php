@@ -427,6 +427,21 @@ class LogDiscoveryService
                     $lock->release();
                 }
             }
+
+            if (!$acquired) {
+                $fallback = cache()->get($newKey, []);
+                foreach ($legacyKeys as $legacyKey) {
+                    if (cache()->has($legacyKey)) {
+                        $legacyData = cache()->get($legacyKey, []);
+                        if (is_array($legacyData)) {
+                            $fallback = array_merge($fallback, $legacyData);
+                        }
+                    }
+                }
+
+                $configPaths = config('ids.custom_log_paths', []);
+                return array_values(array_unique(array_diff($fallback, $configPaths)));
+            }
         } else {
             self::$migrated = true;
         }
