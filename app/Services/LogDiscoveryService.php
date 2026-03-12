@@ -12,6 +12,9 @@ use Illuminate\Support\Facades\Log;
  */
 class LogDiscoveryService
 {
+    public static bool $migrated = false;
+    private const LOCK_TIMEOUT = 30;
+
     /**
      * Common web server log file locations to scan
      */
@@ -306,7 +309,7 @@ class LogDiscoveryService
             return false;
         }
 
-        $cachedPaths = $this->getCustomPaths();
+$cachedPaths = $this->getCustomPaths();
 
         if (!in_array($path, $cachedPaths, true)) {
             // Check config once as a fallback if the path is not in the cache
@@ -318,6 +321,7 @@ class LogDiscoveryService
             // Keep config in sync for the current request lifecycle
             config(['ids.custom_log_paths' => $mergedPaths]);
         }
+        }
 
         return true;
     }
@@ -327,7 +331,7 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        return cache()->get('ids.custom_log_paths', function () {
+return cache()->get('ids.custom_log_paths', function () {
             return cache()->get('ids_custom_log_paths', []);
         });
     }
