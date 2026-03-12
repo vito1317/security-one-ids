@@ -404,6 +404,16 @@ class LogDiscoveryService
      */
     private function isAllowedPath(string $realPath, array $allowedDirs): bool
     {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $allowedDirs = array_merge($allowedDirs, [
+                'C:\\ProgramData',
+                'C:\\inetpub',
+                'C:\\xampp',
+                'C:\\wamp64',
+                'C:\\logs',
+            ]);
+        }
+
         if (app()->runningInConsole() && app()->environment('testing')) {
             $allowedDirs[] = sys_get_temp_dir();
         }
