@@ -309,7 +309,15 @@ class BlockingService
         // For iptables, we need explicit cleanup job
         if (config('ids.blocking.mode') === 'iptables' || config('ids.blocking.mode') === 'hybrid') {
             // Dispatch UnblockIPJob with delay
-            dispatch(new UnblockIPJob($ip))->delay($duration);
+            try {
+                dispatch(new UnblockIPJob($ip))->delay($duration);
+            } catch (\Throwable $e) {
+                Log::error('Failed to schedule UnblockIPJob', [
+                    'ip' => $ip,
+                    'duration' => $duration,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
     }
 
