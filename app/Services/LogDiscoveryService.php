@@ -319,22 +319,21 @@ class LogDiscoveryService
      */
     public function addCustomPath(string $path): bool
     {
-        // Decode repeatedly to handle double or multiple encodings
-        $decodedPath = rawurldecode($path);
-        while ($decodedPath !== $path) {
-            $path = $decodedPath;
-            $decodedPath = rawurldecode($path);
+        $realPath = realpath($path);
+
+        if ($realPath === false || !is_file($realPath) || !is_readable($realPath)) {
+            return false;
         }
 
-        // Ensure that any encoded traversal sequences are decoded before checking for '..'
+        // Validate that path does not contain path traversal vectors
         $segments = explode('/', str_replace('\\', '/', $path));
         if (in_array('..', $segments, true)) {
             return false;
         }
 
-        $realPath = realpath($path);
-
-        if ($realPath === false || !is_file($realPath) || !is_readable($realPath)) {
+        // Additionally verify that basename of realpath matches basename of path
+        // to prevent linking an allowed file to an unexpected name in the symlink attacks where the target is outside
+        if (basename($path) !== basename($realPath)) {
             return false;
         }
 
@@ -342,24 +341,22 @@ class LogDiscoveryService
             return false;
         }
 
+        $configPaths = config('ids.custom_log_paths', []);
+
+        // We shouldn't redundantly merge and write to cache if not needed.
+        // First check if it's already in config.
+        if (in_array($path, $configPaths, true) || in_array($realPath, $configPaths, true)) {
+            return true;
+        }
+
         $lock = cache()->lock('ids.custom_log_paths_lock', 5);
 
-        // Try to acquire lock with blocking to avoid silent transient failures
-        try {
-            $lock->block(5);
-            $lockAcquired = true;
-        } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
+        if (!$lock->get()) {
             Log::warning("Could not acquire lock to add custom log path", ['path' => $path]);
             return false;
         }
 
         try {
-            // Re-read config inside lock to prevent race conditions
-            $configPaths = config('ids.custom_log_paths', []);
-            if (in_array($path, $configPaths, true) || in_array($realPath, $configPaths, true)) {
-                return true;
-            }
-
             $cachedPaths = cache()->get('ids.custom_log_paths', []);
             $cachedPaths = is_array($cachedPaths) ? $cachedPaths : [];
 
@@ -397,9 +394,7 @@ class LogDiscoveryService
                 cache()->forget('ids_custom_log_paths');
             }
         } finally {
-            if ($lockAcquired) {
-                $lock->release();
-            }
+            $lock->release();
         }
 
         return true;
@@ -413,19 +408,13 @@ class LogDiscoveryService
 
             self::$resolvedBaseDirs = [];
             foreach ($allowedDirs as $dir) {
-                $realDir = realpath($dir);
-                if ($realDir !== false && is_dir($realDir)) {
-                    self::$resolvedBaseDirs[] = rtrim($realDir, DIRECTORY_SEPARATOR);
-                }
+                $realDir = realpath($dir) ?: $dir;
+                self::$resolvedBaseDirs[] = rtrim($realDir, DIRECTORY_SEPARATOR);
             }
         }
 
-        // Ensure consistent path comparison for directory boundaries
-        $realPathNormalized = rtrim($realPath, DIRECTORY_SEPARATOR);
-
         foreach (self::$resolvedBaseDirs as $realDir) {
-            $realDirNormalized = rtrim($realDir, DIRECTORY_SEPARATOR);
-            if ($realPathNormalized === $realDirNormalized || str_starts_with($realPathNormalized, $realDirNormalized . DIRECTORY_SEPARATOR)) {
+            if ($realPath === $realDir || str_starts_with($realPath, $realDir . DIRECTORY_SEPARATOR)) {
                 return true;
             }
         }
@@ -440,34 +429,21 @@ class LogDiscoveryService
     {
         // Handle backward compatibility for old cache key
         if (cache()->has('ids_custom_log_paths')) {
-            $lock = cache()->lock('ids.custom_log_paths_lock', 10);
+            $legacyPaths = cache()->pull('ids_custom_log_paths', []);
 
-            if ($lock->get()) {
-                try {
-                    // Double check inside the lock
-                    if (cache()->has('ids_custom_log_paths')) {
-                        $legacyPaths = cache()->get('ids_custom_log_paths', []);
+            if (!is_array($legacyPaths)) {
+                Log::warning('Corrupted legacy custom log paths cache key encountered and discarded.', [
+                    'type' => gettype($legacyPaths)
+                ]);
+                $legacyPaths = [];
+            }
 
-                        if (!is_array($legacyPaths)) {
-                            Log::warning('Corrupted legacy custom log paths cache key encountered and discarded.', [
-                                'type' => gettype($legacyPaths)
-                            ]);
-                            $legacyPaths = [];
-                        }
+            $currentPaths = cache()->get('ids.custom_log_paths', []);
+            $currentPaths = is_array($currentPaths) ? $currentPaths : [];
 
-                        $currentPaths = cache()->get('ids.custom_log_paths', []);
-                        $currentPaths = is_array($currentPaths) ? $currentPaths : [];
-
-                        if (!empty($legacyPaths)) {
-                            $mergedPaths = array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
-                            cache()->forever('ids.custom_log_paths', $mergedPaths);
-                        }
-
-                        cache()->forget('ids_custom_log_paths');
-                    }
-                } finally {
-                    $lock->release();
-                }
+            if (!empty($legacyPaths)) {
+                $mergedPaths = array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
+                cache()->forever('ids.custom_log_paths', $mergedPaths);
             }
         }
 
