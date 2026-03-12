@@ -14,14 +14,12 @@ class LogDiscoveryServiceTest extends TestCase
     {
         parent::setUp();
         $this->service = new LogDiscoveryService();
-        cache()->forget('ids_custom_log_paths');
-        cache()->forget('ids.custom_log_paths');
+        cache()->flush();
     }
 
     protected function tearDown(): void
     {
-        cache()->forget('ids_custom_log_paths');
-        cache()->forget('ids.custom_log_paths');
+        cache()->flush();
         config(['ids.custom_log_paths' => []]);
 
         foreach ($this->tempFiles as $tempFile) {
@@ -106,8 +104,7 @@ class LogDiscoveryServiceTest extends TestCase
 
         // Path is in config but missing from cache
         config(['ids.custom_log_paths' => [$tempPath]]);
-        cache()->forget('ids.custom_log_paths');
-        cache()->forget('ids_custom_log_paths');
+        cache()->flush();
 
         $result = $this->service->addCustomPath($tempPath);
 
