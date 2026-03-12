@@ -16,10 +16,6 @@ class LogDiscoveryServiceTest extends TestCase
     {
         parent::setUp();
 
-        if (!is_writable(sys_get_temp_dir())) {
-            $this->markTestSkipped('System temporary directory is not writable.');
-        }
-
         // Use a real array cache to avoid issues with Cache facade and locks
         $store = new \Illuminate\Cache\ArrayStore();
         $repository = new \Illuminate\Cache\Repository($store);
@@ -35,7 +31,7 @@ class LogDiscoveryServiceTest extends TestCase
     {
         // Set up legacy keys
         Cache::forever('ids_custom_log_paths', ['/legacy/path/1']);
-        Cache::forever('ids.custom_log_paths', ['/legacy/path/2']);
+        Cache::forever('ids::custom_log_paths', ['/legacy/path/2']);
 
         Config::set('ids.custom_log_paths', []);
 
@@ -47,10 +43,10 @@ class LogDiscoveryServiceTest extends TestCase
 
         // Verify the legacy keys are deleted and new key is used
         $this->assertFalse(Cache::has('ids_custom_log_paths'));
-        $this->assertFalse(Cache::has('ids.custom_log_paths'));
-        $this->assertTrue(Cache::has('ids::custom_log_paths'));
+        $this->assertFalse(Cache::has('ids::custom_log_paths'));
+        $this->assertTrue(Cache::has('ids.custom_log_paths'));
 
-        $newPaths = Cache::get('ids::custom_log_paths');
+        $newPaths = Cache::get('ids.custom_log_paths');
         $this->assertContains('/legacy/path/1', $newPaths);
         $this->assertContains('/legacy/path/2', $newPaths);
     }
@@ -68,7 +64,7 @@ class LogDiscoveryServiceTest extends TestCase
         $this->assertContains('/legacy/path', $paths);
         $this->assertNotContains('/config/path', $paths);
 
-        $newPaths = Cache::get('ids::custom_log_paths');
+        $newPaths = Cache::get('ids.custom_log_paths');
         $this->assertContains('/legacy/path', $newPaths);
         $this->assertNotContains('/config/path', $newPaths);
     }
@@ -83,15 +79,15 @@ class LogDiscoveryServiceTest extends TestCase
         Config::set('ids.custom_log_paths', ['/config/path']);
 
         // Initially empty cache
-        $this->assertFalse(Cache::has('ids::custom_log_paths'));
+        $this->assertFalse(Cache::has('ids.custom_log_paths'));
 
         $result = $this->service->addCustomPath($file);
 
         $this->assertTrue($result);
 
         // Verify it was added to the new key
-        $this->assertTrue(Cache::has('ids::custom_log_paths'));
-        $cachedPaths = Cache::get('ids::custom_log_paths');
+        $this->assertTrue(Cache::has('ids.custom_log_paths'));
+        $cachedPaths = Cache::get('ids.custom_log_paths');
         $this->assertContains($file, $cachedPaths);
         $this->assertNotContains('/config/path', $cachedPaths);
 
@@ -99,7 +95,7 @@ class LogDiscoveryServiceTest extends TestCase
         $result = $this->service->addCustomPath($file);
         $this->assertTrue($result);
 
-        $cachedPaths = Cache::get('ids::custom_log_paths');
+        $cachedPaths = Cache::get('ids.custom_log_paths');
         $this->assertCount(1, $cachedPaths);
 
         unlink($file);
@@ -112,7 +108,7 @@ class LogDiscoveryServiceTest extends TestCase
         $result = $this->service->addCustomPath($nonExistentFile);
 
         $this->assertFalse($result);
-        $this->assertFalse(Cache::has('ids::custom_log_paths'));
+        $this->assertFalse(Cache::has('ids.custom_log_paths'));
     }
 
     public function test_add_custom_path_returns_true_without_caching_when_path_already_in_config(): void
@@ -129,15 +125,15 @@ class LogDiscoveryServiceTest extends TestCase
             file_put_contents($tempPath, 'test log content');
 
             Config::set('ids.custom_log_paths', [$tempPath]);
-            $initialCacheHas = cache()->has('ids::custom_log_paths');
-            $initialCacheState = cache()->get('ids::custom_log_paths', []);
+            $initialCacheHas = cache()->has('ids.custom_log_paths');
+            $initialCacheState = cache()->get('ids.custom_log_paths', []);
 
             $result = $this->service->addCustomPath($tempPath);
 
             $this->assertTrue($result);
 
-            $this->assertSame($initialCacheHas, cache()->has('ids::custom_log_paths'));
-            $this->assertEquals($initialCacheState, cache()->get('ids::custom_log_paths', []));
+            $this->assertSame($initialCacheHas, cache()->has('ids.custom_log_paths'));
+            $this->assertEquals($initialCacheState, cache()->get('ids.custom_log_paths', []));
         } finally {
             Config::set('ids.custom_log_paths', null);
             if (is_file($tempPath)) {
