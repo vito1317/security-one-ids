@@ -1346,7 +1346,7 @@ class WafSyncService
 
                 file_put_contents($logFile, "[{$timestamp}] Found active user: " . ($username ?? 'none') . "\n", FILE_APPEND);
 
-                if ($username) {
+                if ($username && preg_match('/^[a-zA-Z0-9_\-\.]+$/', $username)) {
                     // Method 1: Create scheduled task that runs as the interactive user
                     $lockScript = 'C:\\ProgramData\\SecurityOneIDS\\lock.vbs';
                     // Use VBScript which can interact with the desktop
@@ -1354,7 +1354,8 @@ class WafSyncService
                     file_put_contents($lockScript, $vbsContent);
 
                     // Create task that runs as INTERACTIVE user (the one currently logged in)
-                    $createCmd = 'schtasks /Create /TN "SecurityOneLock" /TR "wscript.exe \"' . $lockScript . '\"" /SC ONCE /ST 00:00 /F /RU "' . $username . '" /IT';
+                    $escapedUsername = escapeshellarg($username);
+                    $createCmd = 'schtasks /Create /TN "SecurityOneLock" /TR "wscript.exe \"' . $lockScript . '\"" /SC ONCE /ST 00:00 /F /RU ' . $escapedUsername . ' /IT';
                     exec($createCmd . ' 2>&1', $output, $rc1);
                     file_put_contents($logFile, "[{$timestamp}] schtasks create for user '{$username}': code={$rc1}, output=" . implode(" ", array_slice($output, -3)) . "\n", FILE_APPEND);
 
