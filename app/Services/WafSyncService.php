@@ -59,14 +59,9 @@ class WafSyncService
         // On Windows, configure SSL certificate path at runtime
         if (PHP_OS_FAMILY === 'Windows') {
             $cacertPath = $this->getCaCertPath();
-            if ($cacertPath) {
-                $http = $http->withOptions([
-                    'verify' => $cacertPath,
-                ]);
-            } else {
-                // No cacert.pem found — disable SSL verification as fallback
-                $http = $http->withoutVerifying();
-            }
+            $http = $http->withOptions([
+                'verify' => $cacertPath,
+            ]);
         }
 
         return $http;
@@ -1542,7 +1537,7 @@ class WafSyncService
                 echo "🚫 Disabling macOS user login...\n";
                 // Get current console user (may be different from running user)
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
-                file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
+file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
 
                 if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     if (!preg_match('/^[a-zA-Z0-9._-]+$/', $consoleUser)) {
@@ -1568,6 +1563,8 @@ class WafSyncService
                             exec("sudo dscl . -passwd /Users/{$escapedUser} " . escapeshellarg('*') . " 2>&1", $output, $returnCode);
                             file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
                         }
+                    }
+                }
                     }
                 } else {
                     file_put_contents($logFile, "[{$timestamp}] No valid console user found to disable\n", FILE_APPEND);
@@ -1626,7 +1623,7 @@ class WafSyncService
 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
-                    if (!$user) continue;
+if (!$user) continue;
 
                     if (!preg_match('/^[a-zA-Z0-9._-]+$/', $user)) {
                         Log::warning('Invalid username format detected: ' . $user);
@@ -2889,8 +2886,10 @@ class WafSyncService
 
     /**
      * Get CA certificate path for Windows SSL verification
+     *
+     * @throws \App\Exceptions\CertificateBundleMissingException
      */
-    protected function getCaCertPath(): ?string
+    protected function getCaCertPath(): string
     {
         // Check common locations for cacert.pem on Windows
         $possiblePaths = [];
@@ -2920,9 +2919,15 @@ class WafSyncService
                 return $path;
             }
         }
+// Check bundled certificate first
+        $bundledPath = base_path('resources/certs/cacert.pem');
+        if (file_exists($bundledPath)) {
+            Log::debug('Using bundled CA certificate at: ' . $bundledPath);
+            return $bundledPath;
+        }
 
         // If not found, try to download it
-        $downloadPath = sys_get_temp_dir() . '\\cacert.pem';
+        $downloadPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'cacert.pem';
         if (!file_exists($downloadPath)) {
             try {
                 // Download from curl.se (using file_get_contents with SSL disabled for bootstrap)
@@ -2945,6 +2950,7 @@ class WafSyncService
             return $downloadPath;
         }
 
+        Log::error('CA certificate bundle missing: ' . $bundledPath);
         return null;
     }
 
