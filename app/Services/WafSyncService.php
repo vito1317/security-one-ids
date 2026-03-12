@@ -1640,6 +1640,10 @@ class WafSyncService
                 file_put_contents($logFile, "[{$timestamp}] Linux disable users result: code={$returnCode}\n", FILE_APPEND);
             }
 
+            if (PHP_OS_FAMILY !== 'Darwin' && isset($returnCode) && $returnCode !== 0) {
+                throw new \RuntimeException("Failed to disable login, command exit code: {$returnCode}");
+            }
+
             echo "✅ Login disabled\n";
             Log::info('Login disabled');
             file_put_contents($logFile, "[{$timestamp}] Login disabled successfully\n", FILE_APPEND);
@@ -1647,6 +1651,7 @@ class WafSyncService
         } catch (\Exception $e) {
             echo "❌ Failed to disable login: " . $e->getMessage() . "\n";
             Log::error('Failed to disable login: ' . $e->getMessage());
+            throw $e;
         }
     }
 
@@ -1756,6 +1761,10 @@ class WafSyncService
                 file_put_contents($logFile, "[{$timestamp}] Linux enable users result: code={$returnCode}\n", FILE_APPEND);
             }
 
+            if (PHP_OS_FAMILY !== 'Darwin' && isset($returnCode) && $returnCode !== 0) {
+                throw new \RuntimeException("Failed to enable login, command exit code: {$returnCode}");
+            }
+
             echo "✅ Login enabled\n";
             Log::info('Login enabled');
             file_put_contents($logFile, "[{$timestamp}] Login enabled successfully\n", FILE_APPEND);
@@ -1763,6 +1772,7 @@ class WafSyncService
         } catch (\Exception $e) {
             echo "❌ Failed to enable login: " . $e->getMessage() . "\n";
             Log::error('Failed to enable login: ' . $e->getMessage());
+            throw $e;
         }
     }
 
