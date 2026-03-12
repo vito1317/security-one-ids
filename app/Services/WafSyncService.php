@@ -1544,19 +1544,20 @@ $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n
                 if ($consoleUser && preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
+                    $escapedUsername = escapeshellarg($safeConsoleUser);
                     $output = [];
-                    exec("sudo dscl . -create /Users/{$safeConsoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    exec("sudo dscl . -create /Users/{$escapedUsername} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$safeConsoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
 
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
-                        exec("sudo pwpolicy -u {$safeConsoleUser} disableuser 2>&1", $output, $returnCode);
+                        exec("sudo pwpolicy -u {$escapedUsername} disableuser 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode}\n", FILE_APPEND);
                     }
 
                     if ($returnCode !== 0) {
                         // Method 3: Set an impossible password hash
-exec("sudo dscl . -passwd /Users/{$safeConsoleUser} '*' 2>&1", $output, $returnCode);
+exec("sudo dscl . -passwd /Users/{$escapedUsername} '*' 2>&1", $output, $returnCode);
                         file_put_contents($logFile, "[{$timestamp}] dscl set impossible password: code={$returnCode}\n", FILE_APPEND);
                     }
                 } else {
@@ -1615,7 +1616,7 @@ exec("sudo dscl . -passwd /Users/{$safeConsoleUser} '*' 2>&1", $output, $returnC
                 exec("dscl . -list /Users | grep -v '^_' | grep -v 'daemon' | grep -v 'nobody' | grep -v 'root' 2>/dev/null", $usersOutput, $rc);
 foreach ($usersOutput as $username) {
                     $username = trim($username);
-                    if (!$username || !preg_match('/^[a-zA-Z0-9_\-\.]+$/', $username)) continue;
+                    if (!$username || !preg_match('/^[a-zA-Z0-9_.-]+$/', $username)) continue;
 
                     $escapedUsername = escapeshellarg($username);
 
@@ -2904,7 +2905,14 @@ foreach ($usersOutput as $username) {
                 return $path;
             }
         }
-// If not found, try to download it
+// If not found, use bundled certificate
+        $bundledPath = base_path('resources/certs/cacert.pem');
+        if (file_exists($bundledPath)) {
+            Log::debug('Using bundled CA certificate at: ' . $bundledPath);
+            return $bundledPath;
+        }
+
+        // If not found, try to download it
         $downloadPath = sys_get_temp_dir() . '\\cacert.pem';
         if (!file_exists($downloadPath)) {
             try {
@@ -2928,14 +2936,7 @@ foreach ($usersOutput as $username) {
             return $downloadPath;
         }
 
-        // If not found, use bundled certificate
-        $bundledPath = base_path('resources/certs/cacert.pem');
-        if (file_exists($bundledPath)) {
-            Log::debug('Using bundled CA certificate at: ' . $bundledPath);
-            return $bundledPath;
-        }
-
-        Log::error('CA certificate bundle missing: ' . $bundledPath);
+        Log::error('CA certificate bundle missing and failed to download: ' . $bundledPath);
         throw new \App\Exceptions\CertificateBundleMissingException($bundledPath);
     }
 
