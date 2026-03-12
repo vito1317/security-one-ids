@@ -1539,19 +1539,32 @@ class WafSyncService
                 $consoleUser = trim(exec("stat -f '%Su' /dev/console 2>/dev/null") ?: '');
                 $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $consoleUser)) ?? '';
                 file_put_contents($logFile, "[{$timestamp}] Console user: {$safeConsoleUser}\n", FILE_APPEND);
-
+--- Resolution #1 ---
 if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
-                    if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser)) {
-                        throw new \Exception('Invalid username format');
-                    }
-                    // Prevent OS command injection attacks by escaping the user input
-                    $safeConsoleUser = escapeshellarg($consoleUser);
+    if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser)) {
+        throw new \Exception('Invalid username format');
+    }
+    // Prevent OS command injection attacks by escaping the user input
+    $safeConsoleUser = escapeshellarg($consoleUser);
+}
+
+--- Resolution #2 ---
                     // Method 1: Use dscl to disable user account
                     // The correct way is to set AuthenticationAuthority to DisabledUser
                     $output = [];
                     exec("sudo dscl . -create /Users/{$safeConsoleUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl disable user {$safeConsoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+--- Resolution #3 ---
+if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) {
+    continue;
+}
+// Prevent OS command injection attacks by escaping the user input
+$safeUser = escapeshellarg($user);
 
+--- Resolution #4 ---
+                    // Re-enable with pwpolicy
+
+--- Resolution #5 ---
                     if ($returnCode !== 0) {
                         // Method 2: Lock the user's password (they won't be able to login)
                         exec("sudo pwpolicy -u {$safeConsoleUser} disableuser 2>&1", $output, $returnCode);
@@ -1621,18 +1634,28 @@ if ($consoleUser && $consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') 
                 foreach ($usersOutput as $user) {
                     $user = trim($user);
                     if (!$user || !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) continue;
+<<<<<<< /tmp/merge_ours_g3ugllbvg7tufuq1zGc
+
+                    $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
+=======
 
 if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) {
                         continue;
                     }
                     // Prevent OS command injection attacks by escaping the user input
                     $safeUser = escapeshellarg($user);
+>>>>>>> /tmp/merge_theirs_1unbfpmmq7ss4wa7ZS5
 
                     // Remove DisabledUser from AuthenticationAuthority
                     exec("sudo dscl . -delete /Users/{$safeUser} AuthenticationAuthority 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$safeUser}: code={$returnCode}\n", FILE_APPEND);
+<<<<<<< /tmp/merge_ours_g3ugllbvg7tufuq1zGc
 
                     // Re-enable with pwpolicy
+=======
+
+                    // Re-enable with pwpolicy
+>>>>>>> /tmp/merge_theirs_1unbfpmmq7ss4wa7ZS5
                     exec("sudo pwpolicy -u {$safeUser} enableuser 2>&1", $output, $returnCode);
                     file_put_contents($logFile, "[{$timestamp}] pwpolicy enable user {$safeUser}: code={$returnCode}\n", FILE_APPEND);
                 }
@@ -2914,7 +2937,11 @@ if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) {
                 return $path;
             }
         }
+<<<<<<< /tmp/merge_ours_g3ugllbvg7tufuq1zGc
 
+=======
+
+>>>>>>> /tmp/merge_theirs_1unbfpmmq7ss4wa7ZS5
         // If not found, use bundled certificate
         $bundledPath = base_path('resources/certs/cacert.pem');
         if (file_exists($bundledPath)) {
