@@ -1540,26 +1540,28 @@ class WafSyncService
 $safeConsoleUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $consoleUser)) ?? '';
                 
                 // Validate username format to prevent shell injection
-                if ($consoleUser && !preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser) || $consoleUser === 'root' || $consoleUser === '_mbsetupuser') {
+                if ($consoleUser && !preg_match('/^[a-zA-Z0-9_.-]+$/', $consoleUser)) {
                     file_put_contents($logFile, "[{$timestamp}] Invalid console user name: {$consoleUser}\n", FILE_APPEND);
                     return;
                 }
 
-                $escapedUser = escapeshellarg($safeConsoleUser);
+                if ($consoleUser !== 'root' && $consoleUser !== '_mbsetupuser') {
+                    // Escape the username for shell usage
+                    $escapedUser = escapeshellarg($safeConsoleUser);
 
-                // Log the original unescaped username for clarity and better readability in logs
-                file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
+                    // Log the original unescaped username for clarity and better readability in logs
+                    file_put_contents($logFile, "[{$timestamp}] Console user: {$consoleUser}\n", FILE_APPEND);
 
-                // Method 1: Use dscl to disable user account
-                // The correct way is to set AuthenticationAuthority to DisabledUser
-                $output = [];
-                exec("sudo dscl . -create /Users/{$escapedUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
-                file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
+                    // Method 1: Use dscl to disable user account
+                    // The correct way is to set AuthenticationAuthority to DisabledUser
+                    $output = [];
+                    exec("sudo dscl . -create /Users/{$escapedUser} AuthenticationAuthority ';DisabledUser;' 2>&1", $output, $returnCode);
+                    file_put_contents($logFile, "[{$timestamp}] dscl disable user {$consoleUser}: code={$returnCode}, output=" . implode(" ", $output) . "\n", FILE_APPEND);
 
-                if ($returnCode !== 0) {
-                    // Method 2: Lock the user's password (they won't be able to login)
-                    exec("sudo pwpolicy -u {$escapedUser} disableuser 2>&1", $output, $returnCode2);
-                    file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode2}\n", FILE_APPEND);
+                    if ($returnCode !== 0) {
+                        // Method 2: Lock the user's password (they won't be able to login)
+                        exec("sudo pwpolicy -u {$escapedUser} disableuser 2>&1", $output, $returnCode2);
+                        file_put_contents($logFile, "[{$timestamp}] pwpolicy disable user: code={$returnCode2}\n", FILE_APPEND);
                     }
 
                     if ($returnCode !== 0 && (isset($returnCode2) && $returnCode2 !== 0)) {
@@ -1626,32 +1628,25 @@ exec("sudo dscl . -passwd /Users/{$escapedUser} '*' 2>&1", $output, $returnCode3
                     $user = trim($user);
 if (!$user) continue;
 
-                    // Verify the user actually exists using POSIX functions if available
-                    if (function_exists('posix_getpwnam') && !preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) {
-                         Log::warning('User does not exist: ' . $user);
-                         file_put_contents($logFile, "[{$timestamp}] User does not exist: {$user}\n", FILE_APPEND);
-                         continue;
-                    }
-
                     // Validate username format to prevent shell injection
                     if (!preg_match('/^[a-zA-Z0-9_.-]+$/', $user)) {
-                        Log::warning('Invalid user name: ' . $user);
                         file_put_contents($logFile, "[{$timestamp}] Invalid user name: {$user}\n", FILE_APPEND);
                         continue;
                     }
 
-                    // Check if user exists using POSIX functions if available
+                    // Verify the user actually exists using POSIX functions if available
                     if (function_exists('posix_getpwnam') && !posix_getpwnam($user)) {
                          Log::warning('User does not exist: ' . $user);
                          file_put_contents($logFile, "[{$timestamp}] User does not exist: {$user}\n", FILE_APPEND);
                          continue;
                     }
 
-                    $escapedUser = escapeshellarg($user);
+                    // Sanitize user for shell usage while keeping original for logging
+                    $safeUser = preg_replace('/[\x00-\x1F\x7F]/u', '', str_replace(["\r", "\n"], ['\\r', '\\n'], $user)) ?? '';
+                    $escapedUser = escapeshellarg($safeUser);
 
                     // Remove DisabledUser from AuthenticationAuthority
                     exec("sudo dscl . -delete /Users/{$escapedUser} AuthenticationAuthority 2>&1", $output, $returnCode);
-                    // Log the original unescaped username for clarity and better readability in logs
                     file_put_contents($logFile, "[{$timestamp}] dscl clear auth for {$user}: code={$returnCode}\n", FILE_APPEND);
 
                     // Re-enable with pwpolicy
@@ -2960,7 +2955,7 @@ if (!$user) continue;
             return $downloadPath;
         }
 
-        // If not found, use bundled certificate
+        // If not found, use bundled certificate as fallback
         $bundledPath = base_path('resources/certs/cacert.pem');
         if (file_exists($bundledPath)) {
             Log::debug('Using bundled CA certificate at: ' . $bundledPath);
