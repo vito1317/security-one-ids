@@ -300,13 +300,16 @@ class LogDiscoveryService
         return 'unknown';
     }
 
+    /**
+     * Add a custom log path to monitor
+     */
     public function addCustomPath(string $path): bool
     {
         if (!is_readable($path)) {
             return false;
         }
 
-        $lock = cache()->lock('lock::ids.custom_log_paths_add', self::LOCK_TIMEOUT);
+        $lock = cache()->lock('lock::ids::custom_log_paths_add', self::LOCK_TIMEOUT);
         $acquired = false;
         $delayMicroseconds = 10000;
 
@@ -328,7 +331,7 @@ class LogDiscoveryService
                 if (!in_array($path, $allPaths, true)) {
                     $cachedPaths[] = $path;
                     $cachedPaths = array_values(array_unique($cachedPaths));
-                    cache()->forever('ids.custom_log_paths', $cachedPaths);
+                    cache()->forever('ids::custom_log_paths', $cachedPaths);
                 }
             } else {
                 return false;
@@ -350,16 +353,13 @@ class LogDiscoveryService
      */
     public function getCustomPaths(): array
     {
-        $newKey = 'ids.custom_log_paths';
+        $newKey = 'ids::custom_log_paths';
 
         if (self::$migrated) {
             return cache()->get($newKey, []);
         }
 
-        // Legacy keys to migrate from previous versions:
-        // 'ids_custom_log_paths' was the original key structure.
-        // 'ids::custom_log_paths' was briefly used before standardizing on dot notation.
-        $legacyKeys = ['ids_custom_log_paths', 'ids::custom_log_paths'];
+        $legacyKeys = ['ids_custom_log_paths', 'ids.custom_log_paths'];
 
         $needsMigration = false;
         foreach ($legacyKeys as $legacyKey) {
@@ -370,7 +370,7 @@ class LogDiscoveryService
         }
 
         if ($needsMigration) {
-            $lock = cache()->lock('lock::ids.custom_log_paths_migrate', self::LOCK_TIMEOUT);
+            $lock = cache()->lock('lock::ids::custom_log_paths_migrate', self::LOCK_TIMEOUT);
             $acquired = false;
             $delayMicroseconds = 10000;
 
@@ -405,7 +405,7 @@ class LogDiscoveryService
                             }
                         }
 
-                        // Remove static config values from cache to prevent saving redundant data
+                        // Remove static config values from cache
                         $configPaths = config('ids.custom_log_paths', []);
                         $merged = array_diff($merged, $configPaths);
 
