@@ -458,6 +458,18 @@ class LogDiscoveryService
                 }
             } else {
                 Log::warning('Could not acquire lock to migrate legacy custom log paths cache key');
+
+                $legacyPaths = cache()->get('ids_custom_log_paths', []);
+                if (is_array($legacyPaths)) {
+                    $currentPaths = cache()->get('ids.custom_log_paths', []);
+                    $currentPaths = is_array($currentPaths) ? $currentPaths : [];
+                    return array_values(array_unique(array_merge($currentPaths, $legacyPaths)));
+                }
+
+                Log::warning('Corrupted legacy custom log paths cache key encountered and discarded.', [
+                    'type' => gettype($legacyPaths)
+                ]);
+                return [];
             }
         }
 
