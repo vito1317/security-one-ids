@@ -1542,16 +1542,17 @@ class WafSyncService
                 
                 $cleanUser = '';
                 // Ensure the string matches standard macOS username constraints before processing.
-                if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_-]*$/', $safeConsoleUser) === 1) {
+                if (preg_match('/^[a-zA-Z0-9_.-]+$/', $safeConsoleUser) === 1) {
                     $cleanUser = escapeshellarg($safeConsoleUser);
                 }
 
                 if ($cleanUser && $cleanUser !== escapeshellarg('root') && $cleanUser !== escapeshellarg('_mbsetupuser')) {
                     $sudoCheckCode = -1;
-                    exec('sudo -n true 2>/dev/null', $sudoOutput, $sudoCheckCode);
+                    exec('sudo -n -v 2>/dev/null', $sudoOutput, $sudoCheckCode);
                     
                     if ($sudoCheckCode !== 0) {
                         file_put_contents($logFile, "[{$timestamp}] Sudo access required to disable user\n", FILE_APPEND);
+                        return;
                     } else {
                         $returnCode1 = -1;
                         $returnCode2 = -1;
