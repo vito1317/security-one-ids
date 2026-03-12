@@ -35,15 +35,14 @@ class AgentAuth
 
         $token = (string) $token;
         $configured = $agentToken !== '';
-        $expectedSeed = $configured ? $agentToken : str_repeat("\0", 32);
+        $expectedSeed = $configured ? $agentToken : str_repeat("\0", max(strlen($token), 1));
+
+        $expectedHash = hash('sha256', $expectedSeed, true);
+        $providedHash = hash('sha256', $token, true);
 
         $isValid = $configured
             && $token !== ''
-            && strlen($token) === strlen($agentToken)
-            && hash_equals(
-                hash('sha256', $expectedSeed, true),
-                hash('sha256', $token, true)
-            );
+            && hash_equals($expectedHash, $providedHash);
 
         if (!$isValid) {
             return response()->json(['error' => 'Unauthorized'], 401);
