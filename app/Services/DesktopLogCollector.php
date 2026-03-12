@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Traits\DetectsPlatform;
+
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -12,6 +14,7 @@ use Illuminate\Support\Facades\Log;
  */
 class DesktopLogCollector
 {
+    use DetectsPlatform;
     private string $platform;
     private array $logPaths = [];
     

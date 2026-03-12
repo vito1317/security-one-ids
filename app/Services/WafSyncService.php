@@ -2422,7 +2422,7 @@ class WafSyncService
         $suricataInfo = $this->getSuricataInfo();
 
         return [
-            'os' => PHP_OS,
+            'os' => $this->getOsName(),
             'php_version' => PHP_VERSION,
             'memory_usage' => memory_get_usage(true),
             'load_average' => function_exists('sys_getloadavg') ? sys_getloadavg() : [],
@@ -2727,7 +2727,7 @@ class WafSyncService
         // Debug: Log OS detection
         Log::debug('getNetworkStats: OS detection', [
             'PHP_OS_FAMILY' => $this->getPlatformName(),
-            'PHP_OS' => PHP_OS,
+            'PHP_OS' => $this->getOsName(),
             'php_uname' => php_uname('s'),
         ]);
         

@@ -2,11 +2,14 @@
 
 namespace App\Console\Commands;
 
+use App\Traits\DetectsPlatform;
+
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
 class RunScan extends Command
 {
+    use DetectsPlatform;
     protected $signature = 'ids:scan {--type=quick : Scan type (quick or full)}';
     protected $description = 'Run ClamAV scan in background';
 

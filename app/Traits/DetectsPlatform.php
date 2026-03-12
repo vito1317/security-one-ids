@@ -43,4 +43,14 @@ trait DetectsPlatform
     {
         return PHP_OS_FAMILY;
     }
+
+    /**
+     * Get the current OS name.
+     *
+     * @return string
+     */
+    protected function getOsName(): string
+    {
+        return PHP_OS;
+    }
 }

@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Traits\DetectsPlatform;
+
 use App\Services\WafSyncService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -9,6 +11,7 @@ use Illuminate\Support\Facades\Process;
 
 class SyncToWaf extends Command
 {
+    use DetectsPlatform;
     protected $signature = 'waf:sync 
         {--register : Force registration}
         {--once : Run once and exit (for debugging)}
@@ -110,7 +113,7 @@ class SyncToWaf extends Command
     {
         $this->info('=== DEBUG INFO ===');
         $this->info('PHP_OS_FAMILY: ' . $this->getPlatformName());
-        $this->info('PHP_OS: ' . PHP_OS);
+        $this->info('PHP_OS: ' . $this->getOsName());
         $this->info('php_uname: ' . php_uname('s'));
         
         if ($this->isMac()) {
