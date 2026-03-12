@@ -309,7 +309,7 @@ class LogDiscoveryService
             return false;
         }
 
-$lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
+        $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
 
         try {
             $acquired = $lock->block(self::LOCK_TIMEOUT);
@@ -331,12 +331,6 @@ $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
                 $cachedPaths = array_values(array_unique($cachedPaths));
                 cache()->forever('ids::custom_log_paths', $cachedPaths);
             }
-        } finally {
-            if ($lock->isLocked()) {
-                $lock->release();
-            }
-        }
-            }
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning("Failed to add custom path: " . $e->getMessage());
             return false;
@@ -355,7 +349,7 @@ $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
     public function getCustomPaths(): array
     {
         $newKey = 'ids::custom_log_paths';
-$legacyKeys = ['ids_custom_log_paths', 'ids.custom_log_paths'];
+        $legacyKeys = ['ids_custom_log_paths', 'ids.custom_log_paths'];
 
         // Even if we've migrated in this process previously,
         // double check if legacy keys have reappeared in cache
@@ -373,6 +367,7 @@ $legacyKeys = ['ids_custom_log_paths', 'ids.custom_log_paths'];
             // If they reappeared, reset the flag so we migrate again
             self::$migrated = false;
         }
+
         $needsMigration = false;
         foreach ($legacyKeys as $legacyKey) {
             if (cache()->has($legacyKey)) {
@@ -382,7 +377,7 @@ $legacyKeys = ['ids_custom_log_paths', 'ids.custom_log_paths'];
         }
 
         if ($needsMigration) {
-$lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
+            $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
 
             try {
                 $acquired = $lock->block(self::LOCK_TIMEOUT);
@@ -400,12 +395,6 @@ $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
 
                     return array_values(array_unique($fallback));
                 }
-            } finally {
-                if ($lock->isLocked()) {
-                    $lock->release();
-                }
-            }
-                }
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning("Failed to migrate custom paths: " . $e->getMessage());
             } finally {
@@ -418,7 +407,9 @@ $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
         }
 
         return cache()->get($newKey, []);
-/**
+    }
+
+    /**
      * Migrate custom paths from legacy keys to the new key.
      * MUST be called while holding the 'lock::ids::custom_log_paths' lock.
      */
@@ -460,7 +451,6 @@ $lock = cache()->lock('lock::ids::custom_log_paths', self::LOCK_TIMEOUT);
             }
         }
         self::$migrated = true;
-    }
     }
 
     /**
