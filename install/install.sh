@@ -69,19 +69,22 @@ if [ -z "$WAF_HUB_URL" ]; then
         fi
     fi
 
-    # Method 2: macOS - use ps eww to read parent/grandparent process environment
-    # macOS sudo strips env vars and /proc doesn't exist
+    # Method 2: macOS - parse SUDO_COMMAND which preserves the full command line
+    # When user runs: WAF_HUB_URL=x sudo bash -c "script", SUDO_COMMAND contains the bash invocation
+    # But env vars set BEFORE sudo are visible in the parent process tree
     if [ -z "$WAF_HUB_URL" ] && [[ "$OSTYPE" == "darwin"* ]]; then
-        for _PID in $PPID $(ps -o ppid= -p $PPID 2>/dev/null | tr -d ' '); do
-            [ -z "$_PID" ] && continue
+        # Try ps eww on parent and grandparent processes
+        for _PID in $PPID $(ps -o ppid= -p $PPID 2>/dev/null | tr -d ' ') $(ps -o ppid= -p $(ps -o ppid= -p $PPID 2>/dev/null | tr -d ' ') 2>/dev/null | tr -d ' '); do
+            [ -z "$_PID" ] || [ "$_PID" = "1" ] && continue
             _PENV=$(ps eww -o command= -p "$_PID" 2>/dev/null || true)
             if [ -n "$_PENV" ]; then
-                _TRY_WAF=$(echo "$_PENV" | tr ' ' '\n' | grep '^WAF_HUB_URL=' | head -1 | cut -d'=' -f2- || true)
+                # Strip quotes from captured values
+                _TRY_WAF=$(echo "$_PENV" | tr ' ' '\n' | grep '^WAF_HUB_URL=' | head -1 | cut -d'=' -f2- | tr -d '"' "'" || true)
                 if [ -n "$_TRY_WAF" ]; then
                     WAF_HUB_URL="$_TRY_WAF"
-                    INSTALL_TOKEN=$(echo "$_PENV" | tr ' ' '\n' | grep '^INSTALL_TOKEN=' | head -1 | cut -d'=' -f2- || true)
-                    AGENT_TOKEN=$(echo "$_PENV" | tr ' ' '\n' | grep '^AGENT_TOKEN=' | head -1 | cut -d'=' -f2- || true)
-                    _PARENT_AGENT_NAME=$(echo "$_PENV" | tr ' ' '\n' | grep '^AGENT_NAME=' | head -1 | cut -d'=' -f2- || true)
+                    INSTALL_TOKEN=$(echo "$_PENV" | tr ' ' '\n' | grep '^INSTALL_TOKEN=' | head -1 | cut -d'=' -f2- | tr -d '"' "'" || true)
+                    AGENT_TOKEN=$(echo "$_PENV" | tr ' ' '\n' | grep '^AGENT_TOKEN=' | head -1 | cut -d'=' -f2- | tr -d '"' "'" || true)
+                    _PARENT_AGENT_NAME=$(echo "$_PENV" | tr ' ' '\n' | grep '^AGENT_NAME=' | head -1 | cut -d'=' -f2- | tr -d '"' "'" || true)
                     if [ -n "$_PARENT_AGENT_NAME" ]; then
                         AGENT_NAME="$_PARENT_AGENT_NAME"
                     fi
@@ -255,7 +258,7 @@ install_suricata() {
         apt-get update -qq
         # Check if Suricata is already installed
         if command -v suricata &>/dev/null; then
-            EXISTING_VER=$(suricata -V 2>&1 | grep -oP '(\d+\.\d+[\d.]*)' | head -1 || echo "")
+            EXISTING_VER=$(suricata -V 2>&1 | grep -oE '[0-9]+\.[0-9][0-9.]*' | head -1 || echo "")
             if [ -n "$EXISTING_VER" ]; then
                 echo -e "${GREEN}✅ Suricata ($EXISTING_VER) already installed${NC}"
                 return 0
@@ -307,7 +310,7 @@ install_suricata() {
     
     # Verify installation
     if command -v suricata &> /dev/null; then
-        SURI_VER=$(suricata -V 2>&1 | grep -oP '(\d+\.\d+[\d.]*)' | head -1 || echo "unknown")
+        SURI_VER=$(suricata -V 2>&1 | grep -oE '[0-9]+\.[0-9][0-9.]*' | head -1 || echo "unknown")
         echo -e "${GREEN}✅ Suricata $SURI_VER installed${NC}"
     else
         echo -e "${YELLOW}⚠️  Suricata binary not found in PATH after install${NC}"
@@ -481,15 +484,21 @@ if [ -z "$AGENT_TOKEN" ]; then
     read -p "Enter Agent Token: " AGENT_TOKEN
 fi
 
+# Strip any stray quotes from values before writing .env
+WAF_HUB_URL=$(echo "$WAF_HUB_URL" | tr -d '"' "'")
+INSTALL_TOKEN=$(echo "$INSTALL_TOKEN" | tr -d '"' "'")
+AGENT_TOKEN=$(echo "$AGENT_TOKEN" | tr -d '"' "'")
+AGENT_NAME=$(echo "$AGENT_NAME" | tr -d '"' "'")
+
 cat > "$INSTALL_DIR/.env" << EOF
-APP_NAME="Security One IDS"
+APP_NAME=SecurityOneIDS
 APP_ENV=production
 APP_DEBUG=false
 
-WAF_URL="$WAF_HUB_URL"
-INSTALL_TOKEN="$INSTALL_TOKEN"
-AGENT_TOKEN="$AGENT_TOKEN"
-AGENT_NAME="$AGENT_NAME"
+WAF_URL=${WAF_HUB_URL}
+INSTALL_TOKEN=${INSTALL_TOKEN}
+AGENT_TOKEN=${AGENT_TOKEN}
+AGENT_NAME=${AGENT_NAME}
 
 OLLAMA_URL=https://ollama.futron-life.com
 OLLAMA_MODEL=sentinel-security
