@@ -56,14 +56,39 @@ AGENT_TOKEN="${AGENT_TOKEN:-}"
 AGENT_NAME="${AGENT_NAME:-$(hostname)}"
 
 # Fallback: if env vars are empty, try reading from parent process environment
-# This handles sudo-rs (Rust sudo) which ignores -E flag
-if [ -z "$WAF_HUB_URL" ] && [ -f "/proc/$PPID/environ" ] 2>/dev/null; then
-    WAF_HUB_URL=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^WAF_HUB_URL=' | cut -d'=' -f2- || true)
-    INSTALL_TOKEN=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^INSTALL_TOKEN=' | cut -d'=' -f2- || true)
-    AGENT_TOKEN=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^AGENT_TOKEN=' | cut -d'=' -f2- || true)
-    _PARENT_AGENT_NAME=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^AGENT_NAME=' | cut -d'=' -f2- || true)
-    if [ -n "$_PARENT_AGENT_NAME" ]; then
-        AGENT_NAME="$_PARENT_AGENT_NAME"
+# This handles sudo stripping env vars (both Linux and macOS)
+if [ -z "$WAF_HUB_URL" ]; then
+    # Method 1: Linux /proc filesystem
+    if [ -f "/proc/$PPID/environ" ] 2>/dev/null; then
+        WAF_HUB_URL=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^WAF_HUB_URL=' | cut -d'=' -f2- || true)
+        INSTALL_TOKEN=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^INSTALL_TOKEN=' | cut -d'=' -f2- || true)
+        AGENT_TOKEN=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^AGENT_TOKEN=' | cut -d'=' -f2- || true)
+        _PARENT_AGENT_NAME=$(tr '\0' '\n' < /proc/$PPID/environ 2>/dev/null | grep '^AGENT_NAME=' | cut -d'=' -f2- || true)
+        if [ -n "$_PARENT_AGENT_NAME" ]; then
+            AGENT_NAME="$_PARENT_AGENT_NAME"
+        fi
+    fi
+
+    # Method 2: macOS - use ps eww to read parent/grandparent process environment
+    # macOS sudo strips env vars and /proc doesn't exist
+    if [ -z "$WAF_HUB_URL" ] && [[ "$OSTYPE" == "darwin"* ]]; then
+        for _PID in $PPID $(ps -o ppid= -p $PPID 2>/dev/null | tr -d ' '); do
+            [ -z "$_PID" ] && continue
+            _PENV=$(ps eww -o command= -p "$_PID" 2>/dev/null || true)
+            if [ -n "$_PENV" ]; then
+                _TRY_WAF=$(echo "$_PENV" | tr ' ' '\n' | grep '^WAF_HUB_URL=' | head -1 | cut -d'=' -f2- || true)
+                if [ -n "$_TRY_WAF" ]; then
+                    WAF_HUB_URL="$_TRY_WAF"
+                    INSTALL_TOKEN=$(echo "$_PENV" | tr ' ' '\n' | grep '^INSTALL_TOKEN=' | head -1 | cut -d'=' -f2- || true)
+                    AGENT_TOKEN=$(echo "$_PENV" | tr ' ' '\n' | grep '^AGENT_TOKEN=' | head -1 | cut -d'=' -f2- || true)
+                    _PARENT_AGENT_NAME=$(echo "$_PENV" | tr ' ' '\n' | grep '^AGENT_NAME=' | head -1 | cut -d'=' -f2- || true)
+                    if [ -n "$_PARENT_AGENT_NAME" ]; then
+                        AGENT_NAME="$_PARENT_AGENT_NAME"
+                    fi
+                    break
+                fi
+            fi
+        done
     fi
 fi
 
