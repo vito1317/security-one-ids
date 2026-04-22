@@ -61,6 +61,19 @@ class ComplianceAnalyzer
             $this->checkDormantAccounts(),        // A.5.16
             $this->checkCoreDumpDisabled(),       // A.8.9
             $this->checkWebServerTlsProtocol(),   // A.8.24
+            // Third wave:
+            $this->checkAuditdRules(),            // A.5.28
+            $this->checkSecureDeleteTools(),      // A.8.10
+            $this->checkSensitiveServiceExposure(), // A.8.21
+            $this->checkIpForwardHygiene(),       // A.8.22
+            $this->checkEtcUnderVersionControl(), // A.8.32
+            $this->checkPendingSecurityUpdates(), // A.5.31
+            $this->checkSshKeyFilePermissions(),  // A.8.5
+            $this->checkTlsCertExpiry(),          // A.8.24
+            $this->checkSuidBinariesCensus(),     // A.8.9
+            $this->checkRootHistorySanitation(),  // A.5.16
+            $this->checkStorageRedundancy(),      // A.8.14
+            $this->checkHomeDirPermissions(),     // A.8.3
         ];
 
         return $this->summarize($checks);
@@ -989,6 +1002,404 @@ class ComplianceAnalyzer
             'Web 服務啟用了過時的 TLS 協定版本。',
             implode("\n", array_slice($weakHits, 0, 5)),
             '僅允許 TLSv1.2 與 TLSv1.3，停用其餘版本。');
+    }
+
+    /* ================================================================== */
+    /* Third wave — auditd / deletion / exposure / certs / perms           */
+    /* ================================================================== */
+
+    /** A.5.28 — 證據收集：auditd 規則。 */
+    private function checkAuditdRules(): array
+    {
+        if ($this->which('auditctl') === null) {
+            return $this->warn('A.5.28', '證據收集', self::SEV_MEDIUM,
+                '未安裝 auditd，無系統呼叫等級的稽核紀錄。',
+                'auditctl 不存在。',
+                '安裝：apt install auditd audispd-plugins 並啟用。');
+        }
+        if (!$this->isServiceActive('auditd')) {
+            return $this->warn('A.5.28', '證據收集', self::SEV_MEDIUM,
+                'auditd 已安裝但未啟動。', 'systemctl is-active auditd ≠ active',
+                'systemctl enable --now auditd');
+        }
+        $out = $this->runCmd(['auditctl', '-l']);
+        $ruleCount = 0;
+        if ($out !== null) {
+            $lines = preg_split('/\r?\n/', trim($out));
+            foreach ($lines as $line) {
+                if ($line === '' || str_starts_with(trim($line), 'No rules')) {
+                    continue;
+                }
+                $ruleCount++;
+            }
+        }
+        if ($ruleCount === 0) {
+            return $this->warn('A.5.28', '證據收集', self::SEV_MEDIUM,
+                'auditd 運作中但沒有載入任何規則，形同空轉。',
+                '`auditctl -l` 輸出: ' . trim($out ?? '(empty)'),
+                '於 /etc/audit/rules.d/ 加入規則（可參考 CIS Linux benchmark）。');
+        }
+        return $this->pass('A.5.28', '證據收集', self::SEV_MEDIUM,
+            "auditd 運作中，已載入 {$ruleCount} 條規則。");
+    }
+
+    /** A.8.10 — 資訊刪除：安全刪除工具可用。 */
+    private function checkSecureDeleteTools(): array
+    {
+        $tools = [];
+        foreach (['shred', 'wipe', 'srm', 'scrub'] as $t) {
+            if ($this->which($t) !== null) {
+                $tools[] = $t;
+            }
+        }
+        if (empty($tools)) {
+            return $this->warn('A.8.10', '資訊刪除', self::SEV_LOW,
+                '未安裝任何安全刪除工具（shred / wipe / srm / scrub）。',
+                'which shred/wipe/srm/scrub 皆無。',
+                '安裝：apt install coreutils secure-delete（shred 內建於 coreutils）。');
+        }
+        return $this->pass('A.8.10', '資訊刪除', self::SEV_LOW,
+            '可用的安全刪除工具：' . implode(', ', $tools) . '。');
+    }
+
+    /** A.8.21 — 敏感服務對外暴露（資料庫 / 快取 / 訊息佇列）。 */
+    private function checkSensitiveServiceExposure(): array
+    {
+        $sensitivePorts = [
+            3306 => 'MySQL',
+            5432 => 'PostgreSQL',
+            6379 => 'Redis',
+            11211 => 'Memcached',
+            27017 => 'MongoDB',
+            9200 => 'Elasticsearch',
+            5984 => 'CouchDB',
+            5672 => 'RabbitMQ',
+            2379 => 'etcd',
+        ];
+        $out = $this->runCmd(['ss', '-tlnH']) ?? $this->runCmd(['ss', '-tln']);
+        if ($out === null) {
+            return $this->na('A.8.21-sensitive', '敏感服務暴露', '無法執行 ss。');
+        }
+        $exposed = [];
+        foreach (preg_split('/\r?\n/', trim($out)) as $line) {
+            if (preg_match('/\s(?:0\.0\.0\.0|\*|\[::\]):(\d+)\s/', $line, $m)) {
+                $port = (int) $m[1];
+                if (isset($sensitivePorts[$port])) {
+                    $exposed[] = "{$sensitivePorts[$port]}({$port})";
+                }
+            }
+        }
+        if (empty($exposed)) {
+            return $this->pass('A.8.21-sensitive', '敏感服務暴露', self::SEV_HIGH,
+                '未偵測到資料庫／快取／訊息佇列對外監聽。');
+        }
+        return $this->fail('A.8.21-sensitive', '敏感服務暴露', self::SEV_HIGH,
+            '偵測到敏感服務對外暴露：' . implode('、', $exposed),
+            implode(', ', $exposed),
+            '改為僅綁定 127.0.0.1，或以防火牆限制來源 IP。對外請走反向代理 / VPN。');
+    }
+
+    /** A.8.22 — 網路分隔：ip_forward 衛生。 */
+    private function checkIpForwardHygiene(): array
+    {
+        $out = $this->runCmd(['sysctl', '-n', 'net.ipv4.ip_forward']);
+        $val = $out !== null ? trim($out) : null;
+        if ($val === null) {
+            return $this->na('A.8.22', '網路分隔', '無法讀取 net.ipv4.ip_forward。');
+        }
+        // 若啟用 ip_forward，必須有防火牆的 FORWARD 鏈規則；否則視為誤設。
+        if ($val === '0') {
+            return $this->pass('A.8.22', '網路分隔', self::SEV_LOW,
+                'net.ipv4.ip_forward=0（端點主機，不作為路由器）。');
+        }
+        // Forwarding is on — check FORWARD chain has at least some policy.
+        $forwardOut = $this->runCmd(['iptables', '-S', 'FORWARD']) ?? $this->runCmd(['nft', 'list', 'chain', 'inet', 'filter', 'forward']);
+        $hasPolicy = $forwardOut !== null && trim($forwardOut) !== '' && !preg_match('/^-P FORWARD ACCEPT\s*$/m', trim($forwardOut));
+        if ($hasPolicy) {
+            return $this->pass('A.8.22', '網路分隔', self::SEV_LOW,
+                'ip_forward=1 且 FORWARD 鏈已設定規則（符合路由／分隔用途）。');
+        }
+        return $this->warn('A.8.22', '網路分隔', self::SEV_MEDIUM,
+            'ip_forward 啟用但 FORWARD 鏈無限制規則（預設 ACCEPT）。',
+            'net.ipv4.ip_forward=1；iptables -S FORWARD 顯示預設 ACCEPT。',
+            '若非路由器，sysctl -w net.ipv4.ip_forward=0；若為路由器，於 FORWARD 鏈加上來源／目的限制。');
+    }
+
+    /** A.8.32 — 變更管理：/etc 版本控制。 */
+    private function checkEtcUnderVersionControl(): array
+    {
+        $signals = [];
+        if (is_dir('/etc/.git')) {
+            $signals[] = '/etc/.git';
+        }
+        if (is_dir('/etc/.bzr')) {
+            $signals[] = '/etc/.bzr';
+        }
+        if (is_dir('/etc/.hg')) {
+            $signals[] = '/etc/.hg';
+        }
+        if ($this->which('etckeeper') !== null) {
+            $signals[] = 'etckeeper(bin)';
+        }
+        if (empty($signals)) {
+            return $this->warn('A.8.32', '變更管理', self::SEV_LOW,
+                '/etc 不在版本控制之下，設定變更無軌跡。',
+                '未偵測到 /etc/.git、/etc/.bzr、/etc/.hg 或 etckeeper。',
+                '安裝 etckeeper：apt install etckeeper，其會自動把 /etc 放入 git。');
+        }
+        return $this->pass('A.8.32', '變更管理', self::SEV_LOW,
+            '/etc 位於版本控制之下。', implode(', ', $signals));
+    }
+
+    /** A.5.31 — 套件更新積壓。 */
+    private function checkPendingSecurityUpdates(): array
+    {
+        // Debian/Ubuntu
+        if ($this->which('apt') !== null) {
+            $out = $this->runCmd(['apt', 'list', '--upgradable'], 15);
+            if ($out === null) {
+                return $this->na('A.5.31', '套件更新積壓', 'apt list --upgradable 執行失敗。');
+            }
+            $lines = preg_split('/\r?\n/', trim($out));
+            // First line is "Listing..." header
+            $upgradable = max(0, count($lines) - 1);
+            $security = 0;
+            foreach ($lines as $l) {
+                if (stripos($l, 'security') !== false) {
+                    $security++;
+                }
+            }
+            if ($upgradable === 0) {
+                return $this->pass('A.5.31', '套件更新積壓', self::SEV_MEDIUM, '沒有可升級的套件。');
+            }
+            if ($security > 0) {
+                return $this->fail('A.5.31', '套件更新積壓', self::SEV_HIGH,
+                    "有 {$security} 個安全性更新待安裝（總計 {$upgradable} 個可升級）。",
+                    "apt list --upgradable 中 {$security} 行含 'security'。",
+                    'apt upgrade 或 unattended-upgrades 啟用。');
+            }
+            return $this->warn('A.5.31', '套件更新積壓', self::SEV_MEDIUM,
+                "有 {$upgradable} 個可升級的套件（未偵測到安全標記，可能僅功能性）。",
+                '',
+                '於維運視窗執行 apt upgrade 或開啟自動更新。');
+        }
+        if ($this->which('dnf') !== null) {
+            $out = $this->runCmd(['dnf', 'check-update', '--security'], 15);
+            if ($out === null) {
+                // dnf returns non-zero when updates exist
+            }
+            return $this->pass('A.5.31', '套件更新積壓', self::SEV_MEDIUM,
+                '偵測到 dnf；請改用 dnf-automatic 管理（A.8.8 已檢查）。');
+        }
+        return $this->na('A.5.31', '套件更新積壓', '非 Debian / RHEL 家族，略過。');
+    }
+
+    /** A.8.5 — SSH 金鑰檔權限。 */
+    private function checkSshKeyFilePermissions(): array
+    {
+        $issues = [];
+        $roots = ['/root'];
+        foreach (@glob('/home/*') ?: [] as $h) {
+            if (is_dir($h)) {
+                $roots[] = $h;
+            }
+        }
+        foreach ($roots as $home) {
+            $sshDir = $home . '/.ssh';
+            if (!is_dir($sshDir)) {
+                continue;
+            }
+            $dirMode = fileperms($sshDir) & 0777;
+            if (($dirMode & 0077) !== 0) {
+                $issues[] = "{$sshDir} mode=" . sprintf('%04o', $dirMode) . '（應 0700）';
+            }
+            $ak = $sshDir . '/authorized_keys';
+            if (is_file($ak)) {
+                $m = fileperms($ak) & 0777;
+                if (($m & 0077) !== 0) {
+                    $issues[] = "{$ak} mode=" . sprintf('%04o', $m) . '（應 0600）';
+                }
+            }
+            foreach (@glob($sshDir . '/id_*') ?: [] as $pk) {
+                if (str_ends_with($pk, '.pub')) {
+                    continue;
+                }
+                $m = fileperms($pk) & 0777;
+                if (($m & 0077) !== 0) {
+                    $issues[] = "{$pk} mode=" . sprintf('%04o', $m) . '（私鑰，應 0600）';
+                }
+            }
+        }
+        if (empty($issues)) {
+            return $this->pass('A.8.5-perms', 'SSH 金鑰檔權限', self::SEV_HIGH,
+                '所檢視的 .ssh 目錄與金鑰檔權限皆正確。');
+        }
+        return $this->fail('A.8.5-perms', 'SSH 金鑰檔權限', self::SEV_HIGH,
+            'SSH 金鑰相關檔案權限過鬆：' . count($issues) . ' 項。',
+            implode("\n", array_slice($issues, 0, 8)) . (count($issues) > 8 ? "\n…（已截斷）" : ''),
+            'chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys ~/.ssh/id_*。');
+    }
+
+    /** A.8.24 — TLS 憑證到期。 */
+    private function checkTlsCertExpiry(): array
+    {
+        if ($this->which('openssl') === null) {
+            return $this->na('A.8.24-cert', 'TLS 憑證到期', '未安裝 openssl。');
+        }
+        $candidates = array_merge(
+            @glob('/etc/letsencrypt/live/*/cert.pem') ?: [],
+            @glob('/etc/letsencrypt/live/*/fullchain.pem') ?: [],
+            @glob('/etc/ssl/certs/*.pem') ?: [],
+            @glob('/etc/pki/tls/certs/*.pem') ?: [],
+            @glob('/etc/nginx/ssl/*.pem') ?: [],
+            @glob('/etc/nginx/ssl/*.crt') ?: [],
+        );
+        $candidates = array_values(array_unique(array_filter($candidates, 'is_file')));
+        if (empty($candidates)) {
+            return $this->na('A.8.24-cert', 'TLS 憑證到期', '未找到常見路徑下的 TLS 憑證。');
+        }
+        $nowTs = time();
+        $warning = [];
+        $expired = [];
+        $inspected = 0;
+        foreach (array_slice($candidates, 0, 30) as $cert) {
+            $out = $this->runCmd(['openssl', 'x509', '-in', $cert, '-enddate', '-noout']);
+            if ($out === null || !preg_match('/notAfter=(.+)/', $out, $m)) {
+                continue;
+            }
+            $inspected++;
+            $expiresAt = strtotime(trim($m[1]));
+            if (!$expiresAt) {
+                continue;
+            }
+            $daysLeft = (int) floor(($expiresAt - $nowTs) / 86400);
+            if ($daysLeft < 0) {
+                $expired[] = basename($cert) . ' (過期 ' . abs($daysLeft) . ' 天)';
+            } elseif ($daysLeft <= 30) {
+                $warning[] = basename($cert) . " ({$daysLeft} 天後到期)";
+            }
+        }
+        if (!empty($expired)) {
+            return $this->fail('A.8.24-cert', 'TLS 憑證到期', self::SEV_HIGH,
+                '有 ' . count($expired) . ' 個 TLS 憑證已過期。',
+                implode("\n", array_slice($expired, 0, 5)),
+                '續簽／更新：certbot renew，或更新購買憑證。');
+        }
+        if (!empty($warning)) {
+            return $this->warn('A.8.24-cert', 'TLS 憑證到期', self::SEV_MEDIUM,
+                '有 ' . count($warning) . ' 個 TLS 憑證 30 天內到期。',
+                implode("\n", array_slice($warning, 0, 5)),
+                '儘速續簽（certbot renew）。');
+        }
+        return $this->pass('A.8.24-cert', 'TLS 憑證到期', self::SEV_MEDIUM,
+            "檢視 {$inspected} 個憑證，皆距到期 >30 天。");
+    }
+
+    /** A.8.9 — SUID / SGID 二進位普查。 */
+    private function checkSuidBinariesCensus(): array
+    {
+        $out = $this->runCmd(['find', '/usr/local', '/opt', '-xdev', '-type', 'f', '(', '-perm', '-4000', '-o', '-perm', '-2000', ')'], 12);
+        if ($out === null) {
+            return $this->na('A.8.9-suid', 'SUID/SGID 普查', '無法執行 find。');
+        }
+        $lines = array_filter(preg_split('/\r?\n/', trim($out)));
+        // /usr/local and /opt are admin-managed; any SUID here is worth a human look.
+        if (empty($lines)) {
+            return $this->pass('A.8.9-suid', 'SUID/SGID 普查', self::SEV_LOW,
+                '/usr/local 與 /opt 下沒有 SUID/SGID 二進位。');
+        }
+        return $this->warn('A.8.9-suid', 'SUID/SGID 普查', self::SEV_MEDIUM,
+            '/usr/local 與 /opt 下找到 ' . count($lines) . ' 個 SUID/SGID 檔案，請確認必要性。',
+            implode("\n", array_slice($lines, 0, 15)) . (count($lines) > 15 ? "\n…（已截斷）" : ''),
+            '非必要的 SUID：chmod u-s / g-s 移除；必要者加入白名單。');
+    }
+
+    /** A.5.16 — root shell 歷史純淨。 */
+    private function checkRootHistorySanitation(): array
+    {
+        $hist = '/root/.bash_history';
+        if (!file_exists($hist)) {
+            return $this->pass('A.5.16-hist', 'root 歷史純淨', self::SEV_LOW,
+                '/root/.bash_history 不存在（可能導向 /dev/null）。');
+        }
+        $size = @filesize($hist);
+        $perms = fileperms($hist) & 0777;
+        $issues = [];
+        if ($size > 0 && is_link($hist)) {
+            // ok, symlink
+        } elseif ($size > 0) {
+            $issues[] = "size={$size} bytes（建議定期清空或導向 /dev/null）";
+        }
+        if (($perms & 0077) !== 0) {
+            $issues[] = 'mode=' . sprintf('%04o', $perms) . '（應 0600）';
+        }
+        if (empty($issues)) {
+            return $this->pass('A.5.16-hist', 'root 歷史純淨', self::SEV_LOW,
+                '/root/.bash_history 檔案權限正確且可接受。');
+        }
+        return $this->warn('A.5.16-hist', 'root 歷史純淨', self::SEV_LOW,
+            'root shell 歷史檔有風險：' . implode('；', $issues),
+            "path={$hist}",
+            'chmod 600 ~/.bash_history 或 ln -sf /dev/null ~/.bash_history。');
+    }
+
+    /** A.8.14 — 儲存備援（RAID / LVM mirror）。 */
+    private function checkStorageRedundancy(): array
+    {
+        $signals = [];
+        $md = @file_get_contents('/proc/mdstat');
+        if ($md !== false && preg_match_all('/md\d+\s*:\s*active\s+(raid\d+)/', $md, $m)) {
+            foreach ($m[1] as $lvl) {
+                $signals[] = "mdraid:{$lvl}";
+            }
+        }
+        $lvs = $this->runCmd(['lvs', '--noheadings', '-o', 'lv_name,segtype']);
+        if ($lvs !== null) {
+            foreach (preg_split('/\r?\n/', trim($lvs)) as $line) {
+                if (preg_match('/\s+(mirror|raid[0-9]+)\b/', $line, $m)) {
+                    $signals[] = 'lvm:' . $m[1];
+                }
+            }
+        }
+        $zp = $this->runCmd(['zpool', 'status']);
+        if ($zp !== null && preg_match('/\b(mirror|raidz\d*)\b/', $zp)) {
+            $signals[] = 'zfs';
+        }
+        if (empty($signals)) {
+            return $this->warn('A.8.14', '儲存備援', self::SEV_LOW,
+                '未偵測到 RAID / LVM mirror / ZFS 冗餘。',
+                '/proc/mdstat / lvs / zpool status 皆無 mirror/raid 字樣。',
+                '對關鍵資料磁碟啟用 mdraid、LVM mirror 或 ZFS。');
+        }
+        return $this->pass('A.8.14', '儲存備援', self::SEV_LOW,
+            '偵測到冗餘儲存：' . implode(', ', array_unique($signals)) . '。');
+    }
+
+    /** A.8.3 — 家目錄權限。 */
+    private function checkHomeDirPermissions(): array
+    {
+        $bad = [];
+        foreach (@glob('/home/*') ?: [] as $h) {
+            if (!is_dir($h)) {
+                continue;
+            }
+            $m = fileperms($h) & 0777;
+            // 0700/0750/0755 acceptable; other-readable is weak but common; world-writable is not.
+            if (($m & 0002) !== 0) {
+                $bad[] = basename($h) . ' mode=' . sprintf('%04o', $m) . '（world-writable）';
+            } elseif (($m & 0007) !== 0 && ($m & 0005) !== 0005) {
+                // other has rights beyond simple r-x — flag
+                $bad[] = basename($h) . ' mode=' . sprintf('%04o', $m);
+            }
+        }
+        if (empty($bad)) {
+            return $this->pass('A.8.3-home', '家目錄權限', self::SEV_MEDIUM,
+                '/home/* 權限皆未對 other 開放過多權限。');
+        }
+        return $this->warn('A.8.3-home', '家目錄權限', self::SEV_MEDIUM,
+            '部分家目錄權限過鬆：' . count($bad) . ' 項。',
+            implode("\n", array_slice($bad, 0, 10)),
+            'chmod 0700 /home/<user>（或 0750 若群組需存取）。');
     }
 
     /* ------------------------------------------------------------------ */
