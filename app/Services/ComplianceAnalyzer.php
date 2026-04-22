@@ -669,7 +669,7 @@ class ComplianceAnalyzer
             $val = $out !== null ? trim($out) : null;
             $evidenceLines[] = "$key = " . ($val ?? 'n/a');
             if ($val === null || !in_array($val, $wants, true)) {
-                $missing[] = "$key≠" . implode('|', $wants);
+                $missing[] = "{$key}≠" . implode('|', $wants);
             }
         }
         if (empty($missing)) {
