@@ -273,7 +273,7 @@ class SuricataEngine
                 if ($this->isWindows()) {
                     Process::run("taskkill /IM suricata.exe /F 2>nul");
                 } else {
-                    Process::run("pkill -f suricata 2>/dev/null");
+                    Process::run("pkill -x suricata 2>/dev/null");
                 }
             }
 
@@ -1091,7 +1091,7 @@ YAML;
                 return str_contains($result->output(), 'suricata.exe');
             }
 
-            $result = Process::run("pgrep -f suricata 2>/dev/null");
+            $result = Process::run("pgrep -x suricata 2>/dev/null");
             return !empty(trim($result->output()));
         } catch (\Exception $e) {
             return false;

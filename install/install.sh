@@ -603,6 +603,12 @@ if [ "$OS" = "macos" ]; then
 </plist>
 EOF
     
+    # Ensure watchdog script is in place (used by sync plist below)
+    if [ -f "$INSTALL_DIR/install/security-one-watchdog.sh" ] && [ ! -x "$INSTALL_DIR/security-one-watchdog.sh" ]; then
+        cp "$INSTALL_DIR/install/security-one-watchdog.sh" "$INSTALL_DIR/security-one-watchdog.sh"
+        chmod +x "$INSTALL_DIR/security-one-watchdog.sh"
+    fi
+
     # Create heartbeat sync plist (daemon mode - reads interval from Hub config)
     cat > /Library/LaunchDaemons/com.securityone.ids.sync.plist << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -613,10 +619,8 @@ EOF
     <string>com.securityone.ids.sync</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$PHP_PATH</string>
-        <string>$INSTALL_DIR/artisan</string>
-        <string>waf:heartbeat</string>
-        <string>--daemon</string>
+        <string>/bin/bash</string>
+        <string>$INSTALL_DIR/security-one-watchdog.sh</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>

@@ -323,6 +323,29 @@ class WafSyncService
         $this->runSuricataSync();
     }
 
+
+    /**
+     * Run Suricata management tasks: install if missing, start if enabled,
+     * sync rules, collect alerts. Called by ids:sync-suricata.
+     */
+    public function runSuricataSync(): void
+    {
+        $config = $this->getWafConfig();
+        $addons = $config["addons"] ?? [];
+
+        if (empty($addons["suricata_enabled"])) {
+            return;
+        }
+
+        $this->ensureSuricataRunning($addons);
+
+        if (!empty($addons["suricata_rules_hash"])) {
+            $this->syncSuricataRules($addons["suricata_rules_hash"], $addons["suricata_mode"] ?? "ids");
+        }
+
+        $this->collectSuricataAlerts();
+    }
+
     /**
      * Run maintenance tasks: ClamAV, updates, definitions, scan, system signals
      */
