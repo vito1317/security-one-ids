@@ -138,6 +138,16 @@ class SuricataEngine
             return ['success' => true, 'message' => 'Suricata is already running'];
         }
 
+        // isRunning() returned false, so any pidfile still on disk is stale
+        // (process died without cleanup). Suricata refuses to start when a
+        // stale pidfile exists, so remove it here.
+        if (file_exists($this->pidFile)) {
+            @unlink($this->pidFile);
+            Log::info('Removed stale Suricata pidfile before start', [
+                'pidfile' => $this->pidFile,
+            ]);
+        }
+
         $interface = $interface ?? $this->detectDefaultInterface();
 
         // Ensure log directory exists
