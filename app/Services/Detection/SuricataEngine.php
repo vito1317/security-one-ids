@@ -106,20 +106,59 @@ class SuricataEngine
     }
 
     /**
-     * Check if Suricata process is currently running
+     * Check if Suricata process is currently running.
+     *
+     * Has to handle three deployment shapes that all appear in the wild:
+     *   - Suricata started by `$this->start()` — pidfile in $this->logDir.
+     *   - Suricata run under the distribution systemd unit — pidfile in
+     *     /run/suricata.pid (Debian/Ubuntu/RHEL default) and the main
+     *     thread's `comm` name is "Suricata-Main", NOT "suricata", so a
+     *     plain `pgrep -x suricata` misses it.
+     *   - Suricata run under Homebrew (macOS) — pidfile under
+     *     /opt/homebrew/var/run/suricata.pid, comm=`suricata`.
      */
     public function isRunning(): bool
     {
-        // Check PID file first
-        if (file_exists($this->pidFile)) {
-            $pid = trim(file_get_contents($this->pidFile));
-            if ($this->isProcessRunning((int) $pid)) {
+        foreach ($this->candidatePidFiles() as $pidFile) {
+            if (!file_exists($pidFile)) {
+                continue;
+            }
+            $pid = (int) trim((string) @file_get_contents($pidFile));
+            if ($pid > 0 && $this->isProcessRunning($pid)) {
                 return true;
             }
         }
 
-        // Fallback: check process list
+        // Systemd bus check — works even when we can't read the pidfile.
+        if (!$this->isWindows() && PHP_OS !== 'Darwin') {
+            try {
+                $result = Process::run('systemctl is-active suricata 2>/dev/null');
+                if (trim($result->output()) === 'active') {
+                    return true;
+                }
+            } catch (\Exception $e) {
+                // Ignore — fall through to pgrep.
+            }
+        }
+
+        // Process-name fallback: match both `suricata` and `Suricata-Main`.
         return $this->isSuricataProcessActive();
+    }
+
+    /**
+     * @return array<string> Pidfile paths to probe, most specific first.
+     */
+    private function candidatePidFiles(): array
+    {
+        $paths = [$this->pidFile];
+        if (!$this->isWindows()) {
+            $paths[] = '/run/suricata.pid';
+            $paths[] = '/var/run/suricata.pid';
+            $paths[] = '/var/run/suricata/suricata.pid';
+            $paths[] = '/opt/homebrew/var/run/suricata.pid';
+            $paths[] = '/usr/local/var/run/suricata.pid';
+        }
+        return array_values(array_unique(array_filter($paths)));
     }
 
     /**
@@ -1201,7 +1240,12 @@ YAML;
                 return str_contains($result->output(), 'suricata.exe');
             }
 
-            $result = Process::run("pgrep -x suricata 2>/dev/null");
+            // `pgrep -x suricata` fails under systemd-packaged Suricata because
+            // the main thread's comm name is "Suricata-Main". Use -f with a
+            // regex anchored on the binary path so we match both shapes
+            // (`/usr/bin/suricata ...` and `/opt/homebrew/bin/suricata ...`)
+            // without catching grep / editor windows containing the word.
+            $result = Process::run("pgrep -f '(^|/)suricata(-Main)?\\b' 2>/dev/null");
             return !empty(trim($result->output()));
         } catch (\Exception $e) {
             return false;
