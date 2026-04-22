@@ -45,6 +45,22 @@ class ComplianceAnalyzer
             $this->checkDiskEncryption(),         // A.8.24
             $this->checkSshCiphers(),             // A.8.24
             $this->checkBackupEvidence(),         // A.8.13
+            // Extended rule set:
+            $this->checkFail2ban(),               // A.5.7
+            $this->checkIdleSessionTimeout(),     // A.8.1
+            $this->checkDiskCapacity(),           // A.8.6
+            $this->checkInodeCapacity(),          // A.8.6
+            $this->checkListeningServices(),      // A.8.21
+            $this->checkKernelHardening(),        // A.8.9
+            $this->checkTmpMountOptions(),        // A.8.9
+            $this->checkEmptyPasswords(),         // A.5.16
+            $this->checkWorldWritableCriticalFiles(), // A.8.3
+            $this->checkSshKeyAuthPresence(),     // A.8.5
+            $this->checkCronHygiene(),            // A.8.18
+            $this->checkUnsignedAptSources(),     // A.8.19
+            $this->checkDormantAccounts(),        // A.5.16
+            $this->checkCoreDumpDisabled(),       // A.8.9
+            $this->checkWebServerTlsProtocol(),   // A.8.24
         ];
 
         return $this->summarize($checks);
@@ -497,6 +513,482 @@ class ComplianceAnalyzer
         return $this->warn('A.8.13', '資訊備份', self::SEV_MEDIUM,
             '未偵測到備份工具或排程。', '檢查常見備份工具與 /etc/cron.* 皆無 *backup* 條目。',
             '建立定期備份機制（例：borg/restic + cron/systemd-timer）並測試還原。');
+    }
+
+    /* ================================================================== */
+    /* Extended rule set                                                   */
+    /* ================================================================== */
+
+    /** A.5.7 — 威脅情報：fail2ban。 */
+    private function checkFail2ban(): array
+    {
+        if ($this->which('fail2ban-client') === null) {
+            return $this->warn('A.5.7', '威脅情報', self::SEV_MEDIUM,
+                '未安裝 fail2ban（可自動封鎖暴力破解來源）。',
+                'fail2ban-client not found in PATH',
+                '安裝：apt install fail2ban 並啟用 sshd jail。');
+        }
+        if (!$this->isServiceActive('fail2ban')) {
+            return $this->warn('A.5.7', '威脅情報', self::SEV_MEDIUM,
+                'fail2ban 已安裝但未啟動。', 'systemctl is-active fail2ban ≠ active',
+                'systemctl enable --now fail2ban');
+        }
+        $out = $this->runCmd(['fail2ban-client', 'status']);
+        $jails = ($out !== null && preg_match('/Number of jail:\s*(\d+)/', $out, $m)) ? (int) $m[1] : 0;
+        if ($jails === 0) {
+            return $this->warn('A.5.7', '威脅情報', self::SEV_MEDIUM,
+                'fail2ban 運作中但沒有啟用任何 jail。', trim($out ?? ''),
+                '啟用 sshd jail：enabled = true 於 /etc/fail2ban/jail.local。');
+        }
+        return $this->pass('A.5.7', '威脅情報', self::SEV_MEDIUM,
+            "fail2ban 啟用中，共 {$jails} 個 jail。", trim($out ?? ''));
+    }
+
+    /** A.8.1 — 使用者終端：閒置登出。 */
+    private function checkIdleSessionTimeout(): array
+    {
+        $sources = ['/etc/profile', '/etc/bash.bashrc', '/etc/profile.d/tmout.sh'];
+        foreach (@glob('/etc/profile.d/*.sh') ?: [] as $p) {
+            $sources[] = $p;
+        }
+        foreach (array_unique($sources) as $f) {
+            if (!is_readable($f)) {
+                continue;
+            }
+            $content = (string) @file_get_contents($f);
+            if (preg_match('/^\s*(?:export\s+)?TMOUT=(\d+)/m', $content, $m) && (int) $m[1] > 0 && (int) $m[1] <= 900) {
+                return $this->pass('A.8.1', '使用者終端設備', self::SEV_LOW,
+                    "Shell 閒置登出 TMOUT={$m[1]} 秒（於 {$f}）。");
+            }
+        }
+        return $this->warn('A.8.1', '使用者終端設備', self::SEV_LOW,
+            '未設定 shell 閒置自動登出（TMOUT）。',
+            '檢查 /etc/profile 與 /etc/profile.d/*.sh 皆無有效 TMOUT。',
+            '於 /etc/profile.d/tmout.sh 加上 readonly TMOUT=600; export TMOUT。');
+    }
+
+    /** A.8.6 — 容量管理：磁碟使用率。 */
+    private function checkDiskCapacity(): array
+    {
+        $out = $this->runCmd(['df', '-P', '-x', 'tmpfs', '-x', 'devtmpfs', '-x', 'overlay', '-x', 'squashfs']);
+        if ($out === null) {
+            return $this->na('A.8.6', '容量管理（磁碟）', '無法執行 df。');
+        }
+        $issues = [];
+        $lines = array_slice(preg_split('/\r?\n/', trim($out)), 1);
+        foreach ($lines as $line) {
+            if (!preg_match('/\s(\d+)%\s+(\/\S*)$/', $line, $m)) {
+                continue;
+            }
+            $pct = (int) $m[1];
+            $mount = $m[2];
+            if ($pct >= 90) {
+                $issues[] = "$mount 使用 {$pct}%";
+            }
+        }
+        if (empty($issues)) {
+            return $this->pass('A.8.6', '容量管理（磁碟）', self::SEV_MEDIUM,
+                '所有掛載點使用率 < 90%。', trim($out));
+        }
+        return $this->warn('A.8.6', '容量管理（磁碟）', self::SEV_MEDIUM,
+            '偵測到高使用率掛載點：' . implode('、', $issues),
+            trim($out),
+            '清理舊資料／擴充磁碟／加上監控告警。');
+    }
+
+    /** A.8.6 — 容量管理：inode。 */
+    private function checkInodeCapacity(): array
+    {
+        $out = $this->runCmd(['df', '-iP', '-x', 'tmpfs', '-x', 'devtmpfs', '-x', 'overlay', '-x', 'squashfs']);
+        if ($out === null) {
+            return $this->na('A.8.6', '容量管理（inode）', '無法執行 df -i。');
+        }
+        $issues = [];
+        $lines = array_slice(preg_split('/\r?\n/', trim($out)), 1);
+        foreach ($lines as $line) {
+            if (!preg_match('/\s(\d+)%\s+(\/\S*)$/', $line, $m)) {
+                continue;
+            }
+            if ((int) $m[1] >= 90) {
+                $issues[] = $m[2] . " inode 使用 {$m[1]}%";
+            }
+        }
+        if (empty($issues)) {
+            return $this->pass('A.8.6', '容量管理（inode）', self::SEV_MEDIUM, '所有檔案系統 inode 使用率 < 90%。');
+        }
+        return $this->warn('A.8.6', '容量管理（inode）', self::SEV_MEDIUM,
+            '偵測到 inode 耗盡風險：' . implode('、', $issues),
+            trim($out),
+            '清理含大量小檔案的路徑，或提高 inode 配額。');
+    }
+
+    /** A.8.21 — 網路服務安全：開放埠。 */
+    private function checkListeningServices(): array
+    {
+        $out = $this->runCmd(['ss', '-tlnpH']) ?? $this->runCmd(['ss', '-tln']);
+        if ($out === null) {
+            return $this->na('A.8.21', '網路服務安全', '無法執行 ss。');
+        }
+        $public = [];
+        foreach (preg_split('/\r?\n/', trim($out)) as $line) {
+            if (preg_match('/\s(?:0\.0\.0\.0|\*|\[::\]):(\d+)\s/', $line, $m)) {
+                $public[] = (int) $m[1];
+            }
+        }
+        $public = array_values(array_unique($public));
+        sort($public);
+        $count = count($public);
+        $evidence = '公開監聽埠：' . ($public ? implode(', ', $public) : '(無)');
+
+        if ($count === 0) {
+            return $this->pass('A.8.21', '網路服務安全', self::SEV_MEDIUM, '無對外監聽服務。');
+        }
+        if ($count > 10) {
+            return $this->warn('A.8.21', '網路服務安全', self::SEV_MEDIUM,
+                "對外監聽 {$count} 個 TCP 埠，建議檢視是否必要。", $evidence,
+                '停用非必要服務，或改為只綁定 127.0.0.1。');
+        }
+        return $this->pass('A.8.21', '網路服務安全', self::SEV_MEDIUM,
+            "對外監聽 {$count} 個 TCP 埠。", $evidence);
+    }
+
+    /** A.8.9 — 核心強化（sysctl）。 */
+    private function checkKernelHardening(): array
+    {
+        $expected = [
+            'kernel.randomize_va_space' => ['2'],
+            'net.ipv4.tcp_syncookies' => ['1'],
+            'kernel.kptr_restrict' => ['1', '2'],
+            'kernel.yama.ptrace_scope' => ['1', '2', '3'],
+            'net.ipv4.conf.all.rp_filter' => ['1', '2'],
+        ];
+        $missing = [];
+        $evidenceLines = [];
+        foreach ($expected as $key => $wants) {
+            $out = $this->runCmd(['sysctl', '-n', $key]);
+            $val = $out !== null ? trim($out) : null;
+            $evidenceLines[] = "$key = " . ($val ?? 'n/a');
+            if ($val === null || !in_array($val, $wants, true)) {
+                $missing[] = "$key≠" . implode('|', $wants);
+            }
+        }
+        if (empty($missing)) {
+            return $this->pass('A.8.9-kernel', '核心強化', self::SEV_MEDIUM,
+                '常見核心硬化參數均符合建議。', implode("\n", $evidenceLines));
+        }
+        return $this->warn('A.8.9-kernel', '核心強化', self::SEV_MEDIUM,
+            '核心硬化參數不完整：' . implode('、', $missing),
+            implode("\n", $evidenceLines),
+            '於 /etc/sysctl.d/99-hardening.conf 加入上述建議值並 sysctl --system。');
+    }
+
+    /** A.8.9 — /tmp 掛載選項。 */
+    private function checkTmpMountOptions(): array
+    {
+        $fstab = @file_get_contents('/etc/fstab');
+        if ($fstab === false) {
+            return $this->na('A.8.9-tmp', '/tmp 掛載', '無法讀取 /etc/fstab。');
+        }
+        $mountOut = $this->runCmd(['mount']);
+        $tmpLine = null;
+        if ($mountOut !== null) {
+            foreach (preg_split('/\r?\n/', $mountOut) as $line) {
+                if (preg_match('/\son\s+\/tmp\s/', $line)) {
+                    $tmpLine = $line;
+                    break;
+                }
+            }
+        }
+        if ($tmpLine === null) {
+            return $this->warn('A.8.9-tmp', '/tmp 掛載', self::SEV_LOW,
+                '/tmp 未獨立掛載，nosuid/noexec 無法套用。',
+                '於 mount 輸出找不到 /tmp 的獨立項目。',
+                '將 /tmp 改為獨立分割或 tmpfs，並加上 nosuid,noexec,nodev。');
+        }
+        $flags = [];
+        foreach (['nosuid', 'noexec', 'nodev'] as $f) {
+            if (strpos($tmpLine, $f) === false) {
+                $flags[] = $f;
+            }
+        }
+        if (empty($flags)) {
+            return $this->pass('A.8.9-tmp', '/tmp 掛載', self::SEV_LOW,
+                '/tmp 已加上 nosuid,noexec,nodev。', trim($tmpLine));
+        }
+        return $this->warn('A.8.9-tmp', '/tmp 掛載', self::SEV_LOW,
+            '/tmp 缺少安全掛載選項：' . implode(', ', $flags),
+            trim($tmpLine),
+            '於 /etc/fstab 該列補上 nosuid,noexec,nodev 並重新掛載。');
+    }
+
+    /** A.5.16 — 空密碼帳號。 */
+    private function checkEmptyPasswords(): array
+    {
+        $shadow = @file_get_contents('/etc/shadow');
+        if ($shadow === false) {
+            return $this->na('A.5.16', '身分管理', '無法讀取 /etc/shadow（權限不足）。');
+        }
+        $offenders = [];
+        foreach (preg_split('/\r?\n/', $shadow) as $line) {
+            $parts = explode(':', $line);
+            if (count($parts) >= 2 && $parts[1] === '') {
+                $offenders[] = $parts[0];
+            }
+        }
+        if (empty($offenders)) {
+            return $this->pass('A.5.16', '身分管理（空密碼）', self::SEV_CRITICAL, '沒有帳號使用空密碼。');
+        }
+        return $this->fail('A.5.16', '身分管理（空密碼）', self::SEV_CRITICAL,
+            '發現空密碼帳號：' . implode(', ', $offenders),
+            '/etc/shadow 欄位 2 為空的帳號：' . implode(', ', $offenders),
+            'passwd -l <user> 鎖定，或指派強密碼。');
+    }
+
+    /** A.8.3 — /etc 中的 world-writable 檔案。 */
+    private function checkWorldWritableCriticalFiles(): array
+    {
+        $out = $this->runCmd(['find', '/etc', '-xdev', '-type', 'f', '-perm', '-0002'], 10);
+        if ($out === null) {
+            return $this->na('A.8.3-ww', 'world-writable 檔案', '無法執行 find。');
+        }
+        $lines = array_filter(preg_split('/\r?\n/', trim($out)));
+        if (empty($lines)) {
+            return $this->pass('A.8.3-ww', 'world-writable 檔案', self::SEV_HIGH, '/etc 下沒有任何 world-writable 檔案。');
+        }
+        return $this->fail('A.8.3-ww', 'world-writable 檔案', self::SEV_HIGH,
+            '/etc 下存在可被任何使用者改寫的檔案，可能被用於提權。',
+            implode("\n", array_slice($lines, 0, 20)) . (count($lines) > 20 ? "\n…（共 " . count($lines) . ' 筆，已截斷）' : ''),
+            'chmod o-w <檔案> 移除 world-writable。');
+    }
+
+    /** A.8.5 — 存在管理員金鑰，搭配密碼驗證停用。 */
+    private function checkSshKeyAuthPresence(): array
+    {
+        $hits = [];
+        foreach (['/root/.ssh/authorized_keys'] as $f) {
+            if (is_file($f) && filesize($f) > 0) {
+                $hits[] = basename(dirname(dirname($f))) . '/.ssh/authorized_keys (' . filesize($f) . ' bytes)';
+            }
+        }
+        foreach (@glob('/home/*/.ssh/authorized_keys') ?: [] as $f) {
+            if (is_file($f) && filesize($f) > 0) {
+                $hits[] = basename(dirname(dirname($f))) . '/.ssh/authorized_keys (' . filesize($f) . ' bytes)';
+            }
+        }
+        if (empty($hits)) {
+            return $this->warn('A.8.5-key', 'SSH 金鑰登入', self::SEV_MEDIUM,
+                '未偵測到任何 SSH 金鑰檔，可能完全仰賴密碼登入。',
+                '/root/.ssh/authorized_keys 與 /home/*/.ssh/authorized_keys 皆不存在或為空。',
+                '建立金鑰登入後停用 PasswordAuthentication。');
+        }
+        return $this->pass('A.8.5-key', 'SSH 金鑰登入', self::SEV_MEDIUM,
+            '已偵測到 SSH 授權金鑰檔。', implode("\n", $hits));
+    }
+
+    /** A.8.18 — cron 衛生。 */
+    private function checkCronHygiene(): array
+    {
+        $bad = [];
+        foreach (['/etc/cron.d'] as $d) {
+            if (!is_dir($d)) {
+                continue;
+            }
+            foreach (@glob($d . '/*') ?: [] as $f) {
+                if (!is_file($f)) {
+                    continue;
+                }
+                $perms = @fileperms($f) & 0777;
+                if (($perms & 0022) !== 0) {
+                    $bad[] = $f . ' mode=' . sprintf('%04o', $perms);
+                }
+                $content = (string) @file_get_contents($f);
+                if (preg_match('/curl[^|\n]*\|\s*(?:bash|sh)/', $content)) {
+                    $bad[] = $f . ' → 可疑 curl-to-shell 指令';
+                }
+            }
+        }
+        if (empty($bad)) {
+            return $this->pass('A.8.18', '特權公用程式（cron）', self::SEV_MEDIUM,
+                '/etc/cron.d 無可寫或可疑條目。');
+        }
+        return $this->warn('A.8.18', '特權公用程式（cron）', self::SEV_MEDIUM,
+            'cron 設定存在風險：' . count($bad) . ' 項。',
+            implode("\n", array_slice($bad, 0, 10)),
+            '將 /etc/cron.d/* 權限設為 0644 或更嚴格，檢視 curl|bash 類指令。');
+    }
+
+    /** A.8.19 — apt 來源是否帶簽章。 */
+    private function checkUnsignedAptSources(): array
+    {
+        $sources = [];
+        if (is_file('/etc/apt/sources.list')) {
+            $sources[] = '/etc/apt/sources.list';
+        }
+        foreach (@glob('/etc/apt/sources.list.d/*.list') ?: [] as $f) {
+            $sources[] = $f;
+        }
+        foreach (@glob('/etc/apt/sources.list.d/*.sources') ?: [] as $f) {
+            $sources[] = $f;
+        }
+        if (empty($sources)) {
+            return $this->na('A.8.19', '軟體安裝', '不是 Debian/Ubuntu 家族或找不到 apt sources。');
+        }
+        $unsigned = [];
+        foreach ($sources as $f) {
+            $content = (string) @file_get_contents($f);
+            foreach (preg_split('/\r?\n/', $content) as $line) {
+                $trim = trim($line);
+                if ($trim === '' || str_starts_with($trim, '#')) {
+                    continue;
+                }
+                if (preg_match('/^\s*deb\s+\[([^\]]*)\]/', $trim, $m)) {
+                    if (stripos($m[1], 'signed-by') === false && stripos($m[1], 'trusted') !== false) {
+                        $unsigned[] = basename($f) . ': ' . $trim;
+                    }
+                } elseif (preg_match('/^\s*deb\s+http/', $trim)) {
+                    // Legacy "deb http..." without options: relies on keyring trust.gpg.d.
+                    // Acceptable if at least one signed-by keyring exists; otherwise flag.
+                    if (empty(@glob('/etc/apt/trusted.gpg.d/*.gpg'))) {
+                        $unsigned[] = basename($f) . ': ' . $trim;
+                    }
+                }
+            }
+        }
+        if (empty($unsigned)) {
+            return $this->pass('A.8.19', '軟體安裝', self::SEV_MEDIUM,
+                'apt 來源皆具備 GPG 簽章驗證。', '檢視 ' . count($sources) . ' 個 apt 設定檔。');
+        }
+        return $this->warn('A.8.19', '軟體安裝', self::SEV_MEDIUM,
+            '存在未簽章（或以 trusted=yes 取巧）的 apt 來源。',
+            implode("\n", array_slice($unsigned, 0, 5)) . (count($unsigned) > 5 ? "\n…（已截斷）" : ''),
+            '於 deb 行加上 [signed-by=/etc/apt/keyrings/xxx.gpg] 並移除 trusted=yes。');
+    }
+
+    /** A.5.16 — 沉睡帳號。 */
+    private function checkDormantAccounts(): array
+    {
+        if ($this->which('lastlog') === null) {
+            return $this->na('A.5.16-dormant', '身分管理（沉睡帳號）', 'lastlog 不存在。');
+        }
+        $out = $this->runCmd(['lastlog']);
+        if ($out === null) {
+            return $this->na('A.5.16-dormant', '身分管理（沉睡帳號）', '無法執行 lastlog。');
+        }
+        $dormant = [];
+        foreach (preg_split('/\r?\n/', $out) as $line) {
+            if (preg_match('/^(\S+)\s+.*\*\*Never logged in\*\*/', $line, $m)) {
+                $user = $m[1];
+                if (in_array($user, ['root', 'Username'], true)) {
+                    continue;
+                }
+                // Skip system accounts with shell = nologin/false.
+                $shell = $this->runCmd(['getent', 'passwd', $user]);
+                if ($shell !== null && preg_match('/:(\/usr\/sbin\/nologin|\/bin\/false)\s*$/', $shell)) {
+                    continue;
+                }
+                $dormant[] = $user;
+            }
+        }
+        if (empty($dormant)) {
+            return $this->pass('A.5.16-dormant', '身分管理（沉睡帳號）', self::SEV_LOW,
+                '所有可登入帳號皆至少登入過一次。');
+        }
+        return $this->warn('A.5.16-dormant', '身分管理（沉睡帳號）', self::SEV_LOW,
+            '存在從未登入過但可登入的帳號：' . implode(', ', $dormant),
+            '依 lastlog 輸出判斷。',
+            '確認需求後 passwd -l 鎖定或 userdel。');
+    }
+
+    /** A.8.9 — 核心傾印停用。 */
+    private function checkCoreDumpDisabled(): array
+    {
+        $limitsOk = false;
+        foreach (array_merge(['/etc/security/limits.conf'], @glob('/etc/security/limits.d/*') ?: []) as $f) {
+            if (!is_readable($f)) {
+                continue;
+            }
+            $c = (string) @file_get_contents($f);
+            if (preg_match('/^\s*\*\s+(?:hard|soft)\s+core\s+0/m', $c)) {
+                $limitsOk = true;
+                break;
+            }
+        }
+        $sysctl = $this->runCmd(['sysctl', '-n', 'fs.suid_dumpable']);
+        $suidOk = $sysctl !== null && trim($sysctl) === '0';
+        if ($limitsOk && $suidOk) {
+            return $this->pass('A.8.9-core', '核心傾印', self::SEV_LOW,
+                'core dump 已停用且 suid 程式禁止傾印。',
+                "limits.conf OK；fs.suid_dumpable=" . trim($sysctl ?? '?'));
+        }
+        $issues = [];
+        if (!$limitsOk) {
+            $issues[] = '/etc/security/limits.* 未設定 hard core 0';
+        }
+        if (!$suidOk) {
+            $issues[] = 'fs.suid_dumpable=' . trim($sysctl ?? 'unknown');
+        }
+        return $this->warn('A.8.9-core', '核心傾印', self::SEV_LOW,
+            '核心傾印未完全停用。', implode('；', $issues),
+            '於 /etc/security/limits.conf 加 "* hard core 0"，並設定 fs.suid_dumpable=0。');
+    }
+
+    /** A.8.24 — nginx/apache TLS 協定版本。 */
+    private function checkWebServerTlsProtocol(): array
+    {
+        $files = array_merge(
+            @glob('/etc/nginx/nginx.conf') ?: [],
+            @glob('/etc/nginx/conf.d/*.conf') ?: [],
+            @glob('/etc/nginx/sites-enabled/*') ?: [],
+            @glob('/etc/apache2/apache2.conf') ?: [],
+            @glob('/etc/apache2/sites-enabled/*') ?: [],
+            @glob('/etc/httpd/conf.d/*.conf') ?: [],
+        );
+        $files = array_values(array_filter($files, 'is_file'));
+        if (empty($files)) {
+            return $this->na('A.8.24-web', 'Web 服務 TLS', '未偵測到 nginx/apache 設定。');
+        }
+        $weakHits = [];
+        $sawTlsDirective = false;
+        foreach ($files as $f) {
+            $c = (string) @file_get_contents($f);
+            if ($c === '') {
+                continue;
+            }
+            if (preg_match_all('/ssl_protocols\s+([^;]+);/i', $c, $m1)) {
+                $sawTlsDirective = true;
+                foreach ($m1[1] as $proto) {
+                    foreach (['SSLv2', 'SSLv3', 'TLSv1 ', 'TLSv1.0', 'TLSv1.1'] as $weak) {
+                        if (stripos($proto, trim($weak)) !== false) {
+                            $weakHits[] = basename($f) . ": {$proto}";
+                        }
+                    }
+                }
+            }
+            if (preg_match_all('/SSLProtocol\s+([^\n]+)/i', $c, $m2)) {
+                $sawTlsDirective = true;
+                foreach ($m2[1] as $proto) {
+                    foreach (['SSLv2', 'SSLv3', 'TLSv1.0', 'TLSv1.1'] as $weak) {
+                        if (stripos($proto, $weak) !== false && strpos($proto, '-' . $weak) === false) {
+                            $weakHits[] = basename($f) . ": {$proto}";
+                        }
+                    }
+                }
+            }
+        }
+        if (!$sawTlsDirective) {
+            return $this->warn('A.8.24-web', 'Web 服務 TLS', self::SEV_MEDIUM,
+                'nginx/apache 未明確設定 ssl_protocols / SSLProtocol，會沿用發行版預設。',
+                '檢視 ' . count($files) . ' 個設定檔。',
+                '明確設定 ssl_protocols TLSv1.2 TLSv1.3;（nginx）或 SSLProtocol -all +TLSv1.2 +TLSv1.3（apache）。');
+        }
+        if (empty($weakHits)) {
+            return $this->pass('A.8.24-web', 'Web 服務 TLS', self::SEV_MEDIUM,
+                'Web 服務未啟用已知的弱 TLS 協定版本。');
+        }
+        return $this->warn('A.8.24-web', 'Web 服務 TLS', self::SEV_MEDIUM,
+            'Web 服務啟用了過時的 TLS 協定版本。',
+            implode("\n", array_slice($weakHits, 0, 5)),
+            '僅允許 TLSv1.2 與 TLSv1.3，停用其餘版本。');
     }
 
     /* ------------------------------------------------------------------ */
