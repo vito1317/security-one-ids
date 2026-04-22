@@ -251,12 +251,34 @@ class WafSyncService
                     return $this->register();
                 }
 
-                // NOTE: we deliberately do NOT re-register on 401 here.
-                // The Hub's register API currently returns a placeholder
-                // ("[existing token unchanged]") and omits agent.token, so a
-                // re-register cannot teach the agent the correct token.
-                // Operators must update AGENT_TOKEN in .env manually (or
-                // via `waf:token-set`) when the Hub rotates it.
+                // On 401, re-register to recover a fresh token. The Hub's
+                // /register endpoint rotates on every call and returns the
+                // plaintext in agent.token, which persistAgentToken() writes
+                // back to .env. Guarded by a 5-minute cooldown so transient
+                // 401s (hub restart, brief outage) don't burn through tokens.
+                if ($response->status() === 401 && empty($triedReregister)) {
+                    $triedReregister = true;
+                    $lastAt = (int) cache()->get('waf_last_reregister_at', 0);
+                    $cooldown = 300; // seconds
+                    if (time() - $lastAt < $cooldown) {
+                        Log::debug('Heartbeat 401 — skipping re-register (cooldown)', [
+                            'seconds_since_last' => time() - $lastAt,
+                            'cooldown' => $cooldown,
+                        ]);
+                    } else {
+                        cache()->put('waf_last_reregister_at', time(), now()->addDays(1));
+                        Log::warning('Heartbeat 401 — re-registering to rotate token');
+                        if ($this->register()) {
+                            $fresh = cache()->get('waf_agent_token');
+                            if (is_string($fresh) && $fresh !== '' && $fresh !== $this->agentToken) {
+                                $this->agentToken = $fresh;
+                                Log::info('Heartbeat: token rotated via re-register, retrying');
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 Log::warning('Heartbeat failed', [
                     'status' => $response->status(),
                     'body' => $response->body(),
