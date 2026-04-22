@@ -602,6 +602,16 @@ class SuricataEngine
             if (!str_contains($content, 'eve-log')) {
                 Log::info('Existing suricata.yaml missing eve-log, will use default');
             }
+            // Self-heal interface misconfig.
+            // Distribution packages ship suricata.yaml with `interface: eth0`,
+            // but many modern hosts expose the NIC under a different name
+            // (enp*, enP*, ens*, wlan*). When Suricata is told to capture on
+            // a non-existent device its worker threads die immediately
+            // ("af-packet: eth0: failed to find interface type: No such
+            // device") and the Hub UI reports the engine as stopped even
+            // though systemd says active. Rewrite the interface in-place to
+            // whatever the OS says is the real default.
+            $this->healInterfaceMisconfig();
             return;
         }
 
@@ -616,6 +626,96 @@ class SuricataEngine
         } catch (\Exception $e) {
             Log::warning('Failed to generate Suricata config: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Rewrite any `af-packet:` / `pcap:` interface lines that point at a
+     * non-existent NIC so that Suricata's workers can actually attach.
+     * Linux-only; no-op if the configured interface already exists or the
+     * OS doesn't expose a usable default.
+     */
+    private function healInterfaceMisconfig(): void
+    {
+        if ($this->isWindows() || PHP_OS === 'Darwin') {
+            return;
+        }
+
+        $content = @file_get_contents($this->configPath);
+        if ($content === false) {
+            return;
+        }
+
+        if (!preg_match_all('/^\s*(?:-\s*)?interface:\s*([A-Za-z0-9_\-]+)\s*$/m', $content, $m)) {
+            return;
+        }
+
+        $available = $this->listNetworkInterfaces();
+        $default = $this->detectDefaultInterface();
+
+        // If detection falls back to the literal 'eth0' but eth0 isn't on the
+        // box, we have no good replacement — bail rather than rewrite into
+        // another bad value.
+        if (!in_array($default, $available, true)) {
+            Log::warning('[Suricata] Cannot self-heal interface: no working default detected', [
+                'detected' => $default,
+                'available' => $available,
+            ]);
+            return;
+        }
+
+        $replacements = 0;
+        foreach (array_unique($m[1]) as $iface) {
+            // Skip keyword / PCI-addressed entries, and anything that already
+            // names an existing NIC.
+            if ($iface === 'default' || str_contains($iface, ':') || in_array($iface, $available, true)) {
+                continue;
+            }
+            $escaped = preg_quote($iface, '/');
+            $content = preg_replace(
+                "/^(\s*(?:-\s*)?interface:\s*){$escaped}(\s*)\$/m",
+                '${1}' . $default . '${2}',
+                $content,
+                -1,
+                $n
+            );
+            $replacements += (int) $n;
+        }
+
+        if ($replacements === 0) {
+            return;
+        }
+
+        // Keep a timestamped backup so an operator can diff what changed.
+        $backup = $this->configPath . '.bak.' . date('Ymd-His');
+        @copy($this->configPath, $backup);
+        if (@file_put_contents($this->configPath, $content) === false) {
+            Log::warning('[Suricata] Could not write healed config (permission?)', [
+                'path' => $this->configPath,
+            ]);
+            return;
+        }
+
+        Log::warning('[Suricata] Healed interface misconfig in ' . $this->configPath, [
+            'replacements' => $replacements,
+            'new_interface' => $default,
+            'backup' => $backup,
+        ]);
+    }
+
+    /**
+     * @return array<string> Names of network interfaces visible to the
+     *                       kernel (excluding `lo`).
+     */
+    private function listNetworkInterfaces(): array
+    {
+        $ifaces = [];
+        foreach (@scandir('/sys/class/net') ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..' || $entry === 'lo') {
+                continue;
+            }
+            $ifaces[] = $entry;
+        }
+        return $ifaces;
     }
 
     /**
