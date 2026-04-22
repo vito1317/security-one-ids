@@ -124,15 +124,22 @@ class WafSyncService
                 // token field, which the Hub sometimes populates with the
                 // literal placeholder "[existing token unchanged]" on
                 // re-registration — caching that poisons every subsequent
-                // authenticated call.
+                // authenticated call. If nothing usable came back, also
+                // evict any previously-poisoned cache entry so the real
+                // AGENT_TOKEN from .env is used on the next request.
                 $newToken = $data['agent']['token'] ?? $data['token'] ?? null;
                 if (is_string($newToken)
                     && $newToken !== $this->agentToken
                     && !str_starts_with($newToken, '[')
                     && preg_match('/^[A-Za-z0-9]{20,}$/', $newToken)) {
                     cache()->put('waf_agent_token', $newToken, now()->addDays(30));
+                } else {
+                    $cached = cache()->get('waf_agent_token');
+                    if (is_string($cached) && (str_starts_with($cached, '[') || strpos($cached, ' ') !== false)) {
+                        cache()->forget('waf_agent_token');
+                    }
                 }
-                
+
                 // Store the agent ID for alert syncing
                 if (!empty($data['agent_id'])) {
                     cache()->put('ids_agent_id', $data['agent_id'], now()->addDays(30));
@@ -410,8 +417,50 @@ class WafSyncService
             Log::warning('Enable login signal received from WAF Hub');
             $this->handleEnableLogin();
         }
+
+        // ISO 27001 compliance audit triggered from the Hub dashboard.
+        if (!empty($addons['compliance_audit_now'])) {
+            $this->handleComplianceAuditNow();
+        }
     }
-    
+
+    /**
+     * Run `compliance:audit` in the background so the heartbeat reply doesn't
+     * block on a multi-second audit. The audit itself will POST the report
+     * back to the Hub, which clears the pending flag.
+     */
+    private function handleComplianceAuditNow(): void
+    {
+        // Avoid a runaway loop if the Hub hasn't cleared the flag yet — only
+        // act once per 2 minutes.
+        $lockKey = 'compliance_audit_last_trigger';
+        $last = cache()->get($lockKey);
+        if ($last && (time() - (int) $last) < 120) {
+            Log::debug('compliance_audit_now signal ignored — triggered recently');
+            return;
+        }
+        cache()->put($lockKey, time(), 300);
+
+        Log::info('Hub requested compliance audit — dispatching compliance:audit');
+        try {
+            $phpBinary = (defined('PHP_BINARY') && PHP_BINARY) ? PHP_BINARY : 'php';
+            $artisan = base_path('artisan');
+            $cmd = sprintf(
+                '%s %s compliance:audit --format=json > %s 2>&1 &',
+                escapeshellarg($phpBinary),
+                escapeshellarg($artisan),
+                escapeshellarg(storage_path('logs/compliance-audit.log'))
+            );
+            if (function_exists('exec')) {
+                exec($cmd);
+            } else {
+                \Artisan::call('compliance:audit', ['--format' => 'json']);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Failed to dispatch compliance:audit: ' . $e->getMessage());
+        }
+    }
+
     /**
      * Handle ClamAV add-on installation
      */
@@ -2133,6 +2182,44 @@ class WafSyncService
             return $response->successful();
         } catch (\Exception $e) {
             Log::error('Failed to report alerts: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Send an ISO 27001 compliance report to the WAF Hub.
+     */
+    public function reportComplianceReport(array $payload): bool
+    {
+        if (empty($this->wafUrl) || empty($this->agentToken)) {
+            Log::warning('WAF_URL or AGENT_TOKEN not configured for compliance report');
+            return false;
+        }
+
+        try {
+            $response = $this->getHttpClient(30)
+                ->withHeaders(['Authorization' => "Bearer {$this->agentToken}"])
+                ->post("{$this->wafUrl}/api/ids/agents/compliance-report", [
+                    'token' => $this->agentToken,
+                    'report' => $payload,
+                ]);
+
+            if ($response->successful()) {
+                Log::info('Compliance report sent', [
+                    'score' => $payload['overall_score'] ?? null,
+                    'passed' => $payload['passed_checks'] ?? null,
+                    'failed' => $payload['failed_checks'] ?? null,
+                ]);
+                return true;
+            }
+
+            Log::warning('Compliance report rejected by Hub', [
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+            return false;
+        } catch (\Exception $e) {
+            Log::error('Failed to send compliance report: ' . $e->getMessage());
             return false;
         }
     }
