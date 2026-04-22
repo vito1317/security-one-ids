@@ -251,22 +251,12 @@ class WafSyncService
                     return $this->register();
                 }
 
-                // On 401 the configured AGENT_TOKEN has drifted from what
-                // the Hub expects. Re-register once using INSTALL_TOKEN to
-                // recover; register() persists the new token to .env.
-                if ($response->status() === 401 && empty($triedReregister)) {
-                    $triedReregister = true;
-                    Log::warning('Heartbeat 401 — token appears stale, re-registering via INSTALL_TOKEN');
-                    if ($this->register()) {
-                        $fresh = cache()->get('waf_agent_token');
-                        if (is_string($fresh) && $fresh !== '' && $fresh !== $this->agentToken) {
-                            $this->agentToken = $fresh;
-                            Log::info('Heartbeat: token refreshed after re-register, retrying');
-                            continue;
-                        }
-                    }
-                }
-
+                // NOTE: we deliberately do NOT re-register on 401 here.
+                // The Hub's register API currently returns a placeholder
+                // ("[existing token unchanged]") and omits agent.token, so a
+                // re-register cannot teach the agent the correct token.
+                // Operators must update AGENT_TOKEN in .env manually (or
+                // via `waf:token-set`) when the Hub rotates it.
                 Log::warning('Heartbeat failed', [
                     'status' => $response->status(),
                     'body' => $response->body(),
