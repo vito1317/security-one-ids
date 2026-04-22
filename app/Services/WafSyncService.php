@@ -119,9 +119,18 @@ class WafSyncService
                 $data = $response->json();
                 Log::info('Successfully registered with WAF', $data);
                 
-                // Store the WAF-assigned token for future use
-                if (!empty($data['token'])) {
-                    cache()->put('waf_agent_token', $data['token'], now()->addDays(30));
+                // Store the WAF-assigned token for future use. Prefer the
+                // nested agent.token (always a real token) over the top-level
+                // token field, which the Hub sometimes populates with the
+                // literal placeholder "[existing token unchanged]" on
+                // re-registration — caching that poisons every subsequent
+                // authenticated call.
+                $newToken = $data['agent']['token'] ?? $data['token'] ?? null;
+                if (is_string($newToken)
+                    && $newToken !== $this->agentToken
+                    && !str_starts_with($newToken, '[')
+                    && preg_match('/^[A-Za-z0-9]{20,}$/', $newToken)) {
+                    cache()->put('waf_agent_token', $newToken, now()->addDays(30));
                 }
                 
                 // Store the agent ID for alert syncing
