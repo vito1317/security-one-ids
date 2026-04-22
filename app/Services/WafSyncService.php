@@ -133,6 +133,8 @@ class WafSyncService
                     && !str_starts_with($newToken, '[')
                     && preg_match('/^[A-Za-z0-9]{20,}$/', $newToken)) {
                     cache()->put('waf_agent_token', $newToken, now()->addDays(30));
+                    $this->persistAgentToken($newToken);
+                    $this->agentToken = $newToken;
                 } else {
                     $cached = cache()->get('waf_agent_token');
                     if (is_string($cached) && (str_starts_with($cached, '[') || strpos($cached, ' ') !== false)) {
@@ -160,6 +162,49 @@ class WafSyncService
                 'trace' => $e->getTraceAsString(),
             ]);
             return false;
+        }
+    }
+
+    /**
+     * Atomically write the given token back to AGENT_TOKEN= in .env so that
+     * a cache eviction or service restart still leaves the daemon with a
+     * working credential. No-op if .env isn't writable (e.g. in Docker).
+     */
+    private function persistAgentToken(string $token): void
+    {
+        try {
+            $envFile = base_path('.env');
+            if (!is_file($envFile)) {
+                Log::debug('persistAgentToken: .env not found, skipping');
+                return;
+            }
+            $contents = @file_get_contents($envFile);
+            if ($contents === false) {
+                Log::warning('persistAgentToken: could not read .env');
+                return;
+            }
+            if (preg_match('/^AGENT_TOKEN=(.*)$/m', $contents, $m) && trim($m[1], "\"' \t\r\n") === $token) {
+                return;
+            }
+            if (preg_match('/^AGENT_TOKEN=.*$/m', $contents)) {
+                $updated = preg_replace('/^AGENT_TOKEN=.*$/m', 'AGENT_TOKEN=' . $token, $contents, 1);
+            } else {
+                $updated = rtrim($contents, "\n") . "\nAGENT_TOKEN=" . $token . "\n";
+            }
+            $tmp = $envFile . '.new';
+            if (@file_put_contents($tmp, $updated, LOCK_EX) === false) {
+                Log::warning('persistAgentToken: could not write .env.new (permissions?)');
+                return;
+            }
+            @chmod($tmp, 0600);
+            if (!@rename($tmp, $envFile)) {
+                @unlink($tmp);
+                Log::warning('persistAgentToken: rename to .env failed');
+                return;
+            }
+            Log::info('AGENT_TOKEN persisted to .env');
+        } catch (\Throwable $e) {
+            Log::warning('persistAgentToken exception: ' . $e->getMessage());
         }
     }
 
@@ -204,6 +249,22 @@ class WafSyncService
                 if ($response->status() === 404) {
                     Log::info('Agent not found, attempting registration...');
                     return $this->register();
+                }
+
+                // On 401 the configured AGENT_TOKEN has drifted from what
+                // the Hub expects. Re-register once using INSTALL_TOKEN to
+                // recover; register() persists the new token to .env.
+                if ($response->status() === 401 && empty($triedReregister)) {
+                    $triedReregister = true;
+                    Log::warning('Heartbeat 401 — token appears stale, re-registering via INSTALL_TOKEN');
+                    if ($this->register()) {
+                        $fresh = cache()->get('waf_agent_token');
+                        if (is_string($fresh) && $fresh !== '' && $fresh !== $this->agentToken) {
+                            $this->agentToken = $fresh;
+                            Log::info('Heartbeat: token refreshed after re-register, retrying');
+                            continue;
+                        }
+                    }
                 }
 
                 Log::warning('Heartbeat failed', [
