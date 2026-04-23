@@ -322,9 +322,11 @@ class CodeScanService
     {
         $allExt = [];
         foreach (self::DEFAULT_EXTENSIONS as $exts) {
-            $allExt = array_merge($allExt, $exts);
+            foreach ($exts as $e) {
+                $allExt[] = ltrim(strtolower((string) $e), '.');
+            }
         }
-        $allExt = array_unique($allExt);
+        $allExt = array_values(array_unique(array_filter($allExt)));
 
         foreach ([$root, ...array_slice($this->childDirs($root), 0, 20)] as $dir) {
             $entries = @scandir($dir) ?: [];
@@ -383,7 +385,13 @@ class CodeScanService
                 continue;
             }
             foreach ($exts as $e) {
-                $allowedExt[strtolower($e)] = true;
+                // Normalise: the Hub has historically sent either ".php" or
+                // "php". Finder::getExtension() returns the dotless form, so
+                // strip any leading dot here to keep the lookup consistent.
+                $key = ltrim(strtolower((string) $e), '.');
+                if ($key !== '') {
+                    $allowedExt[$key] = true;
+                }
             }
         }
 
