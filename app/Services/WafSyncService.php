@@ -2710,16 +2710,19 @@ class WafSyncService
      */
     private function getSuricataInfo(): array
     {
+        $enforcementMode = PHP_OS === 'Darwin' ? 'reactive' : 'inline';
         try {
             $suricata = app(\App\Services\Detection\SuricataEngine::class);
-            return $suricata->getStatus();
+            $status = $suricata->getStatus();
+            $status['enforcement_mode'] = $enforcementMode;
+            return $status;
         } catch (\Exception $e) {
             return [
                 'installed' => false,
                 'version' => null,
                 'running' => false,
-            'enforcement_mode' => PHP_OS === 'Darwin' ? 'reactive' : 'inline',
-        ];
+                'enforcement_mode' => $enforcementMode,
+            ];
         }
     }
 
