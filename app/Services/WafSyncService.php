@@ -639,6 +639,26 @@ class WafSyncService
                     Log::error('[Suricata] Failed to start', $result);
                     $this->reportAgentEvent('error', 'Suricata 自動啟動失敗: ' . ($result['error'] ?? 'unknown'));
                 }
+                return;
+            }
+
+            // Already running — verify the live process matches the desired
+            // mode. Without this, flipping `suricata_mode` in the Hub from
+            // `ids` to `ips` is a no-op: the old IDS daemon keeps running
+            // with `--af-packet` and can only alert, never drop.
+            $runningMode = $suricata->getRunningMode();
+            if ($runningMode !== null && $runningMode !== $mode) {
+                Log::info("[Suricata] Mode mismatch (running={$runningMode}, desired={$mode}), restarting...");
+                $suricata->stop();
+                sleep(1); // grace period for pidfile cleanup + NFQUEUE teardown
+                $result = $suricata->start($mode);
+                if (!empty($result['success'])) {
+                    Log::info("[Suricata] Restarted in {$mode} mode");
+                    $this->reportAgentEvent('suricata_started', "Suricata 已切換為 {$mode} 模式");
+                } else {
+                    Log::error('[Suricata] Mode-switch restart failed', $result);
+                    $this->reportAgentEvent('error', 'Suricata 模式切換失敗: ' . ($result['error'] ?? 'unknown'));
+                }
             }
         } catch (\Exception $e) {
             Log::error('[Suricata] ensureSuricataRunning failed: ' . $e->getMessage());

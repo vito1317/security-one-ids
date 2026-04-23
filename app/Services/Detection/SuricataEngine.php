@@ -146,6 +146,77 @@ class SuricataEngine
     }
 
     /**
+     * Detect what mode the currently-running Suricata process was started in,
+     * by inspecting its command-line. Returns 'ips' if `-q`/NFQUEUE was used,
+     * 'ids' if `--af-packet`/`--pcap`/`-i` only, or null if not running /
+     * mode can't be determined (e.g. Windows WMIC unavailable).
+     *
+     * Used by the WAF sync layer to decide whether a running Suricata needs
+     * to be restarted because the desired mode has changed.
+     */
+    public function getRunningMode(): ?string
+    {
+        if (!$this->isRunning()) {
+            return null;
+        }
+
+        // Linux: /proc/<pid>/cmdline is the most reliable source.
+        if (!$this->isWindows() && PHP_OS !== 'Darwin') {
+            foreach ($this->candidatePidFiles() as $pidFile) {
+                if (!file_exists($pidFile)) {
+                    continue;
+                }
+                $pid = (int) trim((string) @file_get_contents($pidFile));
+                if ($pid <= 0) {
+                    continue;
+                }
+                $cmdlineRaw = @file_get_contents("/proc/{$pid}/cmdline");
+                if ($cmdlineRaw === false || $cmdlineRaw === '') {
+                    continue;
+                }
+                // cmdline is NUL-separated argv.
+                $args = explode("\0", $cmdlineRaw);
+                foreach ($args as $arg) {
+                    if ($arg === '-q' || str_starts_with($arg, '--nfqueue') || preg_match('/^-q\d+$/', $arg)) {
+                        return 'ips';
+                    }
+                }
+                // No -q seen but process is alive → IDS (af-packet / pcap).
+                return 'ids';
+            }
+            // Pidfile not readable but process is alive — fall back to pgrep.
+            $result = Process::run("pgrep -af '[Ss]uricata' 2>/dev/null");
+            if ($result->successful()) {
+                $out = $result->output();
+                if (preg_match('/\s-q(\s|\d|$)/', $out)) {
+                    return 'ips';
+                }
+                if (str_contains($out, '--af-packet') || str_contains($out, '-i ')) {
+                    return 'ids';
+                }
+            }
+        }
+
+        // Windows: best-effort via WMIC. Absent = unknown.
+        if ($this->isWindows()) {
+            try {
+                $result = Process::timeout(5)->run('wmic process where "name=\'suricata.exe\'" get CommandLine /value 2>nul');
+                $out = $result->output();
+                if (str_contains($out, '--windivert-forward')) {
+                    return 'ips';
+                }
+                if (str_contains($out, '--windivert')) {
+                    return 'ids';
+                }
+            } catch (\Exception $e) {
+                // ignore
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @return array<string> Pidfile paths to probe, most specific first.
      */
     private function candidatePidFiles(): array
@@ -174,6 +245,16 @@ class SuricataEngine
         }
 
         if ($this->isRunning()) {
+            // Suricata may have been started by systemd or by the watchdog
+            // before we got here. In that case we skip the process-launch
+            // path but still need to sync iptables state — the NFQUEUE rule
+            // the inline-IPS mode depends on is installed here, not by
+            // systemd. Only apply if the running process's mode matches
+            // what was requested; a mismatch is the caller's problem to
+            // resolve (via B1's stop+start path).
+            if ($this->getRunningMode() === $mode) {
+                $this->applyInlineNetfilter($mode);
+            }
             return ['success' => true, 'message' => 'Suricata is already running'];
         }
 
@@ -249,6 +330,7 @@ class SuricataEngine
                 $daemonPid = trim(file_get_contents($this->pidFile));
                 if (is_numeric($daemonPid) && $this->isProcessRunning((int) $daemonPid)) {
                     $this->fixLogPermissions();
+                    $this->applyInlineNetfilter($mode);
                     Log::info('Suricata daemon started successfully', [
                         'platform' => PHP_OS_FAMILY,
                         'daemon_pid' => $daemonPid,
@@ -261,6 +343,7 @@ class SuricataEngine
             // Fallback: check process list
             if ($this->isRunning()) {
                 $this->fixLogPermissions();
+                $this->applyInlineNetfilter($mode);
                 Log::info('Suricata started successfully', ['platform' => PHP_OS_FAMILY]);
                 @unlink($stderrFile ?? '');
                 return ['success' => true, 'message' => "Suricata started in {$mode} mode"];
@@ -302,27 +385,71 @@ class SuricataEngine
     public function stop(): array
     {
         if (!$this->isRunning()) {
+            // Still clear any NFQUEUE rules we may have left behind from a
+            // prior IPS run — otherwise packets go to a queue with nobody
+            // listening. --queue-bypass in the rule means the kernel then
+            // accepts them, but removing the rule outright is cleaner.
+            $this->removeInlineNetfilter();
             return ['success' => true, 'message' => 'Suricata is not running'];
         }
 
+        // Remove NFQUEUE rules BEFORE killing Suricata. If we kill first and
+        // the rule is still present without --queue-bypass, packets would be
+        // dropped in the window between kill and rule removal.
+        $this->removeInlineNetfilter();
+
         try {
-            if (file_exists($this->pidFile)) {
-                $pid = trim(file_get_contents($this->pidFile));
-                if ($this->isWindows()) {
+            if ($this->isWindows()) {
+                if (file_exists($this->pidFile)) {
+                    $pid = trim(file_get_contents($this->pidFile));
                     Process::run("taskkill /PID {$pid} /F 2>nul");
+                    @unlink($this->pidFile);
                 } else {
-                    Process::run("kill {$pid} 2>/dev/null");
-                    sleep(1);
-                    if ($this->isProcessRunning((int) $pid)) {
-                        Process::run("kill -9 {$pid} 2>/dev/null");
-                    }
-                }
-                @unlink($this->pidFile);
-            } else {
-                if ($this->isWindows()) {
                     Process::run("taskkill /IM suricata.exe /F 2>nul");
-                } else {
-                    Process::run("pkill -x suricata 2>/dev/null");
+                }
+                Log::info('Suricata stopped');
+                return ['success' => true, 'message' => 'Suricata stopped'];
+            }
+
+            // Linux/macOS: a Suricata process can have been launched by any
+            // of: this engine, systemd (distro package), or a previous run
+            // that used a different pidfile path. We must handle all three
+            // or stop() will silently no-op and the mode-switch restart
+            // loop will see `isRunning()==true` and bail out.
+            //
+            // 1. systemctl stop (covers distro-package systemd unit)
+            // 2. kill every PID in every candidate pidfile
+            // 3. pkill -f suricata as a last resort (Ubuntu's Suricata main
+            //    thread reports its comm as "Suricata-Main", so `pkill -x
+            //    suricata` misses it — `-f` matches the full cmdline.)
+            if (!$this->isWindows() && PHP_OS !== 'Darwin') {
+                Process::run('systemctl stop suricata 2>/dev/null');
+            }
+
+            foreach ($this->candidatePidFiles() as $pidFile) {
+                if (!file_exists($pidFile)) {
+                    continue;
+                }
+                $pid = (int) trim((string) @file_get_contents($pidFile));
+                if ($pid <= 0) {
+                    continue;
+                }
+                Process::run("kill {$pid} 2>/dev/null");
+                for ($i = 0; $i < 5 && $this->isProcessRunning($pid); $i++) {
+                    usleep(200000);
+                }
+                if ($this->isProcessRunning($pid)) {
+                    Process::run("kill -9 {$pid} 2>/dev/null");
+                }
+                @unlink($pidFile);
+            }
+
+            // Catch-all for processes whose pidfile we couldn't find.
+            if ($this->isRunning()) {
+                Process::run("pkill -f '^/usr/[s]?bin/suricata' 2>/dev/null");
+                sleep(1);
+                if ($this->isRunning()) {
+                    Process::run("pkill -9 -f '^/usr/[s]?bin/suricata' 2>/dev/null");
                 }
             }
 
@@ -609,13 +736,16 @@ class SuricataEngine
             }
         } else {
             // Linux/macOS
-            $cmd .= " -i {$interface}";
-
             if ($mode === 'ips' && PHP_OS !== 'Darwin') {
-                // IPS inline on Linux via nfqueue
-                $cmd .= " --af-packet -q 0";
+                // IPS inline on Linux via NFQUEUE only. `-q` and `--af-packet`
+                // are mutually exclusive run modes; combining them makes
+                // Suricata exit with "more than one run mode has been
+                // specified". No `-i` — NFQUEUE packets come from the kernel
+                // queue, not a NIC.
+                $cmd .= " -q 0";
             } else {
-                // IDS passive via af-packet (Linux) or pcap (macOS)
+                // IDS passive: af-packet on Linux, pcap on macOS.
+                $cmd .= " -i {$interface}";
                 if (PHP_OS !== 'Darwin') {
                     $cmd .= " --af-packet";
                 }
@@ -1406,6 +1536,138 @@ POWERSHELL;
         } catch (\Exception $e) {
             Log::error('[Suricata] fixCygwinDll failed: ' . $e->getMessage());
             return false;
+        }
+    }
+
+    // ─── NFQUEUE netfilter management (Linux IPS inline) ──────────────
+    //
+    // Suricata inline blocking on Linux requires packets to be delivered to
+    // its NFQUEUE socket. That only happens if iptables has a rule like
+    //   -j NFQUEUE --queue-num 0
+    // without such a rule, packets flow straight through the kernel and
+    // Suricata sees nothing — it can only log alerts from passive reads.
+    //
+    // We add --queue-bypass so that if Suricata dies or is stopped, the
+    // kernel treats the queue as absent and ACCEPTs packets instead of
+    // dropping them. This pairs with `fail-open: yes` in suricata.yaml
+    // which covers the case where Suricata is alive but overloaded.
+    //
+    // Rules are tagged with a comment so future starts/stops can identify
+    // and clean up only the rules this engine owns, leaving any admin-added
+    // NFQUEUE rules alone.
+
+    private const NFQ_COMMENT = 'security-one-ids IPS';
+    private const BYPASS_COMMENT = 'security-one-ids bypass';
+
+    private function applyInlineNetfilter(string $mode): void
+    {
+        if ($mode !== 'ips' || $this->isWindows() || PHP_OS === 'Darwin') {
+            return;
+        }
+
+        // Install universally-safe bypass rules BEFORE the NFQUEUE rule so
+        // admin sessions, already-established connections, and container
+        // traffic don't get inspected/dropped. Site-specific whitelists
+        // (e.g. trusted source IPs) are left to the admin.
+        $this->installBypassRules();
+
+        foreach (['INPUT', 'FORWARD'] as $chain) {
+            // Idempotent: only add if no matching rule already present.
+            $check = Process::run(
+                "iptables -C {$chain} -j NFQUEUE --queue-num 0 --queue-bypass "
+                . "-m comment --comment " . escapeshellarg(self::NFQ_COMMENT) . " 2>/dev/null"
+            );
+            if ($check->successful()) {
+                continue;
+            }
+            // Append (-A) not insert, so any admin-added ACCEPT whitelist
+            // rules (loopback, ESTABLISHED,RELATED, trusted sources) that
+            // sit above us take precedence. Without this, the first thing
+            // a new IPS run does is intercept already-established admin
+            // sessions and potentially drop them via rules that match.
+            $add = Process::run(
+                "iptables -A {$chain} -j NFQUEUE --queue-num 0 --queue-bypass "
+                . "-m comment --comment " . escapeshellarg(self::NFQ_COMMENT) . " 2>&1"
+            );
+            if ($add->successful()) {
+                Log::info("[Suricata] Added NFQUEUE rule to iptables {$chain}");
+            } else {
+                Log::warning("[Suricata] Failed to add NFQUEUE rule to {$chain}: " . trim($add->output() . $add->errorOutput()));
+            }
+        }
+    }
+
+    private function removeInlineNetfilter(): void
+    {
+        if ($this->isWindows() || PHP_OS === 'Darwin') {
+            return;
+        }
+
+        foreach (['INPUT', 'FORWARD'] as $chain) {
+            // A single start/stop cycle should not leave duplicates, but an
+            // admin restart loop could. Loop -D until no more matches.
+            for ($i = 0; $i < 5; $i++) {
+                $del = Process::run(
+                    "iptables -D {$chain} -j NFQUEUE --queue-num 0 --queue-bypass "
+                    . "-m comment --comment " . escapeshellarg(self::NFQ_COMMENT) . " 2>/dev/null"
+                );
+                if (!$del->successful()) {
+                    break;
+                }
+                Log::info("[Suricata] Removed NFQUEUE rule from iptables {$chain}");
+            }
+        }
+
+        // Bypass rules are left in place on stop. Leaving loopback /
+        // ESTABLISHED / docker ACCEPTs installed is harmless when no
+        // NFQUEUE rule exists, and ensures the admin SSH session doesn't
+        // flap if Suricata is restarted.
+    }
+
+    private function installBypassRules(): void
+    {
+        $rules = [
+            // Loopback — never inspect localhost (breaks language_server,
+            // docker-proxy, unix-socket-over-TCP IPC).
+            '-i lo',
+            // Reply packets for any already-established outbound connection
+            // (Hub heartbeat, Claude API calls, apt update, etc.) plus
+            // ongoing inbound sessions (current SSH). Without this, the
+            // moment IPS flips, every reply packet for already-open
+            // connections gets inspected and potentially dropped.
+            '-m conntrack --ctstate ESTABLISHED,RELATED',
+        ];
+
+        // Docker bridge interfaces — container-to-host traffic is trusted
+        // by definition (our own services calling us). External traffic
+        // to containers via port-publish goes through FORWARD+DOCKER-*
+        // chains which terminally ACCEPT before reaching our NFQUEUE rule.
+        if (is_dir('/sys/class/net/docker0')) {
+            $rules[] = '-i docker0';
+        }
+        // `br+` is an iptables wildcard matching any interface starting
+        // with `br`, which is Docker's naming convention for user-defined
+        // bridges (`br-xxxxxxxxxxxx`).
+        $brGlob = glob('/sys/class/net/br-*');
+        if (!empty($brGlob)) {
+            $rules[] = '-i br+';
+        }
+
+        foreach ($rules as $match) {
+            $commentArg = "-m comment --comment " . escapeshellarg(self::BYPASS_COMMENT);
+            $check = Process::run("iptables -C INPUT {$match} -j ACCEPT {$commentArg} 2>/dev/null");
+            if ($check->successful()) {
+                continue;
+            }
+            // -I 1 so bypass rules always sit above our NFQUEUE rule at
+            // the bottom. Order among bypass rules doesn't matter — they
+            // all terminally ACCEPT.
+            $add = Process::run("iptables -I INPUT 1 {$match} -j ACCEPT {$commentArg} 2>&1");
+            if ($add->successful()) {
+                Log::info("[Suricata] Installed iptables bypass: INPUT {$match}");
+            } else {
+                Log::warning("[Suricata] Failed to install bypass rule '{$match}': " . trim($add->output() . $add->errorOutput()));
+            }
         }
     }
 }
