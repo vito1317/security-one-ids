@@ -279,6 +279,19 @@ scan_loop() {
 }
 
 # ============================================================
+# Thread 4 (macOS only): PF enforcement
+# Tail Suricata drop events into pf ids_block table every 15s.
+# ============================================================
+pf_enforce_loop() {
+    [[ "$OSTYPE" != "darwin"* ]] && { log_message "INFO" "[Thread:PfEnforce] non-macOS, skipping"; return 0; }
+    log_message "INFO" "[Thread:PfEnforce] Started (interval: 15s)"
+    while true; do
+        run_artisan "ids:pf-enforce" 30
+        sleep 15
+    done
+}
+
+# ============================================================
 # Launch all 3 threads as background processes
 # ============================================================
 log_message "INFO" "Launching 3 independent threads..."
@@ -295,13 +308,17 @@ scan_loop &
 CHILD_PIDS+=($!)
 log_message "INFO" "  → Scan thread: PID $!"
 
+pf_enforce_loop &
+CHILD_PIDS+=($!)
+log_message "INFO" "  → PfEnforce thread: PID $!"
+
 log_message "INFO" "All threads launched. Monitoring..."
 
 # Main watchdog: monitor child processes, restart if they die
 while true; do
     for i in "${!CHILD_PIDS[@]}"; do
         pid=${CHILD_PIDS[$i]}
-        labels=("Heartbeat" "Sync" "Scan")
+        labels=("Heartbeat" "Sync" "Scan" "PfEnforce")
         label=${labels[$i]:-"Unknown"}
         
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -311,6 +328,7 @@ while true; do
                 0) heartbeat_loop & ;;
                 1) sync_loop & ;;
                 2) scan_loop & ;;
+                3) pf_enforce_loop & ;;
             esac
             CHILD_PIDS[$i]=$!
             log_message "INFO" "[Thread:$label] Restarted as PID ${CHILD_PIDS[$i]}"

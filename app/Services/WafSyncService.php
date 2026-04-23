@@ -2718,7 +2718,8 @@ class WafSyncService
                 'installed' => false,
                 'version' => null,
                 'running' => false,
-            ];
+            'enforcement_mode' => PHP_OS === 'Darwin' ? 'reactive' : 'inline',
+        ];
         }
     }
 
