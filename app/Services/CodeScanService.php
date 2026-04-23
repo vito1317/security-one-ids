@@ -173,17 +173,48 @@ class CodeScanService
             'file_count' => count($files),
         ]);
 
-        $findings = match ($tool) {
-            'ai' => $this->runAiScan($files, $cfg),
-            'hybrid' => $this->mergeFindings(
-                $this->runSemgrep($paths) ?? $this->runBuiltin($files, $extensions),
-                $this->runAiScan($files, $cfg),
-            ),
-            'builtin' => $this->runBuiltin($files, $extensions),
+        // Stage 1 — raw findings from each requested engine.
+        $ruleFindings = match ($tool) {
+            'ai', 'builtin' => $tool === 'builtin'
+                ? $this->runBuiltin($files, $extensions)
+                : [],
+            'hybrid' => $this->runSemgrep($paths) ?? $this->runBuiltin($files, $extensions),
             default => $this->runSemgrep($paths) ?? $this->runBuiltin($files, $extensions),
         };
+        $aiFindings = in_array($tool, ['ai', 'hybrid'], true)
+            ? $this->runAiScan($files, $cfg)
+            : [];
 
-        $summary = $this->summarize($findings);
+        // Skip AI stages if the LLM endpoint isn't reachable. Without this
+        // probe, every triage / verify request would waste its full 90s
+        // timeout on a dead endpoint.
+        $aiReachable = $this->isAiReachable($cfg);
+
+        // Stage 2 — AI triage over the rule-based hits (true-pos / false-pos).
+        // Cuts the noise from built-in regex patterns (e.g. legitimate
+        // proc_open / shell_exec calls in trusted cron code).
+        if ($aiReachable && ! empty($ruleFindings)) {
+            $ruleFindings = $this->triageFindings($ruleFindings, $cfg);
+        }
+
+        // Stage 3 — self-verification over the AI's own findings, which
+        // catches line-number hallucinations and invented CWE ids.
+        if ($aiReachable && ! empty($aiFindings)) {
+            $aiFindings = $this->verifyAiFindings($aiFindings, $cfg);
+        }
+
+        $findings = $this->mergeFindings($ruleFindings, $aiFindings);
+
+        // Optional suppression: when the triage flagged something as a likely
+        // false-positive with high confidence, drop it from the visible
+        // summary but keep the entry so operators can review.
+        $visible = array_values(array_filter(
+            $findings,
+            fn ($f) => ($f['triage_verdict'] ?? null) !== 'likely_false_positive'
+                || (float) ($f['triage_confidence'] ?? 0) < 0.8
+        ));
+
+        $summary = $this->summarize($visible);
         $duration = round(microtime(true) - $start, 2);
 
         return [
@@ -194,6 +225,11 @@ class CodeScanService
             'duration_seconds' => $duration,
             'summary' => $summary,
             'findings' => $findings,
+            'stats' => [
+                'rule_raw' => count($ruleFindings),
+                'ai_raw' => count($aiFindings),
+                'suppressed_fps' => count($findings) - count($visible),
+            ],
         ];
     }
 
@@ -571,11 +607,9 @@ class CodeScanService
      */
     private function runAiScan(array $files, array $cfg): array
     {
-        $provider = $cfg['ai_provider'] ?? 'ollama';
-        $url = $cfg[$provider]['url'] ?? ($cfg['ollama']['url'] ?? null);
-        $model = $cfg[$provider]['model'] ?? ($cfg['ollama']['model'] ?? null);
-        if (empty($url) || empty($model)) {
-            Log::info('Code scan: AI provider not configured, skipping AI sub-scan');
+        [$url, $model, $provider] = $this->resolveAiEndpoint($cfg);
+        if ($url === null) {
+            Log::info('Code scan: AI provider URL not configured, skipping AI sub-scan');
 
             return [];
         }
@@ -595,17 +629,10 @@ class CodeScanService
             $prompt = $this->buildAiPrompt($file, $body);
 
             try {
-                $resp = Http::timeout(60)->post(rtrim($url, '/') . '/api/generate', [
-                    'model' => $model,
-                    'prompt' => $prompt,
-                    'stream' => false,
-                    'format' => 'json',
-                ]);
-                if (! $resp->successful()) {
+                $raw = $this->callLlmJson($url, $model, $prompt, 60);
+                if ($raw === null) {
                     continue;
                 }
-
-                $raw = (string) $resp->json('response', '');
                 $parsed = $this->parseAiJson($raw);
                 foreach ($parsed as $f) {
                     $findings[] = [
@@ -750,16 +777,452 @@ class CodeScanService
     private function buildAiPrompt(string $file, string $body): string
     {
         $lang = pathinfo($file, PATHINFO_EXTENSION);
+        $kb = CodeScanKnowledgeBase::forFile($file, $body);
 
-        return implode("\n", [
-            'You are a senior application-security engineer. Review the source code below and identify real security vulnerabilities (OWASP Top 10 / CWE Top 25).',
-            'Respond ONLY with JSON matching this schema:',
-            '{"findings":[{"rule":"<short-id>","severity":"critical|high|medium|low|info","line":<int>,"message":"<one-sentence finding>","snippet":"<offending snippet>","recommendation":"<fix>","explanation":"<why this is a vuln>","cwe":"CWE-<id>","owasp":"A<xx>:2021"}]}',
-            'If the file is clearly safe, return {"findings":[]}. Do not invent issues; cite a concrete line.',
+        $lines = [
+            'You are a senior application-security engineer. Review the source code below and identify REAL security vulnerabilities (OWASP Top 10 / CWE Top 25).',
+            '',
+            'Use the framework context below as ground truth — do NOT flag items listed as "safe idioms" and DO treat listed "tainted sources" as reaching any "dangerous sinks" they flow into.',
+            '',
+            $kb,
+            '',
+            'Respond with ONLY valid JSON matching this schema:',
+            '{"findings":[{"rule":"<short-id>","severity":"critical|high|medium|low|info","line":<int>,"message":"<one-sentence finding>","snippet":"<offending snippet>","recommendation":"<fix>","explanation":"<why this is a vuln in THIS code>","cwe":"CWE-<id>","owasp":"A<xx>:2021"}]}',
+            'Rules:',
+            '- Every finding MUST cite a specific line that exists in the file.',
+            '- If the file is clearly safe, return {"findings":[]}.',
+            '- Do NOT invent CWE ids; use those from the glossary.',
+            '- Do NOT restate safe idioms as vulnerabilities.',
+            '',
             '--- file: ' . $file . ' ---',
             '--- language: ' . $lang . ' ---',
-            $body,
+            $this->annotateLines($body),
+        ];
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Prefix each source line with its line number so the model can cite
+     * exact locations and so self-verification can cross-check easily.
+     */
+    private function annotateLines(string $body): string
+    {
+        $lines = explode("\n", $body);
+        $out = [];
+        foreach ($lines as $i => $line) {
+            $out[] = sprintf('%4d| %s', $i + 1, $line);
+        }
+
+        return implode("\n", $out);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* AI Stage 2 — triage rule-based findings                             */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Group rule-based findings by file and ask the model to classify each
+     * as true-positive / false-positive / uncertain in the context of the
+     * actual surrounding code.
+     *
+     * @param  array<int, array<string, mixed>>  $findings
+     * @param  array<string, mixed>  $cfg
+     * @return array<int, array<string, mixed>>
+     */
+    private function triageFindings(array $findings, array $cfg): array
+    {
+        [$url, $model, $provider] = $this->resolveAiEndpoint($cfg);
+        if ($url === null) {
+            Log::info('Triage skipped — AI provider URL not configured');
+
+            return $findings;
+        }
+
+        // Group by file so we send one request per file with all its findings.
+        $byFile = [];
+        foreach ($findings as $i => $f) {
+            $byFile[$f['file'] ?? ''][] = ['idx' => $i, 'f' => $f];
+        }
+
+        // Cap total triage calls to protect against runaway cost.
+        $maxFiles = (int) ($cfg['addons']['code_scan_triage_max_files'] ?? 50);
+        $filesProcessed = 0;
+
+        foreach ($byFile as $file => $group) {
+            if (! is_string($file) || $file === '' || ! is_file($file)) {
+                continue;
+            }
+            if ($filesProcessed++ >= $maxFiles) {
+                break;
+            }
+
+            $body = @file_get_contents($file);
+            if ($body === false || strlen($body) > 48 * 1024) {
+                continue;
+            }
+
+            $verdicts = $this->requestTriage($url, $model, $file, $body, $group);
+            if (empty($verdicts)) {
+                continue;
+            }
+
+            foreach ($verdicts as $v) {
+                $idx = (int) ($v['idx'] ?? -1);
+                if (! isset($findings[$idx])) {
+                    continue;
+                }
+                $verdict = $this->normaliseVerdict((string) ($v['verdict'] ?? 'uncertain'));
+                $conf = (float) ($v['confidence'] ?? 0.5);
+                $note = (string) ($v['reason'] ?? '');
+
+                $findings[$idx]['triage_verdict'] = $verdict;
+                $findings[$idx]['triage_confidence'] = max(0.0, min(1.0, $conf));
+                $findings[$idx]['triage_note'] = $note;
+
+                // Likely FPs lose severity so they don't inflate the score.
+                if ($verdict === 'likely_false_positive' && $conf >= 0.7) {
+                    $findings[$idx]['severity'] = 'info';
+                }
+            }
+        }
+
+        return $findings;
+    }
+
+    /**
+     * @param  array<int, array{idx:int, f:array<string, mixed>}>  $group
+     * @return array<int, array<string, mixed>>
+     */
+    private function requestTriage(string $url, string $model, string $file, string $body, array $group): array
+    {
+        $kb = CodeScanKnowledgeBase::forFile($file, $body);
+        $annotated = $this->annotateLines($body);
+
+        $findingsJson = [];
+        foreach ($group as $g) {
+            $f = $g['f'];
+            $findingsJson[] = [
+                'idx' => $g['idx'],
+                'rule' => $f['rule'] ?? '',
+                'severity' => $f['severity'] ?? 'info',
+                'line' => (int) ($f['line'] ?? 0),
+                'message' => $f['message'] ?? '',
+                'source' => $f['source'] ?? 'rule',
+            ];
+        }
+
+        $prompt = implode("\n", [
+            'You are triaging static-analysis findings. For each finding below, decide whether it is a TRUE POSITIVE (a real exploitable vulnerability in this specific code), LIKELY FALSE POSITIVE (the pattern matched but it is safe in context), or UNCERTAIN.',
+            '',
+            'Use the framework context to recognise safe idioms:',
+            '',
+            $kb,
+            '',
+            'Respond with ONLY valid JSON matching: {"verdicts":[{"idx":<int>,"verdict":"true_positive|likely_false_positive|uncertain","confidence":<0..1>,"reason":"<one sentence>"}]}',
+            '',
+            '--- findings ---',
+            json_encode($findingsJson, JSON_UNESCAPED_UNICODE),
+            '',
+            '--- file: ' . $file . ' ---',
+            $annotated,
         ]);
+
+        $raw = $this->callLlmJson($url, $model, $prompt, 90);
+        if ($raw === null) {
+            return [];
+        }
+        $decoded = $this->parseAiObject($raw);
+
+        return is_array($decoded['verdicts'] ?? null) ? $decoded['verdicts'] : [];
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* AI Stage 3 — self-verify AI findings                                */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Send each AI finding back (with surrounding source) and ask the model
+     * to confirm it cites real code at the stated line. Hallucinated
+     * findings get dropped outright.
+     *
+     * @param  array<int, array<string, mixed>>  $findings
+     * @param  array<string, mixed>  $cfg
+     * @return array<int, array<string, mixed>>
+     */
+    private function verifyAiFindings(array $findings, array $cfg): array
+    {
+        [$url, $model, $provider] = $this->resolveAiEndpoint($cfg);
+        if ($url === null) {
+            return $findings;
+        }
+
+        $byFile = [];
+        foreach ($findings as $i => $f) {
+            $byFile[$f['file'] ?? ''][] = ['idx' => $i, 'f' => $f];
+        }
+
+        $maxFiles = (int) ($cfg['addons']['code_scan_verify_max_files'] ?? 50);
+        $filesProcessed = 0;
+        $keep = [];
+
+        foreach ($byFile as $file => $group) {
+            if ($filesProcessed++ >= $maxFiles || ! is_string($file) || ! is_file($file)) {
+                // Conservatively keep unverified findings but mark them.
+                foreach ($group as $g) {
+                    $f = $g['f'];
+                    $f['triage_verdict'] = $f['triage_verdict'] ?? 'unverified';
+                    $keep[] = $f;
+                }
+                continue;
+            }
+
+            $body = @file_get_contents($file);
+            if ($body === false || strlen($body) > 48 * 1024) {
+                foreach ($group as $g) {
+                    $keep[] = $g['f'];
+                }
+                continue;
+            }
+
+            $verdicts = $this->requestVerify($url, $model, $file, $body, $group);
+            $verdictByIdx = [];
+            foreach ($verdicts as $v) {
+                $verdictByIdx[(int) ($v['idx'] ?? -1)] = $v;
+            }
+
+            foreach ($group as $g) {
+                $f = $g['f'];
+                $v = $verdictByIdx[$g['idx']] ?? null;
+                if ($v === null) {
+                    $f['triage_verdict'] = 'unverified';
+                    $keep[] = $f;
+                    continue;
+                }
+
+                $verdict = $this->normaliseVerdict((string) ($v['verdict'] ?? 'uncertain'));
+                $conf = (float) ($v['confidence'] ?? 0.5);
+                $note = (string) ($v['reason'] ?? '');
+
+                // Drop outright-hallucinated findings (model can't find the
+                // cited code or admits it was wrong).
+                if ($verdict === 'hallucinated' && $conf >= 0.6) {
+                    Log::debug('Dropped hallucinated AI finding', ['file' => $file, 'rule' => $f['rule'] ?? '', 'reason' => $note]);
+                    continue;
+                }
+
+                $f['triage_verdict'] = $verdict === 'hallucinated' ? 'uncertain' : $verdict;
+                $f['triage_confidence'] = max(0.0, min(1.0, $conf));
+                $f['triage_note'] = $note;
+                if ($verdict === 'likely_false_positive' && $conf >= 0.7) {
+                    $f['severity'] = 'info';
+                }
+                $keep[] = $f;
+            }
+        }
+
+        return $keep;
+    }
+
+    /**
+     * @param  array<int, array{idx:int, f:array<string, mixed>}>  $group
+     * @return array<int, array<string, mixed>>
+     */
+    private function requestVerify(string $url, string $model, string $file, string $body, array $group): array
+    {
+        $annotated = $this->annotateLines($body);
+
+        $findingsJson = [];
+        foreach ($group as $g) {
+            $f = $g['f'];
+            $findingsJson[] = [
+                'idx' => $g['idx'],
+                'rule' => $f['rule'] ?? '',
+                'severity' => $f['severity'] ?? 'info',
+                'line' => (int) ($f['line'] ?? 0),
+                'message' => $f['message'] ?? '',
+                'cited_snippet' => $f['snippet'] ?? '',
+            ];
+        }
+
+        $prompt = implode("\n", [
+            'You are cross-checking AI-generated vulnerability findings for accuracy. For each finding, verify that:',
+            '  1. The cited line number corresponds to code that actually matches the described issue.',
+            '  2. The CWE/severity is plausible for that code.',
+            '  3. The finding is not a duplicate, over-general, or based on a hallucinated snippet.',
+            '',
+            'Mark a finding as:',
+            '  - "true_positive" if you can point to the exact dangerous code at the cited line.',
+            '  - "hallucinated" if the cited line does not contain what the finding claims (drop these).',
+            '  - "likely_false_positive" if the code exists but is actually safe in context.',
+            '  - "uncertain" if you cannot verify without more context.',
+            '',
+            'Respond with ONLY valid JSON: {"verdicts":[{"idx":<int>,"verdict":"true_positive|likely_false_positive|hallucinated|uncertain","confidence":<0..1>,"reason":"<one sentence>"}]}',
+            '',
+            '--- findings to verify ---',
+            json_encode($findingsJson, JSON_UNESCAPED_UNICODE),
+            '',
+            '--- file: ' . $file . ' ---',
+            $annotated,
+        ]);
+
+        $raw = $this->callLlmJson($url, $model, $prompt, 90);
+        if ($raw === null) {
+            return [];
+        }
+        $decoded = $this->parseAiObject($raw);
+
+        return is_array($decoded['verdicts'] ?? null) ? $decoded['verdicts'] : [];
+    }
+
+    /**
+     * Parse a top-level JSON object from the LLM response, stripping markdown
+     * fences the model may have added despite `format=json`.
+     *
+     * @return array<string, mixed>
+     */
+    private function parseAiObject(string $raw): array
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return [];
+        }
+        $raw = preg_replace('/^```(?:json)?\s*|\s*```$/m', '', $raw) ?: $raw;
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * Fast probe — does the LLM endpoint answer a TCP connection within
+     * 1 second? Skips AI stages entirely when it doesn't, rather than
+     * waste per-finding-request timeouts on an unreachable host.
+     *
+     * @param  array<string, mixed>  $cfg
+     */
+    private function isAiReachable(array $cfg): bool
+    {
+        [$url,, ] = $this->resolveAiEndpoint($cfg);
+        if ($url === null) {
+            return false;
+        }
+        $parts = parse_url($url);
+        if (empty($parts['host'])) {
+            return false;
+        }
+        $port = (int) ($parts['port'] ?? (($parts['scheme'] ?? 'http') === 'https' ? 443 : 80));
+
+        $errno = 0;
+        $errstr = '';
+        $fp = @fsockopen($parts['host'], $port, $errno, $errstr, 1.0);
+        if ($fp === false) {
+            Log::info('AI endpoint unreachable, skipping triage/verify', [
+                'host' => $parts['host'],
+                'port' => $port,
+                'err' => $errstr,
+            ]);
+
+            return false;
+        }
+        fclose($fp);
+
+        return true;
+    }
+
+    /**
+     * Resolve the AI endpoint from synced Hub config. Returns [url, model,
+     * provider]. `url` is null when no endpoint is reachable at all. `model`
+     * may be an empty string for OpenAI-style gateways (vLLM / LM Studio)
+     * where the server picks the loaded model — the request helpers below
+     * cope with that by using a placeholder.
+     *
+     * @param  array<string, mixed>  $cfg
+     * @return array{0:?string,1:string,2:string}
+     */
+    private function resolveAiEndpoint(array $cfg): array
+    {
+        $provider = (string) ($cfg['ai_provider'] ?? 'ollama');
+        $url = $cfg[$provider]['url'] ?? null;
+        $model = $cfg[$provider]['model'] ?? null;
+
+        // Fallback chain: configured provider → ollama → vllm.
+        if (empty($url)) {
+            $url = $cfg['ollama']['url'] ?? $cfg['vllm']['url'] ?? null;
+            $model = $model ?: ($cfg['ollama']['model'] ?? $cfg['vllm']['model'] ?? null);
+        }
+
+        if (empty($url)) {
+            return [null, '', $provider];
+        }
+
+        return [(string) $url, (string) ($model ?? ''), $provider];
+    }
+
+    /**
+     * Issue a JSON-mode completion request, tolerant of both Ollama
+     * (/api/generate) and OpenAI-compatible (/v1/chat/completions) gateways.
+     * The endpoint is picked by URL shape so vLLM / LM Studio / Ollama can
+     * all be used interchangeably.
+     */
+    private function callLlmJson(string $url, string $model, string $prompt, int $timeout = 90): ?string
+    {
+        $base = rtrim($url, '/');
+        $isOpenAi = str_contains($base, '/v1') || str_ends_with($base, '/v1');
+
+        try {
+            if ($isOpenAi) {
+                $endpoint = str_ends_with($base, '/v1') ? $base . '/chat/completions' : $base . '/chat/completions';
+                // vLLM/OpenAI style — model required but we supply a sane
+                // placeholder when the Hub didn't pin one.
+                $resp = Http::timeout($timeout)->post($endpoint, [
+                    'model' => $model !== '' ? $model : 'default',
+                    'messages' => [
+                        ['role' => 'user', 'content' => $prompt],
+                    ],
+                    'temperature' => 0.1,
+                    'response_format' => ['type' => 'json_object'],
+                ]);
+                if (! $resp->successful()) {
+                    Log::debug('LLM (openai) non-2xx', ['status' => $resp->status(), 'body' => substr($resp->body(), 0, 200)]);
+
+                    return null;
+                }
+
+                return (string) ($resp->json('choices.0.message.content') ?? '');
+            }
+
+            // Ollama native — /api/generate. Model CAN be empty on some
+            // deployments but it's usually required.
+            $resp = Http::timeout($timeout)->post($base . '/api/generate', [
+                'model' => $model !== '' ? $model : 'sentinel-security',
+                'prompt' => $prompt,
+                'stream' => false,
+                'format' => 'json',
+            ]);
+            if (! $resp->successful()) {
+                Log::debug('LLM (ollama) non-2xx', ['status' => $resp->status(), 'body' => substr($resp->body(), 0, 200)]);
+
+                return null;
+            }
+
+            return (string) ($resp->json('response') ?? '');
+        } catch (\Throwable $e) {
+            Log::debug('LLM request exception: ' . $e->getMessage());
+
+            return null;
+        }
+    }
+
+    private function normaliseVerdict(string $v): string
+    {
+        $v = strtolower(str_replace([' ', '-'], '_', trim($v)));
+
+        return match ($v) {
+            'true_positive', 'tp', 'confirmed', 'real' => 'true_positive',
+            'likely_false_positive', 'false_positive', 'fp', 'safe' => 'likely_false_positive',
+            'hallucinated', 'fabricated', 'invalid' => 'hallucinated',
+            default => 'uncertain',
+        };
     }
 
     /**
