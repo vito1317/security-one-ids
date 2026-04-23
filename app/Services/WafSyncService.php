@@ -350,6 +350,10 @@ class WafSyncService
             'update_definitions' => $config['addons']['update_definitions'] ?? false,
             'scan_now' => $config['addons']['scan_now'] ?? false,
             'scan_type' => $config['addons']['scan_type'] ?? 'quick',
+            'code_scan_enabled' => $config['addons']['code_scan_enabled'] ?? false,
+            'code_scan_tool' => $config['addons']['code_scan_tool'] ?? null,
+            'code_scan_auto' => $config['addons']['code_scan_auto'] ?? null,
+            'code_scan_now' => $config['addons']['code_scan_now'] ?? false,
         ]);
     }
 
@@ -495,6 +499,11 @@ class WafSyncService
         if (!empty($addons['compliance_audit_now'])) {
             $this->handleComplianceAuditNow();
         }
+
+        // Program-code vulnerability scan (SAST + AI) triggered from the Hub.
+        if (!empty($addons['code_scan_now'])) {
+            $this->handleCodeScanNow();
+        }
     }
 
     /**
@@ -531,6 +540,42 @@ class WafSyncService
             }
         } catch (\Throwable $e) {
             Log::error('Failed to dispatch compliance:audit: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Hub requested a standalone program-code vulnerability scan. We run
+     * `code-scan:run` in the background so the heartbeat reply isn't held up
+     * by what can be a multi-minute scan. The report upload clears the
+     * `code_scan_pending` flag on the Hub side.
+     */
+    private function handleCodeScanNow(): void
+    {
+        $lockKey = 'code_scan_last_trigger';
+        $last = cache()->get($lockKey);
+        if ($last && (time() - (int) $last) < 120) {
+            Log::debug('code_scan_now signal ignored — triggered recently');
+            return;
+        }
+        cache()->put($lockKey, time(), 600);
+
+        Log::info('Hub requested code scan — dispatching code-scan:run');
+        try {
+            $phpBinary = (defined('PHP_BINARY') && PHP_BINARY) ? PHP_BINARY : 'php';
+            $artisan = base_path('artisan');
+            $cmd = sprintf(
+                '%s %s code-scan:run --format=json > %s 2>&1 &',
+                escapeshellarg($phpBinary),
+                escapeshellarg($artisan),
+                escapeshellarg(storage_path('logs/code-scan.log'))
+            );
+            if (function_exists('exec')) {
+                exec($cmd);
+            } else {
+                \Artisan::call('code-scan:run', ['--format' => 'json']);
+            }
+        } catch (\Throwable $e) {
+            Log::error('Failed to dispatch code-scan:run: ' . $e->getMessage());
         }
     }
 
