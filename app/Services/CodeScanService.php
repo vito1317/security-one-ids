@@ -845,21 +845,36 @@ class CodeScanService
             $byFile[$f['file'] ?? ''][] = ['idx' => $i, 'f' => $f];
         }
 
-        // Cap total triage calls to protect against runaway cost.
-        $maxFiles = (int) ($cfg['addons']['code_scan_triage_max_files'] ?? 50);
+        // Cap total triage calls to protect against runaway cost on slow
+        // backends. Small local models (gemma-4-26B on CPU) routinely take
+        // 30s+ per call, so keep the budget modest by default.
+        $maxFiles = (int) ($cfg['addons']['code_scan_triage_max_files'] ?? 15);
+        $maxFindingsPerFile = (int) ($cfg['addons']['code_scan_triage_max_findings_per_file'] ?? 10);
         $filesProcessed = 0;
+        $deadline = microtime(true) + (float) ($cfg['addons']['code_scan_triage_budget_seconds'] ?? 120);
 
         foreach ($byFile as $file => $group) {
             if (! is_string($file) || $file === '' || ! is_file($file)) {
                 continue;
             }
             if ($filesProcessed++ >= $maxFiles) {
+                Log::info('Triage: reached max files cap', ['cap' => $maxFiles]);
+                break;
+            }
+            if (microtime(true) >= $deadline) {
+                Log::info('Triage: exhausted time budget, remaining findings left unverified');
                 break;
             }
 
             $body = @file_get_contents($file);
-            if ($body === false || strlen($body) > 48 * 1024) {
+            if ($body === false || strlen($body) > 128 * 1024) {
                 continue;
+            }
+
+            // Trim huge finding groups — the model gets confused with too
+            // many simultaneous verdicts and takes much longer.
+            if (count($group) > $maxFindingsPerFile) {
+                $group = array_slice($group, 0, $maxFindingsPerFile);
             }
 
             $verdicts = $this->requestTriage($url, $model, $file, $body, $group);
@@ -897,35 +912,54 @@ class CodeScanService
     private function requestTriage(string $url, string $model, string $file, string $body, array $group): array
     {
         $kb = CodeScanKnowledgeBase::forFile($file, $body);
-        $annotated = $this->annotateLines($body);
+        $lines = explode("\n", $body);
 
+        // Build a per-finding context window (20 lines around each hit)
+        // instead of sending the whole file. Big files + small-model setups
+        // would otherwise blow past 60s LLM timeouts.
         $findingsJson = [];
+        $ctxByIdx = [];
         foreach ($group as $g) {
             $f = $g['f'];
+            $line = max(1, (int) ($f['line'] ?? 0));
+            $start = max(1, $line - 10);
+            $end = min(count($lines), $line + 10);
+            $ctx = [];
+            for ($i = $start; $i <= $end; $i++) {
+                $ctx[] = sprintf('%s %4d| %s', $i === $line ? '>' : ' ', $i, $lines[$i - 1] ?? '');
+            }
+            $ctxByIdx[$g['idx']] = implode("\n", $ctx);
+
             $findingsJson[] = [
                 'idx' => $g['idx'],
                 'rule' => $f['rule'] ?? '',
                 'severity' => $f['severity'] ?? 'info',
-                'line' => (int) ($f['line'] ?? 0),
+                'line' => $line,
                 'message' => $f['message'] ?? '',
                 'source' => $f['source'] ?? 'rule',
             ];
         }
 
+        // Concatenate only the windows rather than the entire file.
+        $ctxBlock = [];
+        foreach ($ctxByIdx as $idx => $ctx) {
+            $ctxBlock[] = "# finding idx={$idx}:\n{$ctx}";
+        }
+
         $prompt = implode("\n", [
-            'You are triaging static-analysis findings. For each finding below, decide whether it is a TRUE POSITIVE (a real exploitable vulnerability in this specific code), LIKELY FALSE POSITIVE (the pattern matched but it is safe in context), or UNCERTAIN.',
+            'You are triaging static-analysis findings. For each finding, decide: TRUE POSITIVE (real exploitable vuln), LIKELY FALSE POSITIVE (pattern matched but safe in context), or UNCERTAIN.',
             '',
             'Use the framework context to recognise safe idioms:',
             '',
             $kb,
             '',
-            'Respond with ONLY valid JSON matching: {"verdicts":[{"idx":<int>,"verdict":"true_positive|likely_false_positive|uncertain","confidence":<0..1>,"reason":"<one sentence>"}]}',
+            'Output ONLY JSON: {"verdicts":[{"idx":<int>,"verdict":"true_positive|likely_false_positive|uncertain","confidence":<0..1>,"reason":"<one sentence>"}]}',
             '',
             '--- findings ---',
             json_encode($findingsJson, JSON_UNESCAPED_UNICODE),
             '',
             '--- file: ' . $file . ' ---',
-            $annotated,
+            implode("\n\n", $ctxBlock),
         ]);
 
         $raw = $this->callLlmJson($url, $model, $prompt, 90);
@@ -1131,10 +1165,11 @@ class CodeScanService
 
     /**
      * Resolve the AI endpoint from synced Hub config. Returns [url, model,
-     * provider]. `url` is null when no endpoint is reachable at all. `model`
-     * may be an empty string for OpenAI-style gateways (vLLM / LM Studio)
-     * where the server picks the loaded model — the request helpers below
-     * cope with that by using a placeholder.
+     * provider]. `url` is null when no endpoint is reachable at all.
+     *
+     * When the configured provider is vLLM / llama.cpp (or any OpenAI-
+     * compatible gateway) and model is blank, the caller should query
+     * `/v1/models` to auto-pick — see `discoverModel()`.
      *
      * @param  array<string, mixed>  $cfg
      * @return array{0:?string,1:string,2:string}
@@ -1155,7 +1190,113 @@ class CodeScanService
             return [null, '', $provider];
         }
 
-        return [(string) $url, (string) ($model ?? ''), $provider];
+        // Substitute host.docker.internal → 127.0.0.1 when running on the
+        // host itself (the alias only resolves inside Docker). This covers
+        // the very common case where the WAF admin set the URL from within
+        // the Hub container but the agent runs directly on the OS.
+        $url = $this->rewriteHostDockerInternal((string) $url);
+
+        // If the model is blank and the provider is OpenAI-compatible (vLLM /
+        // llama.cpp / LM Studio), ask the server which model it has loaded.
+        // Cached so we only do this once per scan run.
+        $model = (string) ($model ?? '');
+        if ($model === '' && $this->isOpenAiStyle($url, $provider)) {
+            $model = $this->discoverModel($url) ?: '';
+        }
+
+        return [$url, $model, $provider];
+    }
+
+    /**
+     * If the URL uses the Docker-only `host.docker.internal` alias but we're
+     * running outside Docker where that name has no resolver entry, rewrite
+     * it to loopback so the agent can still reach services on the same host.
+     */
+    private function rewriteHostDockerInternal(string $url): string
+    {
+        if (! str_contains($url, 'host.docker.internal')) {
+            return $url;
+        }
+        // gethostbyname returns the input unchanged on failure.
+        $resolved = @gethostbyname('host.docker.internal');
+        if ($resolved === 'host.docker.internal') {
+            $rewritten = str_replace('host.docker.internal', '127.0.0.1', $url);
+            Log::info('Code scan: rewrote host.docker.internal to 127.0.0.1 (alias not resolvable on this host)', [
+                'original' => $url,
+                'rewritten' => $rewritten,
+            ]);
+
+            return $rewritten;
+        }
+
+        return $url;
+    }
+
+    /**
+     * True when the endpoint should be treated as OpenAI-compatible (vLLM,
+     * llama.cpp-server, LM Studio, LiteLLM, etc). We check:
+     *  - explicit provider setting (`ai_provider` == vllm)
+     *  - /v1 in the URL (many deployments expose it that way)
+     *  - user hinted by putting "vllm" / "openai" in the provider field
+     */
+    private function isOpenAiStyle(string $url, string $provider): bool
+    {
+        $p = strtolower($provider);
+        if (in_array($p, ['vllm', 'openai', 'lmstudio', 'llamacpp', 'litellm'], true)) {
+            return true;
+        }
+
+        return str_contains($url, '/v1');
+    }
+
+    /**
+     * Query /v1/models on an OpenAI-compatible server and return the first
+     * model id. Cached per-process for 5 minutes. Returns null on failure
+     * so the caller can fall back to a placeholder name.
+     */
+    private ?array $modelCache = null;
+
+    private function discoverModel(string $url): ?string
+    {
+        if ($this->modelCache !== null && $this->modelCache['url'] === $url) {
+            return $this->modelCache['model'];
+        }
+
+        $base = rtrim($url, '/');
+        // Try $base/v1/models first; if $base already ends in /v1, try
+        // $base/models too.
+        $candidates = [];
+        if (str_ends_with($base, '/v1')) {
+            $candidates[] = $base . '/models';
+        } else {
+            $candidates[] = $base . '/v1/models';
+            $candidates[] = $base . '/models';
+        }
+
+        foreach ($candidates as $endpoint) {
+            try {
+                $resp = Http::timeout(3)->get($endpoint);
+                if (! $resp->successful()) {
+                    continue;
+                }
+                $data = $resp->json('data') ?? $resp->json('models') ?? [];
+                foreach ((array) $data as $m) {
+                    $id = $m['id'] ?? $m['model'] ?? $m['name'] ?? null;
+                    if (is_string($id) && $id !== '') {
+                        Log::info('Code scan: auto-detected AI model', ['endpoint' => $endpoint, 'model' => $id]);
+                        $this->modelCache = ['url' => $url, 'model' => $id];
+
+                        return $id;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::debug('discoverModel exception on ' . $endpoint . ': ' . $e->getMessage());
+            }
+        }
+
+        $this->modelCache = ['url' => $url, 'model' => null];
+
+        return null;
     }
 
     /**
@@ -1166,24 +1307,36 @@ class CodeScanService
      */
     private function callLlmJson(string $url, string $model, string $prompt, int $timeout = 90): ?string
     {
+        $cfg = $this->waf->getWafConfig();
+        $provider = (string) ($cfg['ai_provider'] ?? 'ollama');
         $base = rtrim($url, '/');
-        $isOpenAi = str_contains($base, '/v1') || str_ends_with($base, '/v1');
+        $isOpenAi = $this->isOpenAiStyle($url, $provider);
 
         try {
             if ($isOpenAi) {
-                $endpoint = str_ends_with($base, '/v1') ? $base . '/chat/completions' : $base . '/chat/completions';
-                // vLLM/OpenAI style — model required but we supply a sane
-                // placeholder when the Hub didn't pin one.
-                $resp = Http::timeout($timeout)->post($endpoint, [
+                // OpenAI-compat server — append /chat/completions regardless of
+                // whether the base URL ends in /v1 (many llama.cpp deployments
+                // expose the /v1 prefix at the root path).
+                $endpoint = str_ends_with($base, '/v1')
+                    ? $base . '/chat/completions'
+                    : $base . '/v1/chat/completions';
+
+                $resp = Http::timeout($timeout)->connectTimeout(5)->post($endpoint, [
                     'model' => $model !== '' ? $model : 'default',
                     'messages' => [
                         ['role' => 'user', 'content' => $prompt],
                     ],
                     'temperature' => 0.1,
+                    'max_tokens' => 1024,
                     'response_format' => ['type' => 'json_object'],
                 ]);
                 if (! $resp->successful()) {
-                    Log::debug('LLM (openai) non-2xx', ['status' => $resp->status(), 'body' => substr($resp->body(), 0, 200)]);
+                    Log::warning('LLM (openai) non-2xx', [
+                        'endpoint' => $endpoint,
+                        'model' => $model,
+                        'status' => $resp->status(),
+                        'body' => substr($resp->body(), 0, 300),
+                    ]);
 
                     return null;
                 }
@@ -1200,14 +1353,23 @@ class CodeScanService
                 'format' => 'json',
             ]);
             if (! $resp->successful()) {
-                Log::debug('LLM (ollama) non-2xx', ['status' => $resp->status(), 'body' => substr($resp->body(), 0, 200)]);
+                Log::warning('LLM (ollama) non-2xx', [
+                    'endpoint' => $base . '/api/generate',
+                    'model' => $model,
+                    'status' => $resp->status(),
+                    'body' => substr($resp->body(), 0, 300),
+                ]);
 
                 return null;
             }
 
             return (string) ($resp->json('response') ?? '');
         } catch (\Throwable $e) {
-            Log::debug('LLM request exception: ' . $e->getMessage());
+            Log::warning('LLM request exception', [
+                'url' => $url,
+                'provider' => $provider,
+                'err' => $e->getMessage(),
+            ]);
 
             return null;
         }
