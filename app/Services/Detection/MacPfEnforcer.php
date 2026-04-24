@@ -136,6 +136,45 @@ class MacPfEnforcer
     }
 
     /**
+     * Ensure pf is enabled at the kernel level and the anchor is loaded.
+     * No-op if already enabled; re-applies /etc/pf.conf if not. Returns
+     * true iff pf is Status: Enabled afterwards.
+     *
+     * Called by ids:pf-enforce on first tick after the Hub flips
+     * ips_enabled=true + suricata_mode=ips. We do NOT disable pf when the
+     * Hub flips back to ids — operator-owned pf rules (com.apple anchors
+     * etc.) might still depend on it. The enforcer simply stops adding
+     * new entries; existing time-boxed blocks age out via pruneExpired.
+     */
+    public function ensurePfEnabled(): bool
+    {
+        if (!$this->isSupported()) return false;
+        try {
+            $r = Process::timeout(5)->run('/sbin/pfctl -s info 2>&1');
+            if ($r->exitCode() === 0 && str_contains($r->output(), 'Status: Enabled')) {
+                return true;
+            }
+            Log::info('[PF] pf kernel is disabled; enabling and loading /etc/pf.conf');
+            // Load the ruleset (which includes our anchor) and enable.
+            Process::timeout(5)->run('/sbin/pfctl -f /etc/pf.conf 2>&1');
+            Process::timeout(5)->run('/sbin/pfctl -e 2>&1');
+            $r = Process::timeout(5)->run('/sbin/pfctl -s info 2>&1');
+            $enabled = $r->exitCode() === 0 && str_contains($r->output(), 'Status: Enabled');
+            if ($enabled) {
+                Log::info('[PF] pf kernel enabled');
+            } else {
+                Log::warning('[PF] pfctl -e did not stick', [
+                    'out' => trim($r->output() . $r->errorOutput()),
+                ]);
+            }
+            return $enabled;
+        } catch (\Throwable $e) {
+            Log::warning('[PF] ensurePfEnabled exception: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Check that the pf anchor file exists, the anchor is loaded in the
      * running ruleset, and pf itself is enabled. Returns a diagnostic array.
      */

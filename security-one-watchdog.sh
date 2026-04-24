@@ -308,14 +308,14 @@ scan_loop &
 CHILD_PIDS+=($!)
 log_message "INFO" "  → Scan thread: PID $!"
 
-# PfEnforce thread intentionally not spawned — see MacPfEnforcer
-# self-block postmortem. All code still on disk + committed so the
-# thread can be brought back by uncommenting one line here and
-# re-running `launchctl kickstart -k system/com.securityone.ids.sync`
-# once the root cause is nailed down and verified.
-# pf_enforce_loop &
-# CHILD_PIDS+=($!)
-# log_message "INFO" "  → PfEnforce thread: PID $!"
+# PfEnforce thread. Safe to always spawn — the `ids:pf-enforce` command
+# itself gates on ips_enabled + suricata_mode in waf_config.json (set by
+# the Hub). When the Hub has IPS off, this loop still runs but the
+# command no-ops (just prunes expired blocks if any). When the Hub flips
+# IPS on, the command auto-enables pf kernel and starts adding blocks.
+pf_enforce_loop &
+CHILD_PIDS+=($!)
+log_message "INFO" "  → PfEnforce thread: PID $!"
 
 log_message "INFO" "All threads launched. Monitoring..."
 
@@ -323,7 +323,7 @@ log_message "INFO" "All threads launched. Monitoring..."
 while true; do
     for i in "${!CHILD_PIDS[@]}"; do
         pid=${CHILD_PIDS[$i]}
-        labels=("Heartbeat" "Sync" "Scan")
+        labels=("Heartbeat" "Sync" "Scan" "PfEnforce")
         label=${labels[$i]:-"Unknown"}
         
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -333,7 +333,7 @@ while true; do
                 0) heartbeat_loop & ;;
                 1) sync_loop & ;;
                 2) scan_loop & ;;
-                # 3) pf_enforce_loop & ;;   # DISABLED — see above
+                3) pf_enforce_loop & ;;
             esac
             CHILD_PIDS[$i]=$!
             log_message "INFO" "[Thread:$label] Restarted as PID ${CHILD_PIDS[$i]}"

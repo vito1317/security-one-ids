@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Services\Detection\MacPfEnforcer;
+use App\Services\WafSyncService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -22,11 +23,38 @@ class EnforcePfBlocks extends Command
 
     protected $description = 'Enforce Suricata drop events via pf (macOS reactive IPS)';
 
-    public function handle(MacPfEnforcer $pf): int
+    public function handle(MacPfEnforcer $pf, WafSyncService $waf): int
     {
         if (!$pf->isSupported()) {
             $this->info('pf-enforce: not supported on this platform, skipping');
             return 0;
+        }
+
+        // Gate: only enforce when the Hub has explicitly enabled IPS mode.
+        // `ips_enabled` is the top-level feature flag (Hub UI "Enable IPS"
+        // button) and `addons.suricata_mode` must be 'ips'. Both must be true
+        // — either one alone is treated as detection-only. When the Hub
+        // flips back to 'ids' we stop adding blocks, but intentionally do
+        // NOT disable pf or flush the table (existing time-boxed blocks
+        // still age out via pruneExpired within TTL).
+        $cfg = $waf->getWafConfig();
+        $ipsEnabled = ($cfg['ips_enabled'] ?? false) === true;
+        $mode = $cfg['addons']['suricata_mode'] ?? 'ids';
+        if (!$ipsEnabled || $mode !== 'ips') {
+            $this->info(sprintf(
+                'pf-enforce: disabled (ips_enabled=%s suricata_mode=%s), skipping',
+                var_export($ipsEnabled, true), $mode
+            ));
+            // Still prune so any existing blocks age out even while disabled.
+            $pruned = $pf->pruneExpired();
+            if ($pruned > 0) $this->info("pf-enforce: pruned {$pruned} expired block(s)");
+            return 0;
+        }
+
+        // IPS is on — make sure pf kernel is enabled so our anchor actually
+        // drops packets. No-op if already enabled.
+        if (!$pf->ensurePfEnabled()) {
+            $this->warn('pf-enforce: could not enable pf kernel, blocks will not take effect');
         }
 
         $evePath = $this->option('eve');
