@@ -247,14 +247,26 @@ class SuricataEngine
         if ($this->isRunning()) {
             // Suricata may have been started by systemd or by the watchdog
             // before we got here. In that case we skip the process-launch
-            // path but still need to sync iptables state — the NFQUEUE rule
-            // the inline-IPS mode depends on is installed here, not by
-            // systemd. Only apply if the running process's mode matches
-            // what was requested; a mismatch is the caller's problem to
-            // resolve (via B1's stop+start path).
-            if ($this->getRunningMode() === $mode) {
-                $this->applyInlineNetfilter($mode);
-            }
+            // path but still need to sync iptables state — the NFQUEUE
+            // rule the inline-IPS mode depends on is installed here, not
+            // by systemd.
+            //
+            // We used to gate the iptables apply on `getRunningMode() ===
+            // $mode`, but that opened a race window: when a stop()+start()
+            // mode-switch raced with watchdog re-detection, start()'s
+            // isRunning() would see the new process but getRunningMode()
+            // might still read the old pidfile's /proc/cmdline (or an
+            // in-flight transition), report 'ids', and skip installing
+            // the IPS NFQUEUE rules. Result: Suricata running in IPS but
+            // no packets routed to its queue — silent IPS failure.
+            //
+            // Apply unconditionally. It's idempotent (`iptables -C` guard),
+            // and if the live process really is in the wrong mode, the
+            // installed NFQUEUE rules route to a queue that nothing reads,
+            // which --queue-bypass on each rule degrades gracefully to
+            // plain ACCEPT — so the worst case is "no inspection yet",
+            // not "dropped packets".
+            $this->applyInlineNetfilter($mode);
             return ['success' => true, 'message' => 'Suricata is already running'];
         }
 
