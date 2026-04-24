@@ -308,9 +308,14 @@ scan_loop &
 CHILD_PIDS+=($!)
 log_message "INFO" "  → Scan thread: PID $!"
 
-pf_enforce_loop &
-CHILD_PIDS+=($!)
-log_message "INFO" "  → PfEnforce thread: PID $!"
+# PfEnforce thread intentionally not spawned — see MacPfEnforcer
+# self-block postmortem. All code still on disk + committed so the
+# thread can be brought back by uncommenting one line here and
+# re-running `launchctl kickstart -k system/com.securityone.ids.sync`
+# once the root cause is nailed down and verified.
+# pf_enforce_loop &
+# CHILD_PIDS+=($!)
+# log_message "INFO" "  → PfEnforce thread: PID $!"
 
 log_message "INFO" "All threads launched. Monitoring..."
 
@@ -318,7 +323,7 @@ log_message "INFO" "All threads launched. Monitoring..."
 while true; do
     for i in "${!CHILD_PIDS[@]}"; do
         pid=${CHILD_PIDS[$i]}
-        labels=("Heartbeat" "Sync" "Scan" "PfEnforce")
+        labels=("Heartbeat" "Sync" "Scan")
         label=${labels[$i]:-"Unknown"}
         
         if ! kill -0 "$pid" 2>/dev/null; then
@@ -328,7 +333,7 @@ while true; do
                 0) heartbeat_loop & ;;
                 1) sync_loop & ;;
                 2) scan_loop & ;;
-                3) pf_enforce_loop & ;;
+                # 3) pf_enforce_loop & ;;   # DISABLED — see above
             esac
             CHILD_PIDS[$i]=$!
             log_message "INFO" "[Thread:$label] Restarted as PID ${CHILD_PIDS[$i]}"
