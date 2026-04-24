@@ -2688,6 +2688,12 @@ class WafSyncService
             'memory_usage' => memory_get_usage(true),
             'load_average' => function_exists('sys_getloadavg') ? sys_getloadavg() : [],
             'uptime' => $this->getUptime(),
+            // Unix timestamp of when this host last booted. The Hub uses this
+            // to detect host reboots and apply fail-safe policies (e.g.
+            // reverting suricata_mode back to 'ids' after an unexpected
+            // restart). Derived from `uptime` rather than any clock API so
+            // it survives NTP jumps.
+            'boot_time' => $this->getBootTime(),
             // Enhanced system metrics for WAF Hub display
             'cpu' => $this->getCpuUsage(),
             'memory' => $this->getMemoryUsage(),
@@ -3093,6 +3099,25 @@ class WafSyncService
             return (int) explode(' ', $uptime)[0];
         }
         return null;
+    }
+
+    /**
+     * Unix timestamp of the host's last boot, computed as (now - uptime).
+     *
+     * Sent in every heartbeat so the Hub can detect reboots and apply
+     * fail-safe policies (suricata_mode reverts to 'ids' on reboot, so a
+     * bad IPS rule can't outlive a power cycle). Returning null on
+     * non-Linux means the Hub skips the reboot check for that platform
+     * and keeps the pre-reboot mode — acceptable because the reboot
+     * failsafe is primarily a Linux/production concern.
+     */
+    protected function getBootTime(): ?int
+    {
+        $uptime = $this->getUptime();
+        if ($uptime === null) {
+            return null;
+        }
+        return time() - $uptime;
     }
 
     /**
