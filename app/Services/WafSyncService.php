@@ -742,8 +742,16 @@ class WafSyncService
             // Write rules and reload
             $suricata->applyCustomRules($rulesContent);
 
-            // Store the new hash locally
-            file_put_contents($hashPath, $data['rules_hash'] ?? $hubHash);
+            // Store the Hub's advertised hash, NOT the API's returned
+            // `rules_hash`. Those two can differ (e.g. Hub regenerates the
+            // concatenated rules text on each /agents/suricata-rules call
+            // with a different ordering or timestamp, producing a hash that
+            // doesn't match the stable `suricata_rules_hash` in the config
+            // heartbeat). Storing the API's value caused the local hash to
+            // never equal the next heartbeat's advertised hash — every
+            // heartbeat re-triggered a full rule sync + reload, thrashing
+            // the detection engine and starving NFQUEUE inspection.
+            file_put_contents($hashPath, $hubHash);
 
             // Reload rules (SIGUSR2 for live reload, or restart)
             if ($suricata->isRunning()) {
