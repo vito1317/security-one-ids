@@ -787,6 +787,16 @@ class SuricataEngine
             // though systemd says active. Rewrite the interface in-place to
             // whatever the OS says is the real default.
             $this->healInterfaceMisconfig();
+            // Ensure NFQ safety settings (fail-open: yes, mode: accept) are
+            // present so a future IPS mode switch doesn't black-hole
+            // packets the moment Suricata is overloaded or crashes.
+            $this->healNfqConfig();
+            // Ensure Hub-synced custom.rules is actually loaded. Without
+            // this, applyCustomRules() writes to <rulesDir>/custom.rules
+            // but Suricata silently ignores it because the file isn't
+            // listed in `rule-files:` — every Hub rule sync becomes a
+            // no-op and no Hub signature can ever fire.
+            $this->healCustomRulesInclude();
             return;
         }
 
@@ -1097,9 +1107,27 @@ YAML;
      */
     private function detectRulesDir(): string
     {
+        // Prefer the directory Suricata's config actually loads from, i.e.
+        // whatever `default-rule-path:` in suricata.yaml points at. Writing
+        // custom.rules anywhere else is a silent no-op — Suricata parses
+        // only files listed in `rule-files:`, resolved relative to
+        // default-rule-path. On Debian/Ubuntu packages this is
+        // /var/lib/suricata/rules (suricata-update's target), while
+        // /etc/suricata/rules only holds static decoder rules and configs.
+        $configPath = $this->configPath ?? $this->detectConfigPath();
+        if (is_string($configPath) && file_exists($configPath)) {
+            $content = @file_get_contents($configPath);
+            if ($content !== false && preg_match('/^\s*default-rule-path:\s*([^\s#]+)/m', $content, $m)) {
+                $configured = trim($m[1], " \"'");
+                if ($configured !== '' && is_dir($configured)) {
+                    return $configured;
+                }
+            }
+        }
+
         $paths = $this->isWindows()
             ? ['C:\\Suricata\\rules', 'C:\\Program Files\\Suricata\\rules']
-            : ['/etc/suricata/rules', '/var/lib/suricata/rules', '/usr/local/etc/suricata/rules'];
+            : ['/var/lib/suricata/rules', '/etc/suricata/rules', '/usr/local/etc/suricata/rules'];
 
         foreach ($paths as $path) {
             if (is_dir($path)) {
@@ -1107,7 +1135,7 @@ YAML;
             }
         }
 
-        return $this->isWindows() ? 'C:\\Suricata\\rules' : '/etc/suricata/rules';
+        return $this->isWindows() ? 'C:\\Suricata\\rules' : '/var/lib/suricata/rules';
     }
 
     /**
@@ -1593,15 +1621,34 @@ POWERSHELL;
         // INPUT: only WAF-protected ports. All other inbound (SSH, DNS
         // replies, conntrack ESTABLISHED replies) is left to the bypass
         // rules installed by installBypassRules().
+        //
+        // CRITICAL: the NFQUEUE rules MUST sit BEFORE the conntrack
+        // ESTABLISHED,RELATED bypass. installBypassRules() inserts the
+        // conntrack rule at position 1, so a plain `-A INPUT` here would
+        // land the NFQUEUE rule AFTER it, and every packet in an already-
+        // established HTTP flow (including the PSH+ACK carrying the
+        // request payload) would be bypassed before reaching inspection.
+        // Suricata would then only see empty-payload handshake packets
+        // and nothing content: match would ever fire.
+        $insertPos = $this->findConntrackBypassLineNo('INPUT');
         foreach (self::INSPECT_PORTS as $port) {
             $spec = "-p tcp --dport {$port} -j {$target} {$comment}";
             $check = Process::run("iptables -C INPUT {$spec} 2>/dev/null");
             if ($check->successful()) {
                 continue;
             }
-            $add = Process::run("iptables -A INPUT {$spec} 2>&1");
+            $cmd = $insertPos !== null
+                ? "iptables -I INPUT {$insertPos} {$spec} 2>&1"
+                : "iptables -A INPUT {$spec} 2>&1";
+            $add = Process::run($cmd);
             if ($add->successful()) {
-                Log::info("[Suricata] Added NFQUEUE rule to INPUT :{$port}");
+                Log::info("[Suricata] Added NFQUEUE rule to INPUT :{$port}" . ($insertPos !== null ? " at line {$insertPos}" : ""));
+                // Each insert before the conntrack rule shifts it down by
+                // one; next port needs to insert at the same effective
+                // position (which is now the original + N inserted).
+                if ($insertPos !== null) {
+                    $insertPos++;
+                }
             } else {
                 Log::warning("[Suricata] Failed to add NFQUEUE rule for :{$port}: " . trim($add->output() . $add->errorOutput()));
             }
@@ -1716,5 +1763,114 @@ POWERSHELL;
                 Log::warning("[Suricata] Failed to install bypass rule '{$match}': " . trim($add->output() . $add->errorOutput()));
             }
         }
+    }
+
+    /**
+     * Locate the line number of our conntrack ESTABLISHED,RELATED bypass
+     * rule in the given chain so applyInlineNetfilter() can insert the
+     * WAF-port NFQUEUE rules *above* it. Returns null if no such rule
+     * exists yet — the caller then falls back to `-A` (append).
+     */
+    private function findConntrackBypassLineNo(string $chain): ?int
+    {
+        $result = Process::run("iptables -L {$chain} -n --line-numbers 2>/dev/null");
+        if (!$result->successful()) {
+            return null;
+        }
+        foreach (explode("\n", $result->output()) as $line) {
+            if (preg_match('/^(\d+)\s+ACCEPT\b.*ctstate\s+RELATED,ESTABLISHED.*security-one-ids bypass/', $line, $m)) {
+                return (int) $m[1];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Ensure the `nfq:` block has `fail-open: yes` and `mode: accept`.
+     * Distro packages ship these commented, so a fresh install flips
+     * IPS and then has the kernel drop packets the moment Suricata
+     * can't keep up — looks exactly like the host network dying.
+     */
+    private function healNfqConfig(): void
+    {
+        if ($this->isWindows() || PHP_OS === 'Darwin') {
+            return;
+        }
+        $content = @file_get_contents($this->configPath);
+        if ($content === false) {
+            return;
+        }
+        if (!preg_match('/^(nfq:\s*\n)((?:(?:[ \t]+.*|#.*)\n)*)/m', $content, $m, PREG_OFFSET_CAPTURE)) {
+            return;
+        }
+        $blockStart = $m[0][1];
+        $blockText = $m[0][0];
+        $updated = $blockText;
+
+        $required = ['fail-open' => 'yes', 'mode' => 'accept'];
+        foreach ($required as $key => $value) {
+            if (preg_match('/^[ \t]+' . preg_quote($key, '/') . ':/m', $updated)) {
+                continue;
+            }
+            $uncommented = preg_replace(
+                '/^#([ \t]*' . preg_quote($key, '/') . ':[ \t]*' . preg_quote($value, '/') . '[ \t]*)$/m',
+                '$1',
+                $updated,
+                1,
+                $count
+            );
+            if ($count > 0) {
+                $updated = $uncommented;
+                continue;
+            }
+            $updated = preg_replace('/^nfq:\s*\n/', "nfq:\n  {$key}: {$value}\n", $updated, 1);
+        }
+
+        if ($updated === $blockText) {
+            return;
+        }
+        $backup = $this->configPath . '.bak.' . date('Ymd-His');
+        @copy($this->configPath, $backup);
+        $newContent = substr_replace($content, $updated, $blockStart, strlen($blockText));
+        if (@file_put_contents($this->configPath, $newContent) === false) {
+            Log::warning('[Suricata] Could not write healed nfq config (permission?)', ['path' => $this->configPath]);
+            return;
+        }
+        Log::warning('[Suricata] Healed nfq config (fail-open/mode) in ' . $this->configPath, ['backup' => $backup]);
+    }
+
+    /**
+     * Ensure `custom.rules` is listed under `rule-files:` in suricata.yaml.
+     * Without this, applyCustomRules() writes Hub rules to disk but
+     * Suricata never parses them — every sync is a silent no-op.
+     */
+    private function healCustomRulesInclude(): void
+    {
+        $content = @file_get_contents($this->configPath);
+        if ($content === false) {
+            return;
+        }
+        if (!preg_match('/^(rule-files:\s*\n)((?:[ \t]+-[ \t].*\n)*)/m', $content, $m, PREG_OFFSET_CAPTURE)) {
+            Log::debug('[Suricata] No rule-files: block in suricata.yaml, skipping custom.rules heal');
+            return;
+        }
+        $blockStart = $m[0][1];
+        $blockText = $m[0][0];
+        if (preg_match('/^\s*-\s+["\']?(?:[^"\'\n]*\/)?custom\.rules["\']?\s*$/m', $blockText)) {
+            return;
+        }
+        $indent = '  ';
+        if (preg_match_all('/^([ \t]+)-/m', $blockText, $mm) && !empty($mm[1])) {
+            $indent = end($mm[1]);
+        }
+        $newBlock = $blockText . "{$indent}- custom.rules\n";
+        $backup = $this->configPath . '.bak.' . date('Ymd-His');
+        @copy($this->configPath, $backup);
+        $newContent = substr_replace($content, $newBlock, $blockStart, strlen($blockText));
+        if (@file_put_contents($this->configPath, $newContent) === false) {
+            Log::warning('[Suricata] Could not write healed rule-files config (permission?)', ['path' => $this->configPath]);
+            return;
+        }
+        Log::warning('[Suricata] Added custom.rules to rule-files in ' . $this->configPath, ['backup' => $backup]);
     }
 }
