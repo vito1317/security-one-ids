@@ -64,12 +64,41 @@ class EnforcePfBlocks extends Command
         }
 
         $posFile = storage_path('app/suricata_enforce_position.txt');
-        $lastPos = file_exists($posFile) ? (int) file_get_contents($posFile) : 0;
         clearstatcache(true, $evePath);
         $size = filesize($evePath);
 
+        // First run on this agent (no position file yet): start from the
+        // END of eve.json, not the beginning. Otherwise we replay the
+        // entire history — potentially GiB of stats/flow/alert events —
+        // at 2000-line-per-tick throughput and the live log write rate
+        // keeps us permanently behind the tail, so real attacks never
+        // get enforced. Only events appended after IPS activation count.
+        if (!file_exists($posFile)) {
+            $lastPos = $size;
+            @file_put_contents($posFile, (string) $lastPos);
+            $this->info("pf-enforce: first run, seeking to eve.json tail ({$size} bytes)");
+        } else {
+            $lastPos = (int) file_get_contents($posFile);
+        }
+
         // Handle log rotation / truncation
         if ($size < $lastPos) $lastPos = 0;
+
+        // Catch-up guard: if we've fallen more than this many bytes behind
+        // the tail (e.g. sync daemon paused for hours, agent restarted
+        // after a long offline), don't try to crawl through the backlog —
+        // jump to tail. The backlog is old info anyway; enforcing it now
+        // would block long-gone connections and waste cycles.
+        $maxLag = 16 * 1024 * 1024;  // 16 MiB
+        if ($size - $lastPos > $maxLag) {
+            $this->warn(sprintf(
+                'pf-enforce: %d MiB behind tail, skipping backlog',
+                ($size - $lastPos) >> 20
+            ));
+            $lastPos = $size;
+            @file_put_contents($posFile, (string) $lastPos);
+            return 0;
+        }
 
         $fh = @fopen($evePath, 'r');
         if (!$fh) {
