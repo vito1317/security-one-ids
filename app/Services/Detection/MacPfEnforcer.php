@@ -170,15 +170,50 @@ class MacPfEnforcer
         return (bool) filter_var($ip, FILTER_VALIDATE_IP);
     }
 
-    /** Skip local/loopback/multicast — never block yourself. */
+    /**
+     * Return true for any IP we refuse to block.
+     *
+     * Defense-in-depth: the host's own IPs are discovered dynamically via
+     * ifconfig as a best-effort check, but that lookup can fail (DHCP not
+     * yet assigned, timeout, Process::run quirks, multi-interface setups).
+     * A self-IP false-negative bricks LAN connectivity — we saw this in
+     * production: 192.168.50.77 (the host) was added to the pf drop table
+     * because ifconfig detection missed it, and Claude/web all went dark
+     * until the user rebooted.
+     *
+     * So we ALSO hard-skip the RFC 1918 private ranges, loopback, link-
+     * local, and multicast unconditionally. The enforcer is for blocking
+     * external attackers — LAN traffic should never hit this path. If a
+     * corporate deployment really needs to block a LAN host, do it via
+     * pfctl directly, not through auto-enforcement from IDS events.
+     */
     private function isSelfOrLoopback(string $ip): bool
     {
+        // Fast-path: loopback / unspecified / IPv6 link-local / multicast
         if (str_starts_with($ip, '127.'))  return true;
         if ($ip === '0.0.0.0')             return true;
         if (str_starts_with($ip, '::'))    return true;
         if (str_starts_with($ip, 'fe80:')) return true;
-        if (str_starts_with($ip, 'ff'))    return true;  // multicast
-        // Skip the host's own public/LAN IPs (best effort)
+        if (str_starts_with($ip, 'ff'))    return true;
+
+        // Reject any non-globally-routable IPv4 address. filter_var with
+        // FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE returns
+        // false for RFC 1918 (10/8, 172.16/12, 192.168/16), link-local
+        // 169.254/16, loopback 127/8, and other reserved ranges. If it
+        // *fails* that filter it's a private/reserved IP -> skip.
+        $global = filter_var(
+            $ip,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_IPV4 | FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        );
+        if ($global === false) {
+            return true;
+        }
+
+        // Last line of defense: still try to detect the host's own public
+        // IPs (ifconfig). We already filtered RFC 1918 above so this only
+        // matters if the host has a globally routable IP directly bound
+        // (rare on LAN, common on cloud VMs). Cache per process.
         static $ownIps = null;
         if ($ownIps === null) {
             $ownIps = [];
