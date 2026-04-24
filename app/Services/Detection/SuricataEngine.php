@@ -480,14 +480,28 @@ class SuricataEngine
     {
         $installed = $this->isInstalled();
 
+        // Read the desired mode from the same config file WafSyncService
+        // writes Hub's heartbeat payload into — `waf_config.json`.
+        // (The old implementation read from `hub_config.json`, which is
+        // never created by any code path, so `$suricataMode` always fell
+        // through to the 'ids' default. That made this value useless for
+        // Hub-side displays that derived UI from `system_info.suricata.
+        // suricata_mode`: it always reported 'ids' regardless of the
+        // actual Hub-commanded mode.)
         $suricataMode = 'ids';
-        $settingsPath = storage_path('app/hub_config.json');
-        if (file_exists($settingsPath)) {
+        foreach (['waf_config.json', 'hub_config.json'] as $name) {
+            $p = storage_path('app/' . $name);
+            if (!file_exists($p)) continue;
             try {
-                $config = json_decode(file_get_contents($settingsPath), true);
-                $suricataMode = $config['addons']['suricata_mode'] ?? 'ids';
+                $config = json_decode(file_get_contents($p), true);
+                if (is_array($config)) {
+                    $suricataMode = $config['addons']['suricata_mode']
+                        ?? $config['addons']['snort_mode']
+                        ?? 'ids';
+                    break;
+                }
             } catch (\Exception $e) {
-                // ignore
+                // ignore; try next candidate
             }
         }
 
