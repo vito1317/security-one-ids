@@ -486,7 +486,16 @@ class SuricataEngine
             'path' => $this->suricataPath,
             'config_path' => $this->configPath,
             'log_dir' => $this->logDir,
+            // `suricata_mode`: the *intended* mode Hub last told us to run
+            // as, mirrored from storage/app/hub_config.json.
             'suricata_mode' => $suricataMode,
+            // `running_mode`: the mode the live process is actually
+            // running in, derived from /proc/<pid>/cmdline (-q → ips,
+            // --af-packet/-i → ids). Diverges from `suricata_mode` when
+            // the agent just booted and systemd's IDS unit starts before
+            // Hub sync flips it, or when a rule reload failed mid-switch.
+            // Hub UI should prefer this for status display.
+            'running_mode' => $installed ? $this->getRunningMode() : null,
             'stats' => $installed ? $this->getStats() : null,
         ];
     }
