@@ -1636,6 +1636,17 @@ POWERSHELL;
             // moment IPS flips, every reply packet for already-open
             // connections gets inspected and potentially dropped.
             '-m conntrack --ctstate ESTABLISHED,RELATED',
+            // SSH — the admin management plane. If IPS drops this we lose
+            // the ability to recover the box remotely, so it is a hard
+            // fail-safe carve-out. Brute-force protection belongs in
+            // fail2ban/sshd_config, not inline NFQUEUE.
+            '-p tcp --dport 22',
+            // DNS — an authoritative PowerDNS runs on this host. Delaying
+            // UDP/53 via NFQUEUE causes client-side resolver timeouts long
+            // before any signature match completes, which cascades into
+            // every service that does a DNS lookup.
+            '-p udp --dport 53',
+            '-p tcp --dport 53',
         ];
 
         // Docker bridge interfaces — container-to-host traffic is trusted
