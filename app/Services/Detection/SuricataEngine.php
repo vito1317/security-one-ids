@@ -742,7 +742,13 @@ class SuricataEngine
                 // Suricata exit with "more than one run mode has been
                 // specified". No `-i` — NFQUEUE packets come from the kernel
                 // queue, not a NIC.
-                $cmd .= " -q 0";
+                //
+                // Multi-queue (0:3 = queues 0-3) lets Suricata spawn 4
+                // RX-NFQ threads, matched on the iptables side by
+                // `--queue-balance 0:3`. A single queue was the throughput
+                // bottleneck that caused rule-reload windows to back up
+                // into kernel drops, even with fail-open set.
+                $cmd .= " -q 0:3";
             } else {
                 // IDS passive: af-packet on Linux, pcap on macOS.
                 $cmd .= " -i {$interface}";
@@ -1559,40 +1565,60 @@ POWERSHELL;
     private const NFQ_COMMENT = 'security-one-ids IPS';
     private const BYPASS_COMMENT = 'security-one-ids bypass';
 
+    /**
+     * Narrow the inspection surface to what the WAF actually protects
+     * (HTTP/HTTPS). A previous catch-all NFQUEUE on every inbound packet
+     * saturated the single RX-NFQ thread during rule-reload windows and
+     * killed the host network. Restricting to WAF ports keeps queue
+     * pressure manageable.
+     */
+    private const INSPECT_PORTS = [80, 443];
+
     private function applyInlineNetfilter(string $mode): void
     {
         if ($mode !== 'ips' || $this->isWindows() || PHP_OS === 'Darwin') {
             return;
         }
 
-        // Install universally-safe bypass rules BEFORE the NFQUEUE rule so
-        // admin sessions, already-established connections, and container
-        // traffic don't get inspected/dropped. Site-specific whitelists
-        // (e.g. trusted source IPs) are left to the admin.
         $this->installBypassRules();
 
-        foreach (['INPUT', 'FORWARD'] as $chain) {
-            // Idempotent: only add if no matching rule already present.
-            $check = Process::run(
-                "iptables -C {$chain} -j NFQUEUE --queue-num 0 --queue-bypass "
-                . "-m comment --comment " . escapeshellarg(self::NFQ_COMMENT) . " 2>/dev/null"
-            );
+        // `--queue-balance 0:3` hashes packets across 4 NFQUEUE queues so
+        // Suricata's 4 RX-NFQ threads share the load (Suricata is started
+        // with `-q 0:3`). A single queue was the previous outage's root
+        // cause: one RX thread couldn't drain the queue during rule
+        // reloads and the kernel started dropping.
+        $target = 'NFQUEUE --queue-balance 0:3 --queue-bypass';
+        $comment = "-m comment --comment " . escapeshellarg(self::NFQ_COMMENT);
+
+        // INPUT: only WAF-protected ports. All other inbound (SSH, DNS
+        // replies, conntrack ESTABLISHED replies) is left to the bypass
+        // rules installed by installBypassRules().
+        foreach (self::INSPECT_PORTS as $port) {
+            $spec = "-p tcp --dport {$port} -j {$target} {$comment}";
+            $check = Process::run("iptables -C INPUT {$spec} 2>/dev/null");
             if ($check->successful()) {
                 continue;
             }
-            // Append (-A) not insert, so any admin-added ACCEPT whitelist
-            // rules (loopback, ESTABLISHED,RELATED, trusted sources) that
-            // sit above us take precedence. Without this, the first thing
-            // a new IPS run does is intercept already-established admin
-            // sessions and potentially drop them via rules that match.
-            $add = Process::run(
-                "iptables -A {$chain} -j NFQUEUE --queue-num 0 --queue-bypass "
-                . "-m comment --comment " . escapeshellarg(self::NFQ_COMMENT) . " 2>&1"
-            );
+            $add = Process::run("iptables -A INPUT {$spec} 2>&1");
             if ($add->successful()) {
-                Log::info("[Suricata] Added NFQUEUE rule to iptables {$chain}");
+                Log::info("[Suricata] Added NFQUEUE rule to INPUT :{$port}");
             } else {
-                Log::warning("[Suricata] Failed to add NFQUEUE rule to {$chain}: " . trim($add->output() . $add->errorOutput()));
+                Log::warning("[Suricata] Failed to add NFQUEUE rule for :{$port}: " . trim($add->output() . $add->errorOutput()));
+            }
+        }
+
+        // FORWARD: catch-all after DOCKER-USER/DOCKER-FORWARD terminate
+        // legit container traffic. This inspects routed traffic only —
+        // container-to-container goes through the bridge and never hits
+        // iptables unless br_netfilter is loaded.
+        $forwardSpec = "-j {$target} {$comment}";
+        $check = Process::run("iptables -C FORWARD {$forwardSpec} 2>/dev/null");
+        if (!$check->successful()) {
+            $add = Process::run("iptables -A FORWARD {$forwardSpec} 2>&1");
+            if ($add->successful()) {
+                Log::info("[Suricata] Added NFQUEUE rule to FORWARD");
+            } else {
+                Log::warning("[Suricata] Failed to add FORWARD NFQUEUE: " . trim($add->output() . $add->errorOutput()));
             }
         }
     }
@@ -1603,18 +1629,28 @@ POWERSHELL;
             return;
         }
 
+        // Delete by matching the security-one-ids IPS comment rather than
+        // a specific rule spec, since the spec varies (per-port on INPUT,
+        // catch-all on FORWARD, and older versions used --queue-num 0).
         foreach (['INPUT', 'FORWARD'] as $chain) {
-            // A single start/stop cycle should not leave duplicates, but an
-            // admin restart loop could. Loop -D until no more matches.
-            for ($i = 0; $i < 5; $i++) {
-                $del = Process::run(
-                    "iptables -D {$chain} -j NFQUEUE --queue-num 0 --queue-bypass "
-                    . "-m comment --comment " . escapeshellarg(self::NFQ_COMMENT) . " 2>/dev/null"
-                );
+            for ($i = 0; $i < 10; $i++) {
+                $result = Process::run("iptables -L {$chain} -n --line-numbers 2>/dev/null");
+                $lines = explode("\n", $result->output());
+                $targetLine = null;
+                foreach ($lines as $line) {
+                    if (preg_match('/^(\d+)\s+NFQUEUE\b.*security-one-ids IPS/', $line, $m)) {
+                        $targetLine = (int) $m[1];
+                        break;
+                    }
+                }
+                if ($targetLine === null) {
+                    break;
+                }
+                $del = Process::run("iptables -D {$chain} {$targetLine} 2>/dev/null");
                 if (!$del->successful()) {
                     break;
                 }
-                Log::info("[Suricata] Removed NFQUEUE rule from iptables {$chain}");
+                Log::info("[Suricata] Removed NFQUEUE rule from iptables {$chain} (line {$targetLine})");
             }
         }
 
