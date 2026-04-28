@@ -52,9 +52,20 @@ class EnforcePfBlocks extends Command
 
         // IPS is on — make sure pf kernel is enabled so our anchor actually
         // drops packets. No-op if already enabled.
-        if (!$pf->ensurePfEnabled()) {
-            $this->warn('pf-enforce: could not enable pf kernel, blocks will not take effect');
+        // Do NOT auto-enable pf. If pf is off, blocks silently no-op.
+        // Operator must explicitly `sudo pfctl -ef /etc/pf.conf` when
+        // they're confident the setup is safe. Three outages taught us
+        // that auto-enable + stale block tables = bricked connectivity.
+        $pfStatus = $pf->status();
+        if (!$pfStatus['pf_enabled']) {
+            $this->info('pf-enforce: pf kernel disabled (operator must enable manually), skipping');
+            return 0;
         }
+
+        // Reconcile: flush pf table then re-add only valid (non-expired)
+        // entries from state. Prevents stale blocks from old code or
+        // crashed state from persisting across code updates.
+        $pf->reconcileTable();
 
         $evePath = $this->option('eve');
         if (!file_exists($evePath)) {

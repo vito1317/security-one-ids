@@ -308,11 +308,6 @@ scan_loop &
 CHILD_PIDS+=($!)
 log_message "INFO" "  → Scan thread: PID $!"
 
-# PfEnforce thread. Safe to always spawn — the `ids:pf-enforce` command
-# itself gates on ips_enabled + suricata_mode in waf_config.json (set by
-# the Hub). When the Hub has IPS off, this loop still runs but the
-# command no-ops (just prunes expired blocks if any). When the Hub flips
-# IPS on, the command auto-enables pf kernel and starts adding blocks.
 pf_enforce_loop &
 CHILD_PIDS+=($!)
 log_message "INFO" "  → PfEnforce thread: PID $!"
@@ -324,6 +319,7 @@ while true; do
     for i in "${!CHILD_PIDS[@]}"; do
         pid=${CHILD_PIDS[$i]}
         labels=("Heartbeat" "Sync" "Scan" "PfEnforce")
+
         label=${labels[$i]:-"Unknown"}
         
         if ! kill -0 "$pid" 2>/dev/null; then

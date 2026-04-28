@@ -93,6 +93,51 @@ class MacPfEnforcer
     }
 
     /**
+     * Flush the kernel pf table and re-add only non-expired entries from
+     * the state file. This prevents stale blocks (from old code, crashed
+     * state, or pre-fix entries) from persisting — the table is rebuilt
+     * from ground truth every cycle.
+     */
+    public function reconcileTable(): void
+    {
+        if (!$this->isSupported()) return;
+        try {
+            // Flush everything
+            Process::timeout(5)->run(sprintf(
+                '/sbin/pfctl -a %s -t %s -T flush 2>&1',
+                escapeshellarg(self::ANCHOR_NAME),
+                escapeshellarg(self::TABLE_NAME)
+            ));
+
+            // Re-add only valid entries
+            $state = $this->loadState();
+            $now = time();
+            $reAdded = 0;
+            foreach ($state as $ip => $expiresAt) {
+                if ($expiresAt > $now) {
+                    Process::timeout(5)->run(sprintf(
+                        '/sbin/pfctl -a %s -t %s -T add %s 2>&1',
+                        escapeshellarg(self::ANCHOR_NAME),
+                        escapeshellarg(self::TABLE_NAME),
+                        escapeshellarg($ip)
+                    ));
+                    $reAdded++;
+                } else {
+                    $this->removeFromState($ip);
+                }
+            }
+            if ($reAdded > 0 || count($state) > 0) {
+                Log::debug('[PF] reconcileTable', [
+                    'stateEntries' => count($state),
+                    'reAdded' => $reAdded,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[PF] reconcileTable error: ' . $e->getMessage());
+        }
+    }
+
+    /**
      * Remove entries whose TTL has passed. Returns count removed.
      */
     public function pruneExpired(): int
