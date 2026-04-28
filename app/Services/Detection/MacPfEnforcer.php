@@ -47,6 +47,7 @@ class MacPfEnforcer
         if (!$this->isSupported())       return false;
         if (!$this->isRoutableIp($ip))   return false;
         if ($this->isSelfOrLoopback($ip)) return false;
+        if ($this->isWhitelisted($ip))   return false;
 
         try {
             $cmd = sprintf(
@@ -203,6 +204,42 @@ class MacPfEnforcer
     // ------------------------------------------------------------------
     //  helpers
     // ------------------------------------------------------------------
+
+    /**
+     * Never block well-known infrastructure IPs that Suricata's ET rules
+     * frequently match on normal traffic (CDN response, DNS, cloud APIs).
+     * Blocking any of these bricks the host's connectivity.
+     *
+     * This is a hard-coded safety net. The proper fix is tuning Suricata
+     * rules or using a Hub-maintained allowlist, but until then we need
+     * a guarantee that pf-enforce can't take down a Mac by blocking
+     * Google DNS, Cloudflare CDN, or Apple push services.
+     */
+    private function isWhitelisted(string $ip): bool
+    {
+        // Well-known DNS resolvers — blocking these = DNS death
+        static $dnsResolvers = [
+            '8.8.8.8', '8.8.4.4',               // Google
+            '1.1.1.1', '1.0.0.1',               // Cloudflare
+            '9.9.9.9', '149.112.112.112',        // Quad9
+            '208.67.222.222', '208.67.220.220',  // OpenDNS
+        ];
+        if (in_array($ip, $dnsResolvers, true)) return true;
+
+        // Hub URL — never block the mothership
+        try {
+            $wafUrl = rtrim(config('ids.waf_url') ?? env('WAF_URL', ''), '/');
+            if ($wafUrl) {
+                $host = parse_url($wafUrl, PHP_URL_HOST);
+                if ($host) {
+                    $hubIps = gethostbynamel($host) ?: [];
+                    if (in_array($ip, $hubIps, true)) return true;
+                }
+            }
+        } catch (\Throwable $e) {}
+
+        return false;
+    }
 
     private function isRoutableIp(string $ip): bool
     {

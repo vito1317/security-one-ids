@@ -18,8 +18,7 @@ class EnforcePfBlocks extends Command
     protected $signature = 'ids:pf-enforce
         {--eve=/var/log/suricata/eve.json : eve.json path}
         {--limit=2000 : Max new events processed per invocation}
-        {--ttl=3600 : Block TTL in seconds}
-        {--min-severity=2 : Minimum Suricata alert severity to block (1=critical, 2=high)}';
+        {--ttl=3600 : Block TTL in seconds}';
 
     protected $description = 'Enforce Suricata drop events via pf (macOS reactive IPS)';
 
@@ -109,7 +108,6 @@ class EnforcePfBlocks extends Command
 
         $limit = max(1, (int) $this->option('limit'));
         $ttl = max(60, (int) $this->option('ttl'));
-        $minSev = max(1, (int) $this->option('min-severity'));
 
         $scanned = 0;
         $blocked = 0;
@@ -124,16 +122,23 @@ class EnforcePfBlocks extends Command
             if (!is_array($entry)) continue;
 
             $type = $entry['event_type'] ?? '';
-            if ($type !== 'drop' && $type !== 'alert') continue;
 
-            // drop events always enforce. alert events only if severity is
-            // high enough (Suricata sev 1=critical, 2=high, 3=medium).
-            $shouldBlock = $type === 'drop';
-            if ($type === 'alert') {
-                $sev = (int) ($entry['alert']['severity'] ?? 3);
-                $shouldBlock = $sev <= $minSev;
-            }
-            if (!$shouldBlock) continue;
+            // ONLY enforce `event_type: drop`. Previously we also blocked
+            // alert events at severity <= 2, but Suricata's ET Open rules
+            // fire sev-2 on NORMAL CDN/DNS/cloud traffic (Google 142.250.*,
+            // Cloudflare 162.159.*, Apple 17.253.*, even 8.8.8.8 DNS).
+            // Auto-blocking those bricked the Mac's entire connectivity.
+            //
+            // On macOS pcap mode, Suricata almost never emits event_type:drop
+            // (drop rules run as alert). So this path only fires when:
+            //   - Hub-side custom rules specifically set `drop` action, or
+            //   - Future inline mode (NFQUEUE/divert) becomes available, or
+            //   - Operator manually injects test events.
+            //
+            // For alert-based blocking, the Hub should maintain a curated
+            // blocklist pushed via the blocked_ips config, not the agent
+            // auto-blocking from noisy ET signature matches.
+            if ($type !== 'drop') continue;
 
             $src = $entry['src_ip'] ?? null;
             if (!$src || isset($seenThisRun[$src])) continue;
