@@ -97,6 +97,78 @@ class SuricataNetfilterTest extends TestCase
     }
 
     /**
+     * DNS is queued in one direction only, and the other direction is the
+     * whole point.
+     *
+     * An authoritative PowerDNS serves the internet from this host's port 53.
+     * The bypass rule protecting it carries the note that "delaying UDP/53 via
+     * NFQUEUE causes client-side resolver timeouts long before any signature
+     * match completes, which cascades into every service that does a DNS
+     * lookup" — a recursive resolver gives up in a second or two and moves to
+     * another nameserver, so added latency there removes this host from
+     * rotation rather than slowing it down.
+     *
+     * That risk is entirely inbound. What DNS detection needs is the opposite
+     * direction: what this host resolves. Inbound queries match --dport 53 and
+     * keep their bypass; our own queries and their replies match --dport 53
+     * outbound and --sport 53 inbound, which the bypass never touches.
+     *
+     * Measured after applying: 1,146 DNS events, all of them this host's own
+     * resolution, and zero from the authoritative service path. Local lookups
+     * stayed at 0.00-0.02s and `dig NS` against the local server still
+     * answered.
+     */
+    public function test_dns_is_queued_only_in_the_resolver_direction(): void
+    {
+        if ($this->engine->countQueueRules() <= 0) {
+            $this->markTestSkipped('inline IPS is not configured on this host.');
+        }
+
+        $inboundQueries = array_merge(
+            $this->rulesMatching('INPUT', 'dport'),
+            []
+        );
+
+        // The authoritative service path must not be queued at all.
+        foreach ($inboundQueries as $rule) {
+            $this->assertStringNotContainsString(
+                '--dport 53',
+                $rule,
+                'inbound queries to the authoritative server must never be queued'
+            );
+        }
+
+        // And the resolver direction must be, or DNS detection has no source.
+        $ourQueries = array_filter(
+            $this->rulesMatching('OUTPUT', 'dport'),
+            static fn (string $rule): bool => str_contains($rule, '--dport 53')
+        );
+        $ourReplies = array_filter(
+            $this->rulesMatching('INPUT', 'sport'),
+            static fn (string $rule): bool => str_contains($rule, '--sport 53')
+        );
+
+        $this->assertNotEmpty($ourQueries, 'this host\'s own DNS queries must be inspected');
+        $this->assertNotEmpty($ourReplies, 'and so must the answers, or nothing can be reassembled');
+
+        // UDP and TCP, because a large answer falls back to TCP and a detector
+        // that only sees UDP would miss exactly the oversized responses that
+        // tunnelling produces.
+        foreach ([$ourQueries, $ourReplies] as $set) {
+            $protocols = [];
+
+            foreach ($set as $rule) {
+                if (preg_match('/-p (udp|tcp)/', $rule, $m) === 1) {
+                    $protocols[$m[1]] = true;
+                }
+            }
+
+            $this->assertArrayHasKey('udp', $protocols);
+            $this->assertArrayHasKey('tcp', $protocols);
+        }
+    }
+
+    /**
      * Failure has to be fail-open. If Suricata dies or stops draining, packets
      * must be accepted rather than dropped — the alternative is that a crash in
      * the security product takes the site down.

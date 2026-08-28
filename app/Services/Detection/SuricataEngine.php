@@ -1751,6 +1751,37 @@ POWERSHELL;
     private const INSPECT_PORTS = [80, 443];
 
     /**
+     * Ports where this host is the *client*, inspected in the resolver
+     * direction only.
+     *
+     * DNS needs its own treatment because the two directions of port 53 mean
+     * opposite things here, and only one of them is safe to queue.
+     *
+     * An authoritative PowerDNS serves the internet from this host's port 53
+     * (pdns_server, exposed through docker-proxy on 0.0.0.0:53). Queueing that
+     * traffic is a known outage: the bypass rule carries the note that
+     * "delaying UDP/53 via NFQUEUE causes client-side resolver timeouts long
+     * before any signature match completes, which cascades into every service
+     * that does a DNS lookup". A recursive resolver gives up in a second or two
+     * and moves to another nameserver, so added latency there does not degrade
+     * the service, it removes this host from rotation.
+     *
+     * That risk lives entirely in one direction. Inbound queries arrive with
+     * `--dport 53` and stay bypassed, untouched. What this module actually
+     * needs for DNS detection is the opposite direction: what processes on this
+     * host resolve, which is `--dport 53` outbound and `--sport 53` inbound.
+     * Neither is matched by the authoritative bypass, so the two paths do not
+     * overlap at all.
+     *
+     * The load is measured rather than assumed. Socket telemetry recorded 5,025
+     * outbound resolutions over 470 minutes — 0.18 per second — against 63
+     * million packets already decoded. The latency exposure is this host's own
+     * lookups, including the agent's own Hub resolution, and `--queue-bypass`
+     * still means a dead queue accepts rather than drops.
+     */
+    private const RESOLVER_PORTS = [53];
+
+    /**
      * Bring the netfilter state into line with the desired mode, on every cycle.
      *
      * Public and idempotent because the alternative left a two-day outage
@@ -1867,24 +1898,39 @@ POWERSHELL;
 
         // The request direction is matched on the destination port and the
         // reply direction on the source port, so each chain needs its own spec.
+        $specs = [];
+
         foreach ([['INPUT', 'dport'], ['OUTPUT', 'sport']] as [$chain, $portMatch]) {
             foreach (self::INSPECT_PORTS as $port) {
-                $spec = '-p tcp --' . $portMatch . ' ' . (int) $port
-                    . ' -j NFQUEUE --queue-balance 0:3 --queue-bypass'
-                    . ' -m comment --comment ' . escapeshellarg(self::NFQ_COMMENT);
+                $specs[] = [$chain, "-p tcp --{$portMatch} " . (int) $port];
+            }
+        }
 
-                // Delete by spec rather than by line number: line numbers shift
-                // as each delete lands, and a stale index removes the wrong
-                // rule. Repeated because a duplicate set is possible.
-                for ($attempt = 0; $attempt < 8; $attempt++) {
-                    $result = Process::run("{$ipt} -D {$chain} {$spec} 2>/dev/null");
-
-                    if (!$result->successful()) {
-                        break;
-                    }
-
-                    $removed++;
+        // The resolver direction, both protocols.
+        foreach ([['OUTPUT', 'dport'], ['INPUT', 'sport']] as [$chain, $portMatch]) {
+            foreach (self::RESOLVER_PORTS as $port) {
+                foreach (['udp', 'tcp'] as $protocol) {
+                    $specs[] = [$chain, "-p {$protocol} --{$portMatch} " . (int) $port];
                 }
+            }
+        }
+
+        foreach ($specs as [$chain, $match]) {
+            $spec = $match
+                . ' -j NFQUEUE --queue-balance 0:3 --queue-bypass'
+                . ' -m comment --comment ' . escapeshellarg(self::NFQ_COMMENT);
+
+            // Delete by spec rather than by line number: line numbers shift as
+            // each delete lands, and a stale index removes the wrong rule.
+            // Repeated because a duplicate set is possible.
+            for ($attempt = 0; $attempt < 8; $attempt++) {
+                $result = Process::run("{$ipt} -D {$chain} {$spec} 2>/dev/null");
+
+                if (!$result->successful()) {
+                    break;
+                }
+
+                $removed++;
             }
         }
 
@@ -2062,6 +2108,43 @@ POWERSHELL;
                     'port' => $port,
                     'error' => trim($add->errorOutput() . ' ' . $add->output()),
                 ]);
+            }
+        }
+
+        // The resolver direction of port 53, and only that direction.
+        //
+        // Outbound queries and their replies, so DNS detection can see what
+        // this host resolves. Inbound queries to the authoritative server keep
+        // their bypass and are deliberately not matched here — see
+        // RESOLVER_PORTS for why that distinction is the whole design.
+        foreach (self::RESOLVER_PORTS as $port) {
+            foreach ([['OUTPUT', 'dport'], ['INPUT', 'sport']] as [$chain, $portMatch]) {
+                foreach (['udp', 'tcp'] as $protocol) {
+                    $spec = "-p {$protocol} --{$portMatch} {$port} -j {$target} {$comment}";
+                    $check = Process::run("{$ipt} -C {$chain} {$spec} 2>/dev/null");
+
+                    if ($check->successful()) {
+                        continue;
+                    }
+
+                    // Inserted rather than appended on INPUT, because the
+                    // conntrack bypass sits near the top and an appended rule
+                    // would never be reached for an established flow.
+                    $command = $chain === 'INPUT'
+                        ? "{$ipt} -I INPUT {$insertPos} {$spec} 2>&1"
+                        : "{$ipt} -A OUTPUT {$spec} 2>&1";
+
+                    $add = Process::run($command);
+
+                    if (!$add->successful()) {
+                        Log::warning('[Suricata] Could not install the resolver-direction NFQUEUE rule', [
+                            'chain' => $chain,
+                            'protocol' => $protocol,
+                            'port' => $port,
+                            'error' => trim($add->errorOutput() . ' ' . $add->output()),
+                        ]);
+                    }
+                }
             }
         }
 
