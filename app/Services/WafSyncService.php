@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Services\Network\DnsAllowlist;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -792,6 +793,30 @@ class WafSyncService
             'include_private' => (bool) ($addons['edr_network_include_private'] ?? false),
             'network_max_connections' => (int) ($addons['edr_network_max_connections'] ?? 5000),
             'network_baseline_days' => (int) ($addons['edr_network_baseline_days'] ?? 90),
+
+            // DNS. On by default, because unlike the socket module it needs no
+            // sensor to be switched on: Suricata already writes DNS records to
+            // the same eve.json the IDS alerts come from, so the telemetry
+            // exists on every host that has ever run this product.
+            //
+            // The allowlist holds bare suffixes or {suffix, rules, note}
+            // objects, the same string-or-object shape edr_exclusions uses. The
+            // internal list holds bare suffixes only, because an internal
+            // suffix is a statement about a namespace and scoping it to one
+            // rule would mean nothing. Discovery reads this host's own resolver
+            // search list and applies only the suffixes under which no third
+            // party can obtain a name; a search domain that is a public zone is
+            // reported for a human to approve rather than applied, since
+            // allowlisting a zone an insider can write records in deletes the
+            // tunnelling detection for exactly that zone.
+            'dns_module_enabled' => (bool) ($addons['edr_dns_enabled'] ?? true),
+            'dns_allowlist' => is_array($addons[DnsAllowlist::HUB_ALLOWLIST_KEY] ?? null)
+                ? $addons[DnsAllowlist::HUB_ALLOWLIST_KEY]
+                : [],
+            'dns_internal_domains' => is_array($addons[DnsAllowlist::HUB_INTERNAL_KEY] ?? null)
+                ? $addons[DnsAllowlist::HUB_INTERNAL_KEY]
+                : [],
+            'dns_internal_discovery' => (bool) ($addons[DnsAllowlist::HUB_DISCOVERY_KEY] ?? true),
             // Credential redaction is always on and is the control that
             // actually removes the exposure. This flag adds field encryption
             // on top for deployments that need it — it defends a stolen disk,

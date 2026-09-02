@@ -92,6 +92,44 @@ class EdrEventCollector
             ],
         ];
 
+        $this->governor->ensureBaselineStarted();
+
+        // DNS is collected before anything below looks at the osquery log, and
+        // that ordering is the whole point rather than a tidiness preference.
+        //
+        // It comes from a different sensor: Suricata writes DNS records, osquery
+        // has no DNS table on Linux at all. Two of the returns below are taken
+        // when the osquery results log is missing or has nothing new in it — an
+        // idle host, a host where the sensor was never installed, a host where
+        // an attacker has just killed osqueryd — and with the DNS call anywhere
+        // after them, every one of those hosts would have run the DNS module
+        // exactly never while reporting a healthy cycle. That is the same shape
+        // as this product's IDS being blind for 2.26 days behind a green health
+        // check, and it is worth one awkward statement here to avoid repeating.
+        //
+        // It is judged in its own collector for the reason the socket path is:
+        // the tunnelling rule has to group a whole batch before it can say
+        // anything, and its counting window has to outlive this 30 second
+        // process. It is caught the same way too, because a DNS failure must not
+        // cost the process telemetry that shares this loop.
+        $dnsStats = [];
+        $dnsAlerts = [];
+
+        try {
+            $dns = app(\App\Services\Network\DnsCollector::class)->collect($options);
+
+            $dnsStats = $dns['stats'] ?? [];
+            $dnsAlerts = $dns['alerts'] ?? [];
+        } catch (\Throwable $e) {
+            Log::warning('[EDR] DNS collection failed this cycle: ' . $e->getMessage());
+            $dnsStats = ['error' => $e->getMessage()];
+        }
+
+        // Both early returns below carry it, so a cycle that found no process
+        // telemetry still reports what DNS saw.
+        $empty['alerts'] = $dnsAlerts;
+        $empty['stats']['dns'] = $dnsStats;
+
         // Deliberately not gated on the sensor being alive: if osqueryd was
         // killed — including by an attacker who noticed it — the events it
         // captured before dying are the most valuable ones on the box. Drain
@@ -106,7 +144,6 @@ class EdrEventCollector
         $this->rules->setExclusions($options['exclusions'] ?? []);
         $this->rules->setWebAccountAllowlist($options['web_account_allowlist'] ?? []);
         $this->spool->setEncryption((bool) ($options['spool_encrypt'] ?? false));
-        $this->governor->ensureBaselineStarted();
 
         $read = $this->readNewLines($logPath);
         $lines = $read['lines'];
@@ -388,6 +425,12 @@ class EdrEventCollector
             $alerts
         );
 
+        // The DNS module builds its own alerts, because its findings are
+        // attached to events that never enter the loop above. They are already
+        // spooled by that collector, so these are for the dry-run view only,
+        // exactly like the ones just shaped.
+        $shaped = array_merge($shaped, $dnsAlerts);
+
         return [
             'alerts' => $shaped,
             'stats' => [
@@ -400,6 +443,7 @@ class EdrEventCollector
                 'learning' => $this->governor->isLearning((int) ($options['baseline_days'] ?? 7)),
                 'correlator' => $correlatorStats,
                 'network' => $networkStats,
+                'dns' => $dnsStats,
                 'backend' => $this->engine->resolveBackend(),
             ],
         ];
